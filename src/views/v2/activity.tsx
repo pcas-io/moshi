@@ -89,7 +89,7 @@ export const V2ActivityPage: FC<V2ActivityProps> = ({
             right={<span style={`font-size:11px;color:${V2_TOKENS.accent2};font-family:${V2_TOKENS.text}`}>● live</span>}>
             {visible.length === 0 ? (
               <div style={`padding:40px;text-align:center;color:${V2_TOKENS.textMute};font-size:13px`}>
-                No events match the current filter.
+                なし · keine Events für diesen Filter.
               </div>
             ) : visible.map((ev, i) => {
               const ag = ev.agent_name ? { id: agentIds[ev.agent_name] ?? ev.agent_name, role: agentRoles[ev.agent_name] ?? undefined } : null;
@@ -137,7 +137,7 @@ export const V2ActivityPage: FC<V2ActivityProps> = ({
             <V2Card title="Top actors">
               <div style="padding:14px">
                 {topActors.length === 0 ? (
-                  <div style={`color:${V2_TOKENS.textMute};font-size:12px;text-align:center;padding:8px`}>No actors yet.</div>
+                  <div style={`color:${V2_TOKENS.textMute};font-size:12px;text-align:center;padding:8px`}>まだ · noch keine Actors.</div>
                 ) : topActors.map(([name, n]) => {
                   const ag = agentIds[name] ? { id: agentIds[name], role: agentRoles[name] ?? undefined } : null;
                   return (

@@ -110,7 +110,7 @@ const MeshGraph: FC<{ agents: V2HomeAgent[]; edges: MeshEdge[] }> = ({ agents, e
   if (agents.length === 0) {
     return (
       <div style={`width:${MESH_W}px;height:${MESH_H}px;display:flex;align-items:center;justify-content:center;color:${V2_TOKENS.textMute};font-family:${V2_TOKENS.text}`}>
-        No agents yet.
+        まだ · noch keine Agents.
       </div>
     );
   }
@@ -455,7 +455,7 @@ export const V2HomePage: FC<V2HomeProps> = ({
                 })
               ) : (
                 <div style={`padding:24px;text-align:center;color:${V2_TOKENS.textMute};font-size:12.5px`}>
-                  No conversations yet.
+                  しずか · noch ganz ruhig hier.
                 </div>
               )}
             </div>
@@ -512,7 +512,7 @@ export const V2HomePage: FC<V2HomeProps> = ({
             right={<V2Btn href="/activity" kind="ghost">view all →</V2Btn>}>
             {activities.length === 0 ? (
               <div style={`padding:24px;text-align:center;color:${V2_TOKENS.textMute};font-size:12.5px`}>
-                No activity yet.
+                まだ · noch nichts los.
               </div>
             ) : (
               activities.slice(0, 6).map((ev, i) => {

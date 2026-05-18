@@ -76,7 +76,7 @@ const ThreadListItem: FC<{
 
   return (
     <a href={`/conversations?id=${encodeURIComponent(thread.thread_id)}`}
-      style={`display:block;padding:11px 18px;border-bottom:1px solid ${V2_TOKENS.line};text-decoration:none;color:inherit;background:${selected ? `linear-gradient(180deg, rgba(255,61,46,0.08), rgba(255,61,46,0.03))` : "transparent"};border-left:2px solid ${selected ? V2_TOKENS.accent : "transparent"}`}>
+      style={`display:block;padding:11px 18px;border-bottom:1px solid ${V2_TOKENS.line};text-decoration:none;color:inherit;background:${selected ? `linear-gradient(180deg, rgba(255,143,179,0.14), rgba(255,143,179,0.06))` : "transparent"};border-left:2px solid ${selected ? V2_TOKENS.accent : "transparent"}`}>
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
         {a && <V2Avatar agentId={aId} role={aRole ?? undefined} size={16} />}
         <span style={`color:${V2_TOKENS.textMute};font-size:11px`}>→</span>
@@ -196,7 +196,7 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
           <div style="flex:1;overflow-y:auto">
             {filtered.length === 0 ? (
               <div style={`padding:40px 20px;text-align:center;color:${V2_TOKENS.textMute};font-size:12.5px`}>
-                {query ? "No matches." : "No conversations yet."}
+                {query ? "なし · No matches." : "しずか · noch ganz ruhig hier — keine Conversations."}
               </div>
             ) : (
               filtered.map((t) => (
@@ -223,7 +223,7 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
             <ThreadDetail thread={opened} agentIds={agentIds} agentRoles={agentRoles} />
           ) : (
             <div style={`flex:1;display:flex;align-items:center;justify-content:center;color:${V2_TOKENS.textMute};font-size:13px`}>
-              Select a conversation from the list.
+              もしもし — wähl links eine Conversation.
             </div>
           )}
         </div>

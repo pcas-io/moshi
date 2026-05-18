@@ -291,7 +291,7 @@ export const V2AgentsPage: FC<V2AgentsProps> = ({
             })}
             {agents.length === 0 && (
               <div style={`padding:40px;text-align:center;color:${V2_TOKENS.textMute};font-size:13px`}>
-                No agents yet. Click "+ New agent" to register one.
+                まだ · noch keine Agents. Klick „+ New agent".
               </div>
             )}
           </V2Card>

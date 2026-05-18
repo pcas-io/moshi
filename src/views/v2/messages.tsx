@@ -149,7 +149,7 @@ export const V2MessagesPage: FC<V2MessagesProps> = ({
           </div>
           {filtered.length === 0 ? (
             <div style={`padding:40px;text-align:center;color:${V2_TOKENS.textMute};font-size:13px`}>
-              No messages match the current filter.
+              なし · keine Messages für diesen Filter.
             </div>
           ) : filtered.map((m, i) => {
             const r = routingOf(m.to);

@@ -21,14 +21,15 @@ export const LoginPage: FC<LoginProps> = ({ error, csrfToken }) => {
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Login — moshi</title>
+        <title>もしもし — moshi.moshi</title>
         {raw(`<style>${CSS}</style>`)}
         {THEME_INIT}
       </head>
       <body>
         <div class="login-page">
           <div class="login-box">
-            <h1>moshi</h1>
+            <h1>moshi.moshi</h1>
+            <p style="margin:-6px 0 18px;font-size:13px;opacity:0.6">もしもし — wer ist da?</p>
             {error && <p class="error">Ungültiger Token</p>}
             <form method="post" action="/login">
               <input type="hidden" name="csrf" value={csrfToken} />
