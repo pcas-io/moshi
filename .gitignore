@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.db
+.env
+
+# Local dev overrides (publishes mesh port to host, etc.)
+docker-compose.override.yml
+
+# CLI binaries
+cli/moshi
+cli/moshi-*
+
+# Design docs (kept in plexus)
+docs/
+build_onepager.py
