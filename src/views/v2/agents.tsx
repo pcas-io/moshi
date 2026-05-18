@@ -62,13 +62,13 @@ const TokenSuccessPanel: FC<{ newToken: string }> = ({ newToken }) => (
           <div style={`font-size:11px;font-weight:600;margin-bottom:4px;color:${V2_TOKENS.textDim}`}>Claude Code / Gemini CLI</div>
           <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`"mesh": {
   "type": "streamable-http",
-  "url": "https://mesh.enki.run/mcp",
+  "url": "https://moshi.enki.run/mcp",
   "headers": { "Authorization": "Bearer ${newToken}" }
 }`}</pre>
           <div style={`font-size:11px;font-weight:600;margin:10px 0 4px;color:${V2_TOKENS.textDim}`}>Claude Desktop · OAuth 2.1 + PKCE</div>
           <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`"mesh": {
   "command": "npx",
-  "args": ["-y", "mcp-remote", "https://mesh.enki.run/mcp"]
+  "args": ["-y", "mcp-remote", "https://moshi.enki.run/mcp"]
 }
 // Browser-OAuth-Flow → Bearer-Token im Browser eingeben`}</pre>
           <div style={`font-size:11px;font-weight:600;margin:10px 0 4px;color:${V2_TOKENS.textDim}`}>moshi (Go binary)</div>

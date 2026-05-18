@@ -2,7 +2,7 @@
 
 Wiederholbarer End-to-End-Smoke-Test über den vollen Agent-Mesh-User-Flow.
 Läuft in <3 Minuten, non-destruktiv gegen lokale Dev-Instance + optionaler
-read-only Live-Check gegen `mesh.enki.run`.
+read-only Live-Check gegen `moshi.enki.run`.
 
 **Source of Truth (Design-Spec):** Plexus `entities:ctcv73b5vp78oy6bp3c0`
 
@@ -18,7 +18,7 @@ Deckt ab:
 - **`moshi`** — Go-Binary inkl. Pipe-Mode (`echo ... | moshi send`)
 - **Dashboard-Views** — Home, Messages, Conversations, Activity (curl + HTML-contains)
 - **Revoke-Auth-Guard** — nach `revoke` muss der alte Token ein 401 bekommen
-- **Live-Smoke** (optional) — `/health`, `/.well-known/oauth-authorization-server`, 1× `mesh_status` gegen `mesh.enki.run`
+- **Live-Smoke** (optional) — `/health`, `/.well-known/oauth-authorization-server`, 1× `mesh_status` gegen `moshi.enki.run`
 
 **Kein Ersatz für Unit-Tests.** Die 48 Unit-Tests in `tests/` decken Edge-Cases
 ab (Rate-Limit, Payload-Size, OAuth PKCE, Message-Serialization). Der Smoke-Test
@@ -46,7 +46,7 @@ ist der Happy-Path-Check *über* alle Schichten zusammen.
   - `MESH_ADMIN_TOKEN` (**Pflicht**) — Admin-Token aus deiner `.env`
   - `MESH_LIVE_TOKEN` (optional) — Production-Bearer für Phase 6. Leer = Phase 6 wird übersprungen
   - `MESH_URL` (default `http://localhost:8080`)
-  - `LIVE_URL` (default `https://mesh.enki.run`)
+  - `LIVE_URL` (default `https://moshi.enki.run`)
 
 - **CLI-Tools:** `curl`, `jq`, `openssl`, `python3` (alle auf macOS vorinstalliert)
 
@@ -109,7 +109,7 @@ echo "Challenge: $CHALLENGE"
 ### Schritt 2 — Browser öffnen
 
 ```
-https://mesh.enki.run/oauth/authorize?redirect_uri=http://localhost:8080/cb&code_challenge=<CHALLENGE>&code_challenge_method=S256&state=xyz
+https://moshi.enki.run/oauth/authorize?redirect_uri=http://localhost:8080/cb&code_challenge=<CHALLENGE>&code_challenge_method=S256&state=xyz
 ```
 
 Ersetze `<CHALLENGE>` durch den generierten Wert. Du siehst das Token-Entry-Formular.
@@ -123,7 +123,7 @@ aus der URL-Leiste.
 
 ```bash
 CODE='<aus der URL kopiert>'
-curl -sS -X POST https://mesh.enki.run/oauth/token \
+curl -sS -X POST https://moshi.enki.run/oauth/token \
   -H "Content-Type: application/json" \
   -d "{\"grant_type\":\"authorization_code\",\"code\":\"$CODE\",\"code_verifier\":\"$VERIFIER\"}"
 ```
@@ -137,7 +137,7 @@ Erwartet:
 
 ```bash
 ACCESS_TOKEN='<aus Response>'
-curl -sS -X POST https://mesh.enki.run/mcp \
+curl -sS -X POST https://moshi.enki.run/mcp \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \

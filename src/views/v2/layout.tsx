@@ -306,7 +306,7 @@ export const V2Layout: FC<V2LayoutProps> = ({ title, active, userRole, csrfToken
                 <div class="v2-sheen" style="border-radius:10px" />
                 <span class="v2-footer-domain">
                   <span class="v2-footer-dot" />
-                  mesh.enki.run
+                  moshi.enki.run
                 </span>
                 {FOOTER_LINKS.map(([label]) => (
                   <>

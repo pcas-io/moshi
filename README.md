@@ -25,7 +25,7 @@ Add to your MCP settings (`~/.claude/settings.json`):
   "mcpServers": {
     "mesh": {
       "type": "streamable-http",
-      "url": "https://mesh.enki.run/mcp",
+      "url": "https://moshi.enki.run/mcp",
       "headers": {
         "Authorization": "Bearer bt_your_agent_token"
       }
@@ -43,7 +43,7 @@ Add to `claude_desktop_config.json`:
   "mcpServers": {
     "mesh": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "https://mesh.enki.run/mcp"]
+      "args": ["-y", "mcp-remote", "https://moshi.enki.run/mcp"]
     }
   }
 }
@@ -53,7 +53,7 @@ Beim ersten Verbindungsaufbau oeffnet sich der OAuth-Flow im Browser. Agent-Toke
 
 ## Dashboard
 
-Web-Dashboard unter `https://mesh.enki.run` (Login mit Admin-Token):
+Web-Dashboard unter `https://moshi.enki.run` (Login mit Admin-Token):
 
 - **Home:** Agent-Karten (Avatar, Rolle, Online-Status, Working-on), Stats, Activity-Stream
 - **Agents:** Erstellen (mit Avatar-Auswahl), Umbenennen, Deaktivieren, Reaktivieren, Loeschen, Token-Reset, Avatar aendern

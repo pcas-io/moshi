@@ -53,7 +53,7 @@ describe("V2Layout — Soft Pastel shell", () => {
   it("renders the footer with stack chain + warn marker", async () => {
     const html = await render({ active: "HOME", children: "x" });
     expect(html).toContain('class="v2-footer"');
-    expect(html).toContain("mesh.enki.run");
+    expect(html).toContain("moshi.enki.run");
     expect(html).toContain("Hono · TypeScript");
     expect(html).toContain("NATS JetStream");
     expect(html).toContain("Apache 2.0");

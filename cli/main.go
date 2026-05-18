@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const defaultURL = "https://mesh.enki.run/mcp"
+const defaultURL = "https://moshi.enki.run/mcp"
 
 func main() {
 	args := os.Args[1:]
@@ -60,7 +60,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  Option 1: export MESH_TOKEN=bt_dein_token")
 		fmt.Fprintln(os.Stderr, "  Option 2: moshi --token bt_dein_token status")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Token bekommst du vom Admin im Dashboard: https://mesh.enki.run/agents")
+		fmt.Fprintln(os.Stderr, "  Token bekommst du vom Admin im Dashboard: https://moshi.enki.run/agents")
 		os.Exit(1)
 	}
 
@@ -103,7 +103,7 @@ func cmdStatus(url, token string) {
 
 	if len(agents) == 0 {
 		fmt.Println("Keine Agents registriert.")
-		hint("Erstelle Agents im Dashboard: https://mesh.enki.run/agents")
+		hint("Erstelle Agents im Dashboard: https://moshi.enki.run/agents")
 		return
 	}
 
@@ -664,7 +664,7 @@ Scripts & Dateien:
 
 Optionen:
   --token <t>     Token (oder: export MESH_TOKEN=bt_...)
-  --url <u>       Server-URL (default: mesh.enki.run)
+  --url <u>       Server-URL (default: moshi.enki.run)
   --type <t>      Nachrichtentyp fuer send (default: info)
   --context <c>   Kontext fuer send (default: moshi@hostname)
   --limit <n>     Max Nachrichten fuer receive

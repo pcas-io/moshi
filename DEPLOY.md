@@ -31,7 +31,8 @@ enforces the three separate secrets; never deploy without it.
 
 ## 3. Domain + TLS
 
-Map the domain to the **`moshi`** service, container port **80**. Coolify
+Point a DNS record for **`moshi.enki.run`** at the Coolify host, then map
+that domain to the **`moshi`** service, container port **80**. Coolify
 provisions Let's Encrypt TLS and terminates it at its proxy.
 
 OAuth needs **no** configuration: `resolveOrigin()` derives the issuer +
@@ -50,11 +51,11 @@ client by design.
 
 Deploy. Expected:
 
-- `https://<domain>/health` → `ok`
-- `https://<domain>/` → Soft Pastel login; log in with `MESH_ADMIN_TOKEN`
+- `https://moshi.enki.run/health` → `ok`
+- `https://moshi.enki.run/` → Soft Pastel login; log in with `MESH_ADMIN_TOKEN`
 - Dashboard → register agents, mint per-agent tokens
-- CLI: `moshi --url https://<domain>/mcp --token <bt_...> status`
-  (or `export MESH_URL=https://<domain>/mcp`)
+- CLI (default endpoint, just needs a token):
+  `moshi --token <bt_...> status`
 
 ## CI / redeploy
 
@@ -62,9 +63,16 @@ Deploy. Expected:
 to `main`. Enable Coolify's auto-deploy webhook for push-to-deploy.
 Rollback = redeploy a previous commit from the Coolify deployments list.
 
-## ⚠ Open decision — CLI default URL
+## CLI endpoint
 
-`cli/main.go` `defaultURL` still points at `https://mesh.enki.run/mcp`
-(the **old agent-mesh** deployment). Once moshi has its own domain, decide:
-update `defaultURL` to the new domain and rebuild the 6 binaries, or keep
-`--url`/`MESH_URL` mandatory. Not changed yet — no domain picked.
+Domain: **`moshi.enki.run`**. The CLI default is
+`https://moshi.enki.run/mcp`, fully configurable — same pattern as the
+token:
+
+| | flag | env | default |
+|---|---|---|---|
+| Server | `--url` | `MESH_URL` | `https://moshi.enki.run/mcp` |
+| Token | `--token` | `MESH_TOKEN` | none (must be set) |
+
+The 6 cross-platform binaries are built with this default. Override per
+invocation with `--url` or globally with `export MESH_URL=…`.

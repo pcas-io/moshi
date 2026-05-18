@@ -15,7 +15,7 @@
 # Env-Vars:
 #   MESH_ADMIN_TOKEN  (required)  admin bearer for dashboard CRUD
 #   MESH_URL          (default http://localhost:8080 — requires docker-compose.override.yml)
-#   LIVE_URL          (default https://mesh.enki.run)
+#   LIVE_URL          (default https://moshi.enki.run)
 #   MESH_LIVE_TOKEN   (optional)  bearer for Phase 6 live smoke
 
 set -uo pipefail
@@ -45,7 +45,7 @@ done
 
 # ─── Config ──────────────────────────────────────────────
 MESH_URL="${MESH_URL:-http://localhost:8080}"
-LIVE_URL="${LIVE_URL:-https://mesh.enki.run}"
+LIVE_URL="${LIVE_URL:-https://moshi.enki.run}"
 ADMIN_TOKEN="${MESH_ADMIN_TOKEN:?must be set (export MESH_ADMIN_TOKEN=...)}"
 LIVE_TOKEN="${MESH_LIVE_TOKEN:-}"
 
