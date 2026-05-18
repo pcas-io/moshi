@@ -13,3 +13,6 @@ cli/moshi-*
 # Design docs (kept in plexus)
 docs/
 build_onepager.py
+
+# Docker Go-build artifacts (binaries baked into image, never committed)
+cli-dist/

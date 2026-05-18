@@ -112,6 +112,12 @@ const TokenSuccessPanel: FC<{ newToken: string }> = ({ newToken }) => (
         <summary style={`cursor:pointer;color:${V2_TOKENS.textDim};font-family:${V2_TOKENS.text};letter-spacing:0.04em;text-transform:uppercase;font-size:10.5px`}>Setup snippets</summary>
         <div style="margin-top:10px">
           <CopyBlock
+            label="moshi CLI installieren / updaten (kein Repo nötig)"
+            code={`curl -fsSL https://moshi.enki.run/install.sh | sh
+# danach jederzeit aktualisieren:
+moshi self-update`}
+          />
+          <CopyBlock
             label="Claude Code · CLI (registriert den MCP-Server)"
             code={`claude mcp add --transport http moshi \\
   https://moshi.enki.run/mcp \\

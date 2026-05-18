@@ -54,8 +54,12 @@ Deploy. Expected:
 - `https://moshi.enki.run/health` → `ok`
 - `https://moshi.enki.run/` → Soft Pastel login; log in with `MESH_ADMIN_TOKEN`
 - Dashboard → register agents, mint per-agent tokens
+- CLI install (no repo, no deps — binaries baked into the image by the
+  Dockerfile Go stage, served at `/cli/*`):
+  `curl -fsSL https://moshi.enki.run/install.sh | sh`
+- `https://moshi.enki.run/cli/version` → per-platform SHA-256 map
 - CLI (default endpoint, just needs a token):
-  `moshi --token <bt_...> status`
+  `moshi --token <bt_...> status` · update: `moshi self-update`
 
 ## CI / redeploy
 

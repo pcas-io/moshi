@@ -7,8 +7,11 @@ import type { ActivityService } from "./services/activity";
 import type { PresenceService } from "./services/presence";
 
 // --- Public paths (no auth required) ---
-const PUBLIC_EXACT = new Set(["/health", "/login"]);
-const PUBLIC_PREFIX = ["/oauth", "/.well-known/"];
+// /install.* + /cli/* are public by design: the served binary contains
+// no secrets (the moshi token is supplied by the user at runtime), and a
+// frictionless `curl … | sh` one-liner is the whole point.
+const PUBLIC_EXACT = new Set(["/health", "/login", "/install.sh", "/install.ps1"]);
+const PUBLIC_PREFIX = ["/oauth", "/.well-known/", "/cli/"];
 
 function isPublicPath(path: string): boolean {
   if (PUBLIC_EXACT.has(path)) return true;

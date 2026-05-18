@@ -19,6 +19,7 @@ import {
 } from "./auth.js";
 import { createMcpServer } from "./mcp/server.js";
 import { createOAuthRoutes, cleanupExpiredOAuthTokens } from "./oauth.js";
+import { registerCliRoutes } from "./services/cli-dist.js";
 import { RATE_LIMIT_PER_MINUTE, VERSION, LIMITS, MESSAGE_RETENTION_DAYS, ACTIVITY_RETENTION_DAYS } from "./types.js";
 import type { Env, AppVariables } from "./types.js";
 import { loadConfig, isConfigError } from "./config.js";
@@ -144,6 +145,9 @@ app.use("*", async (c, next) => {
 });
 
 // --- Health endpoint (no auth) ---
+// CLI distribution: /install.sh, /install.ps1, /cli/version, /cli/:file
+registerCliRoutes(app);
+
 app.get("/health", async (c) => {
   const h = await checkHealth(db, nats);
   return c.json(

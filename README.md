@@ -89,12 +89,26 @@ Portables Go-Binary (6 MB, keine Dependencies). Fuer Menschen die ohne AI-Agent 
 
 ### Installation
 
+One-liner — kein Repo-Checkout, keine Dependencies. Lädt das passende
+Binary vom Server (OS/Arch werden erkannt):
+
 ```bash
-# Binary kopieren — fertig
-scp moshi-linux-amd64 server:moshi
-chmod +x moshi
+curl -fsSL https://moshi.enki.run/install.sh | sh
 export MESH_TOKEN="bt_your_token"
+moshi status
 ```
+
+Windows (PowerShell): `irm https://moshi.enki.run/install.ps1 | iex`
+
+**Updaten** jederzeit ohne curl:
+
+```bash
+moshi self-update        # vergleicht SHA-256 gegen den Server-Build
+moshi --version          # zeigt den eigenen Build-Hash
+```
+
+`MOSHI_BIN_DIR` überschreibt das Zielverzeichnis (default `/usr/local/bin`
+falls beschreibbar, sonst `~/.local/bin`).
 
 ### Befehle
 
