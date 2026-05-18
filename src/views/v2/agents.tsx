@@ -49,40 +49,101 @@ function fmtCreated(iso: string): string {
     " · " + d.toTimeString().slice(0, 5);
 }
 
+const COPY_SCRIPT = raw(`<script>
+(function(){
+  if (window.__v2copy) return; window.__v2copy = 1;
+  function fallback(t, cb){
+    var ta=document.createElement('textarea');
+    ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try{document.execCommand('copy');}catch(_){}
+    document.body.removeChild(ta); cb();
+  }
+  document.addEventListener('click', function(e){
+    var b = e.target && e.target.closest && e.target.closest('.v2-copy');
+    if(!b) return;
+    var src = b.parentElement && b.parentElement.querySelector('pre, code');
+    if(!src) return;
+    var txt = src.innerText;
+    var done = function(){
+      var o=b.getAttribute('data-label')||'Copy';
+      b.textContent='✓ Kopiert';
+      setTimeout(function(){ b.textContent=o; }, 1200);
+    };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(done).catch(function(){fallback(txt,done);});
+    } else { fallback(txt, done); }
+  });
+})();
+</script>`);
+
+const CopyBtn: FC = () => (
+  <button
+    type="button"
+    class="v2-copy"
+    data-label="Copy"
+    style={`position:absolute;top:6px;right:6px;font-family:${V2_TOKENS.text};font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:${V2_TOKENS.textDim};background:${V2_TOKENS.surface};border:1px solid ${V2_TOKENS.line2};border-radius:999px;padding:3px 10px;cursor:pointer;line-height:1.4`}
+  >
+    Copy
+  </button>
+);
+
+const CopyBlock: FC<{ label: string; code: string }> = ({ label, code }) => (
+  <>
+    <div style={`font-size:11px;font-weight:600;margin:10px 0 4px;color:${V2_TOKENS.textDim}`}>{label}</div>
+    <div style="position:relative">
+      <CopyBtn />
+      <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 34px 10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{code}</pre>
+    </div>
+  </>
+);
+
 const TokenSuccessPanel: FC<{ newToken: string }> = ({ newToken }) => (
   <V2Card title="New token created" sub="Save it now — it will not be shown again."
     right={<V2Tag color={V2_TOKENS.accent2}>● fresh</V2Tag>}>
     <div style="padding:16px">
-      <code style={`display:block;font-family:${V2_TOKENS.text};font-size:12px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line2};word-break:break-all`}>
-        {newToken}
-      </code>
+      <div style="position:relative">
+        <CopyBtn />
+        <code style={`display:block;font-family:${V2_TOKENS.text};font-size:12px;background:${V2_TOKENS.surface2};padding:10px 34px 10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line2};word-break:break-all`}>
+          {newToken}
+        </code>
+      </div>
       <details style="margin-top:12px;font-size:12.5px">
         <summary style={`cursor:pointer;color:${V2_TOKENS.textDim};font-family:${V2_TOKENS.text};letter-spacing:0.04em;text-transform:uppercase;font-size:10.5px`}>Setup snippets</summary>
         <div style="margin-top:10px">
-          <div style={`font-size:11px;font-weight:600;margin-bottom:4px;color:${V2_TOKENS.textDim}`}>Claude Code · CLI (registriert den MCP-Server)</div>
-          <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`claude mcp add --transport http moshi \\
+          <CopyBlock
+            label="Claude Code · CLI (registriert den MCP-Server)"
+            code={`claude mcp add --transport http moshi \\
   https://moshi.enki.run/mcp \\
-  --header "Authorization: Bearer ${newToken}"`}</pre>
-          <div style={`font-size:11px;font-weight:600;margin:10px 0 4px;color:${V2_TOKENS.textDim}`}>Claude Code / Gemini CLI · mcpServers config</div>
-          <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`"moshi": {
+  --header "Authorization: Bearer ${newToken}"`}
+          />
+          <CopyBlock
+            label="Claude Code / Gemini CLI · mcpServers config"
+            code={`"moshi": {
   "type": "streamable-http",
   "url": "https://moshi.enki.run/mcp",
   "headers": { "Authorization": "Bearer ${newToken}" }
-}`}</pre>
-          <div style={`font-size:11px;font-weight:600;margin:10px 0 4px;color:${V2_TOKENS.textDim}`}>Claude Desktop · OAuth 2.1 + PKCE</div>
-          <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`"moshi": {
+}`}
+          />
+          <CopyBlock
+            label="Claude Desktop · OAuth 2.1 + PKCE"
+            code={`"moshi": {
   "command": "npx",
   "args": ["-y", "mcp-remote", "https://moshi.enki.run/mcp"]
 }
-// Browser-OAuth-Flow → Bearer-Token im Browser eingeben`}</pre>
-          <div style={`font-size:11px;font-weight:600;margin:10px 0 4px;color:${V2_TOKENS.textDim}`}>moshi (Go binary)</div>
-          <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`export MESH_TOKEN="${newToken}"
-./moshi status`}</pre>
+// Browser-OAuth-Flow → Bearer-Token im Browser eingeben`}
+          />
+          <CopyBlock
+            label="moshi (Go binary)"
+            code={`export MESH_TOKEN="${newToken}"
+./moshi status`}
+          />
           <div style={`font-size:11px;color:${V2_TOKENS.textMute};margin-top:10px;font-family:${V2_TOKENS.text}`}>
             Bearer token shown once · stored as SHA-256 hash · `from` is set server-side.
           </div>
         </div>
       </details>
+      {COPY_SCRIPT}
     </div>
   </V2Card>
 );
