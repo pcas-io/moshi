@@ -1,15 +1,16 @@
 services:
-  mesh:
+  moshi:
     build: .
     environment:
+      - NODE_ENV=production
       - NATS_URL=nats://nats:4222
       - MESH_ADMIN_TOKEN=${MESH_ADMIN_TOKEN}
       - MESH_COOKIE_SECRET=${MESH_COOKIE_SECRET}
       - OAUTH_SECRET=${OAUTH_SECRET}
-      - DATABASE_PATH=/data/mesh.db
+      - DATABASE_PATH=/data/moshi.db
       - PORT=80
     volumes:
-      - mesh-data:/data
+      - moshi-data:/data
     expose:
       - "80"
     depends_on:
@@ -33,5 +34,5 @@ services:
       retries: 3
 
 volumes:
-  mesh-data:
+  moshi-data:
   nats-data:
