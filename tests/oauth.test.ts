@@ -63,6 +63,18 @@ describe("isAllowedRedirectUri", () => {
     expect(isAllowedRedirectUri("http://localhost.evil.com/cb")).toBe(false);
   });
 
+  it("allows Anthropic hosted connector (claude.ai/claude.com, https)", () => {
+    expect(isAllowedRedirectUri("https://claude.ai/api/mcp/auth_callback")).toBe(true);
+    expect(isAllowedRedirectUri("https://claude.com/api/mcp/auth_callback")).toBe(true);
+    expect(isAllowedRedirectUri("https://eu.claude.ai/api/mcp/auth_callback")).toBe(true);
+  });
+
+  it("rejects hosted connector over http and lookalikes", () => {
+    expect(isAllowedRedirectUri("http://claude.ai/cb")).toBe(false);
+    expect(isAllowedRedirectUri("https://claude.ai.evil.com/cb")).toBe(false);
+    expect(isAllowedRedirectUri("https://notclaude.ai/cb")).toBe(false);
+  });
+
   it("rejects javascript scheme", () => {
     expect(isAllowedRedirectUri("javascript:alert(1)")).toBe(false);
   });

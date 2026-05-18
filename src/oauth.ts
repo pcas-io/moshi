@@ -56,19 +56,29 @@ export function cleanupExpiredOAuthTokens(db: Database.Database): number {
 }
 
 // --- Redirect URI validation ---
-// Only allow localhost/loopback origins (MCP clients run locally)
+// Allowed targets: (1) localhost/loopback — local MCP clients (Claude
+// Code/Desktop, mcp-remote); (2) Anthropic's first-party hosted connector
+// domains claude.ai / claude.com over HTTPS only. This is a tight host
+// allowlist, NOT an open redirect: an authorization code is only ever
+// delivered to a local client or to Anthropic's own connector callback.
+const HOSTED_REDIRECT_HOSTS = ["claude.ai", "claude.com"];
 export function isAllowedRedirectUri(uri: string): boolean {
   try {
     const url = new URL(uri);
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-    const hostname = url.hostname;
-    return (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "::1" ||
-      hostname === "[::1]" ||
-      hostname.endsWith(".localhost")
-    );
+    const h = url.hostname;
+    if (
+      h === "localhost" ||
+      h === "127.0.0.1" ||
+      h === "::1" ||
+      h === "[::1]" ||
+      h.endsWith(".localhost")
+    ) {
+      return true;
+    }
+    // Remote hosted connector: HTTPS only, exact host or subdomain.
+    if (url.protocol !== "https:") return false;
+    return HOSTED_REDIRECT_HOSTS.some((d) => h === d || h.endsWith("." + d));
   } catch {
     return false;
   }
@@ -203,7 +213,7 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
       registration_endpoint: `${origin}/oauth/register`,
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code"],
-      token_endpoint_auth_methods_supported: ["client_secret_post"],
+      token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
       code_challenge_methods_supported: ["S256"],
     });
   });
