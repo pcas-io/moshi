@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
 import { readFileSync, readdirSync } from "fs";
-import { AgentService, hashToken } from "../../src/services/agent";
+import { AgentService, hashToken, isValidAgentName } from "../../src/services/agent";
 import { ActivityService } from "../../src/services/activity";
 
 function createTestDb(): Database.Database {
@@ -22,6 +22,23 @@ describe("AgentService", () => {
     db = createTestDb();
     activity = new ActivityService(db);
     agents = new AgentService(db, activity);
+  });
+
+  it("validates agent names (NATS subject/durable safety)", () => {
+    // Valid
+    for (const n of ["agent-a", "Agent-A", "dex_eu", "claude-code", "a1", "x"]) {
+      expect(isValidAgentName(n)).toBe(true);
+    }
+    // Invalid — would corrupt mesh.agents.<name>.inbox / agent-<name>
+    for (const n of ["claude code", "a.b", "-lead", "a/b", "a*b", "a>b", "a b", ""]) {
+      expect(isValidAgentName(n)).toBe(false);
+    }
+  });
+
+  it("create() rejects a name with a space", () => {
+    expect(() => agents.create("claude code")).toThrow(/NATS|Leerzeichen|2.64/);
+    // and nothing was persisted
+    expect(agents.getByName("claude code")).toBeNull();
   });
 
   it("creates agent with token", () => {

@@ -226,6 +226,15 @@ export function authMiddleware(
     }
 
     // --- No valid auth ---
+    // RFC 9728 / MCP auth spec: point unauthenticated clients at the
+    // protected-resource metadata so remote connectors can discover the
+    // OAuth flow instead of reporting the server as unreachable.
+    const proto = c.req.header("x-forwarded-proto") ?? new URL(c.req.url).protocol.replace(":", "");
+    const origin = `${proto}://${new URL(c.req.url).host}`;
+    c.header(
+      "WWW-Authenticate",
+      `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
+    );
     return c.json({ error: "Unauthorized" }, 401);
   });
 }

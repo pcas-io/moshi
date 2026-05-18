@@ -16,6 +16,23 @@ export interface NatsCleanup {
   deleteConsumer(agentName: string): Promise<void>;
 }
 
+// Agent names become NATS subject tokens (`mesh.agents.<name>.inbox`) and
+// JetStream durable consumer names (`agent-<name>`). NATS subjects forbid
+// spaces / `.` / `*` / `>`; JetStream durables forbid spaces / `.` / `*` /
+// `>` / `/` / `\`. Only `.toLowerCase()` is applied downstream — so an
+// unsanitised name like "claude code" would silently break routing
+// (invalid subject + durable, agent can never receive). Enforce a
+// NATS-safe, lowercase, 2–64 char charset at the single source of truth.
+export const AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+export const AGENT_NAME_RULE =
+  "Name muss 1–64 Zeichen sein: Buchstaben, Ziffern, - oder _, " +
+  "Start alphanumerisch — keine Leerzeichen, Punkte oder Sonderzeichen " +
+  "(NATS-Subject/Durable-Sicherheit).";
+
+export function isValidAgentName(name: string): boolean {
+  return AGENT_NAME_RE.test(name);
+}
+
 export function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
@@ -66,6 +83,11 @@ export class AgentService {
     avatar?: string,
     adminName?: string,
   ): { agent: Agent; plaintextToken: string } {
+    // NATS-safety: reject names that would corrupt subject/durable routing.
+    if (!isValidAgentName(name)) {
+      throw new Error(AGENT_NAME_RULE);
+    }
+
     // Check max agents limit
     const count = this.db
       .prepare("SELECT COUNT(*) as cnt FROM agents WHERE is_active = 1")

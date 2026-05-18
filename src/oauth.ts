@@ -208,6 +208,28 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
     });
   });
 
+  // RFC 9728 — OAuth Protected Resource Metadata. The MCP auth spec
+  // requires this so a remote client (hit with a 401 +
+  // WWW-Authenticate: Bearer resource_metadata=…) can discover which
+  // authorization server protects /mcp. Without it, connectors report
+  // the server as unreachable. Served on the bare path and the
+  // resource-suffixed variant some clients probe.
+  const protectedResource = (c: Parameters<typeof resolveOrigin>[0]) => {
+    const origin = resolveOrigin(c);
+    return {
+      resource: `${origin}/mcp`,
+      authorization_servers: [origin],
+      bearer_methods_supported: ["header"],
+      scopes_supported: [] as string[],
+    };
+  };
+  oauth.get("/.well-known/oauth-protected-resource", (c) =>
+    c.json(protectedResource(c)),
+  );
+  oauth.get("/.well-known/oauth-protected-resource/mcp", (c) =>
+    c.json(protectedResource(c)),
+  );
+
   // Dynamic Client Registration (RFC 7591, MCP spec requires this)
   // SECURITY (C6): Validate input with Zod. An unbounded `await c.req.json()`
   // with no schema allowed trivial DoS via oversized payloads

@@ -59,14 +59,18 @@ const TokenSuccessPanel: FC<{ newToken: string }> = ({ newToken }) => (
       <details style="margin-top:12px;font-size:12.5px">
         <summary style={`cursor:pointer;color:${V2_TOKENS.textDim};font-family:${V2_TOKENS.text};letter-spacing:0.04em;text-transform:uppercase;font-size:10.5px`}>Setup snippets</summary>
         <div style="margin-top:10px">
-          <div style={`font-size:11px;font-weight:600;margin-bottom:4px;color:${V2_TOKENS.textDim}`}>Claude Code / Gemini CLI</div>
-          <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`"mesh": {
+          <div style={`font-size:11px;font-weight:600;margin-bottom:4px;color:${V2_TOKENS.textDim}`}>Claude Code · CLI (registriert den MCP-Server)</div>
+          <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`claude mcp add --transport http moshi \\
+  https://moshi.enki.run/mcp \\
+  --header "Authorization: Bearer ${newToken}"`}</pre>
+          <div style={`font-size:11px;font-weight:600;margin:10px 0 4px;color:${V2_TOKENS.textDim}`}>Claude Code / Gemini CLI · mcpServers config</div>
+          <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`"moshi": {
   "type": "streamable-http",
   "url": "https://moshi.enki.run/mcp",
   "headers": { "Authorization": "Bearer ${newToken}" }
 }`}</pre>
           <div style={`font-size:11px;font-weight:600;margin:10px 0 4px;color:${V2_TOKENS.textDim}`}>Claude Desktop · OAuth 2.1 + PKCE</div>
-          <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`"mesh": {
+          <pre style={`font-family:${V2_TOKENS.text};font-size:11px;background:${V2_TOKENS.surface2};padding:10px 12px;border-radius:${V2_TOKENS.radius}px;border:1px solid ${V2_TOKENS.line};overflow-x:auto;margin:0;white-space:pre`}>{`"moshi": {
   "command": "npx",
   "args": ["-y", "mcp-remote", "https://moshi.enki.run/mcp"]
 }
@@ -94,7 +98,9 @@ const NewAgentForm: FC<{ csrfToken: string }> = ({ csrfToken }) => (
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
         <div>
           <div style={`font-size:10.5px;color:${V2_TOKENS.textMute};letter-spacing:0.1em;margin-bottom:5px`}>NAME</div>
-          <input class="v2-input v2-input--mono" type="text" name="name" placeholder="e.g. dex-eu" required autofocus />
+          <input class="v2-input v2-input--mono" type="text" name="name" placeholder="e.g. dex-eu" required autofocus
+            pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}"
+            title="1–64 Zeichen: Buchstaben, Ziffern, - oder _ · Start alphanumerisch · keine Leerzeichen/Punkte" />
         </div>
         <div>
           <div style={`font-size:10.5px;color:${V2_TOKENS.textMute};letter-spacing:0.1em;margin-bottom:5px`}>TOKEN</div>
