@@ -21,8 +21,8 @@ TypeScript, Hono, @hono/node-server, @modelcontextprotocol/sdk, nats.js, better-
 - `src/oauth.ts` — OAuth 2.1 + PKCE for interactive clients
 
 ## Patterns
-Follows ernie/buddy patterns: Hono routes, MCP SDK tools with Zod validation,
-server-rendered JSX views, ULID IDs, SHA-256 token hashing, timing-safe comparison.
+Hono routes, MCP SDK tools with Zod validation, server-rendered JSX views,
+ULID IDs, SHA-256 token hashing, timing-safe comparison.
 
 ## Key Design Decisions
 - NATS is internal only (not exposed). MCP server is the only NATS client.

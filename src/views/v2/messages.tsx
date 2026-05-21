@@ -29,9 +29,6 @@ const ROUTING_FILTERS: ReadonlyArray<readonly [string, string, string, boolean]>
   ["capability","capability:*",  V2_TOKENS.info,    true ], // disabled
 ];
 
-const CAPABILITY_ROUTING_DOC =
-  "https://plexus.nxio.me/entities/entities:8r7p8odnnl1ys956xp5n";
-
 function fmtTime(iso: string): string {
   const d = new Date(iso);
   return d.toTimeString().slice(0, 5);
@@ -83,16 +80,13 @@ const RoutingChip: FC<{ value: string; label: string; color: string; disabled: b
     : "";
   if (disabled) {
     return (
-      <a
-        href={CAPABILITY_ROUTING_DOC}
-        target="_blank"
-        rel="noopener noreferrer"
-        title="Routing mode `capability:*` is spec'd but not yet implemented (plexus entities:8r7p8odnnl1ys956xp5n). Click to open the design spec."
+      <span
+        title="Routing mode `capability:*` is spec'd but not yet implemented."
         style={`${baseStyle};opacity:0.45;cursor:help`}
       >
         {color && <span style={`width:7px;height:7px;background:${color};border-radius:50%;display:inline-block`} />}
         {label} <span style={`font-size:10px;color:${V2_TOKENS.textMute}`}>· spec'd</span>
-      </a>
+      </span>
     );
   }
   const href = buildUrl("/messages", { routing: value || undefined, agent: agentFilter, q: query });

@@ -2,8 +2,6 @@
 
 MCP server for async agent-to-agent communication. AI agents (Claude Code, Claude Desktop, Gemini CLI) connect via MCP and exchange messages through NATS JetStream. Humans join via the portable Go CLI.
 
-Part of the enki.run ecosystem: buddy (memory), mesh (communication), shepherd (evolution).
-
 ## Quick Start
 
 ```bash

@@ -173,8 +173,6 @@ PKCE Flow inkl. der Härtung aus Commit `b6ec1e7`.
 
 ## Referenzen
 
-- **Plexus Design-Spec:** https://plexus.nxio.me/entities/ctcv73b5vp78oy6bp3c0
-- **Plexus Projekt:** https://plexus.nxio.me/entities/5dnq4cyg4ghlrv5i64gt
 - **Unit-Tests:** `tests/services/*.test.ts`, `tests/oauth.test.ts`
 - **OAuth-Härtung (was Phase 5 Step 23 absichert):** Commit `b6ec1e7`, zugehörige Unit-Tests im Commit `824529c`
 - **Conversations-View (Phase 4 Step 20):** Commit `e470e96`
