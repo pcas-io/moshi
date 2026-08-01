@@ -138,40 +138,95 @@ function authorizePageHTML(params: {
   const { redirectUri, state, codeChallenge, codeChallengeMethod, error } =
     params;
   const errorBlock = error
-    ? '<div class="error">Ungültiger Token</div>'
+    ? '<div class="error"><span class="dot"></span>Invalid token — check your bearer token.</div>'
     : "";
   return `<!DOCTYPE html>
 <html lang="de">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>moshi — Authorize</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2305e901'/%3E%3Ctext x='16' y='23' text-anchor='middle' fill='%230a0a0a' font-family='sans-serif' font-size='19' font-weight='800'%3Em%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Inter', system-ui, sans-serif; background: #fafafa; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-    .box { background: #fff; border: 1px solid #e0e0e0; padding: 32px; border-radius: 8px; width: 340px; box-shadow: 0 12px 32px rgba(0,0,0,0.06); }
-    h1 { font-family: 'JetBrains Mono', monospace; font-size: 18px; margin-bottom: 8px; }
-    p { font-size: 13px; color: #666; margin-bottom: 20px; }
-    input { width: 100%; padding: 9px 12px; border: 1px solid #e0e0e0; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px; margin-bottom: 14px; }
-    input:focus { outline: none; border-color: #444; }
-    button { width: 100%; padding: 9px; background: #111; color: #fff; border: none; border-radius: 6px; font-weight: 600; font-size: 12px; cursor: pointer; }
-    button:hover { background: #222; }
-    .error { color: #904040; font-size: 12px; background: #fdf5f5; padding: 6px; border-radius: 6px; border: 1px solid #c08080; margin-bottom: 12px; text-align: center; }
+    body {
+      font-family: 'Sora', system-ui, sans-serif; color: #f5f5f5;
+      background:
+        radial-gradient(720px 420px at 50% 118%, rgba(5,233,1,0.13), transparent 62%),
+        radial-gradient(900px 500px at 85% -30%, rgba(5,233,1,0.05), transparent 60%),
+        #0f0f0f;
+      display: flex; align-items: center; justify-content: center; min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    .grid-bg {
+      position: fixed; inset: 0; pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.024) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.024) 1px, transparent 1px);
+      background-size: 56px 56px;
+    }
+    .box {
+      position: relative; background: #161616; border: 1px solid #262626;
+      padding: 26px; border-radius: 8px; width: 380px; max-width: calc(100vw - 32px);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+    .mark {
+      width: 30px; height: 30px; border-radius: 7px; background: hsl(119 99% 46%);
+      color: #0a0a0a; display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 17px;
+    }
+    .name { font-size: 16px; font-weight: 700; letter-spacing: -0.02em; }
+    .name .dot { color: hsl(119 99% 46%); }
+    h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.03em; text-transform: uppercase; margin-bottom: 4px; }
+    h1 .accent { color: hsl(119 99% 46%); }
+    p { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #999999; margin-bottom: 18px; }
+    .label { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: #666666; font-weight: 600; margin-bottom: 8px; }
+    input[type=password] {
+      width: 100%; padding: 12px 14px; background: #0f0f0f;
+      border: 1px solid #333333; border-radius: 4px; color: #f5f5f5;
+      font-family: 'JetBrains Mono', monospace; font-size: 13px; margin-bottom: 14px;
+    }
+    input[type=password]:focus { outline: none; border-color: rgba(5,233,1,0.55); }
+    input[type=password]::placeholder { color: #555555; }
+    button {
+      width: 100%; padding: 13px; background: hsl(119 99% 46%); color: #0a0a0a;
+      border: none; border-radius: 2px; font-family: 'Sora', sans-serif;
+      font-weight: 700; font-size: 12px; letter-spacing: 0.08em;
+      text-transform: uppercase; cursor: pointer;
+    }
+    button:hover { filter: brightness(1.12); }
+    .error {
+      display: flex; align-items: center; gap: 7px; color: #ef4444;
+      font-size: 12px; font-weight: 600; margin-bottom: 12px;
+    }
+    .error .dot { width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
+    .hint { margin-top: 12px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #555555; line-height: 1.7; }
   </style>
 </head>
 <body>
+  <div class="grid-bg"></div>
   <div class="box">
-    <h1>moshi</h1>
-    <p>MCP-Zugriff autorisieren</p>
+    <div class="brand">
+      <div class="mark">m</div>
+      <div class="name">moshi<span class="dot">.</span>moshi</div>
+    </div>
+    <h1>Authorize <span class="accent">MCP</span></h1>
+    <p>OAUTH 2.1 · PKCE S256 — paste your bearer token</p>
     ${errorBlock}
     <form method="POST" action="/oauth/authorize">
       <input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}">
       <input type="hidden" name="state" value="${escapeHtml(state)}">
       <input type="hidden" name="code_challenge" value="${escapeHtml(codeChallenge)}">
       <input type="hidden" name="code_challenge_method" value="${escapeHtml(codeChallengeMethod)}">
-      <input name="token" type="password" placeholder="Token eingeben..." autofocus autocomplete="current-password">
-      <button type="submit">Autorisieren</button>
+      <div class="label">Bearer Token</div>
+      <input name="token" type="password" placeholder="bt_••••••••••••••••" autofocus autocomplete="current-password">
+      <button type="submit">Authorize</button>
     </form>
+    <div class="hint">Token is exchanged server-side · never appears in URLs · code expires in 5 min</div>
   </div>
 </body>
 </html>`;

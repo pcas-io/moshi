@@ -1,10 +1,10 @@
-// V2 Activity — Soft Pastel event stream + filter sidebar + top-actors widget.
+// V2 Activity — SENTINEL Dark event stream + filter sidebar + top actors.
 
 import type { FC } from "hono/jsx";
 import type { Activity, PaginatedResult } from "../../types.js";
 import { V2Layout } from "./layout.js";
-import { V2Card, V2Btn, V2Tag, V2Avatar } from "./components.js";
-import { V2_TOKENS } from "./tokens.js";
+import { V2Card, V2Avatar, entityColor } from "./components.js";
+import { V2_TOKENS, greenGlow } from "./tokens.js";
 
 export interface V2ActivityProps {
   result: PaginatedResult<Activity>;
@@ -15,6 +15,9 @@ export interface V2ActivityProps {
   userRole?: string;
   csrfToken?: string;
 }
+
+const MONO = "var(--v2-font-mono)";
+const GRID = "46px 22px 84px minmax(160px,1fr) minmax(0,140px)";
 
 const RANGE_OPTIONS: ReadonlyArray<readonly [string, string, number]> = [
   ["15m",   "Last 15m",  15 * 60 * 1000],
@@ -27,22 +30,8 @@ function fmtTime(iso: string): string {
   return new Date(iso).toTimeString().slice(0, 5);
 }
 
-function fmtRel(iso: string, now: number = Date.now()): string {
-  const m = Math.round((now - new Date(iso).getTime()) / 60_000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
-}
-
-function entityColor(entity: string): string {
-  switch (entity) {
-    case "message": return V2_TOKENS.accent;
-    case "session": return V2_TOKENS.accent2;
-    case "agent":   return V2_TOKENS.warn;
-    default:        return V2_TOKENS.textMute;
-  }
+function fmtHeadDate(): string {
+  return new Date().toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
 }
 
 function buildUrl(params: Record<string, string | undefined>): string {
@@ -51,6 +40,10 @@ function buildUrl(params: Record<string, string | undefined>): string {
   const qs = u.toString();
   return qs ? `/activity?${qs}` : "/activity";
 }
+
+const AdminBadge: FC<{ size?: number }> = ({ size = 18 }) => (
+  <span style={`width:${size}px;height:${size}px;border-radius:4px;background:${V2_TOKENS.btn3};border:1px solid #3a3a3a;color:${V2_TOKENS.accent};display:inline-flex;align-items:center;justify-content:center;font-size:${size < 16 ? 8 : 9}px;font-weight:700;font-family:${MONO};flex-shrink:0`}>A</span>
+);
 
 export const V2ActivityPage: FC<V2ActivityProps> = ({
   result, filterEntity, filterRange, agentIds, agentRoles, userRole, csrfToken,
@@ -69,7 +62,7 @@ export const V2ActivityPage: FC<V2ActivityProps> = ({
 
   const actorCounts = new Map<string, number>();
   for (const a of activities) {
-    const k = a.agent_name ?? "system";
+    const k = a.agent_name ?? "admin";
     actorCounts.set(k, (actorCounts.get(k) ?? 0) + 1);
   }
   const topActors = [...actorCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
@@ -77,56 +70,68 @@ export const V2ActivityPage: FC<V2ActivityProps> = ({
 
   return (
     <V2Layout title="Activity" active="LOG" userRole={userRole} csrfToken={csrfToken}>
-      <div style="padding:24px 32px">
-        <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:4px">
-          <h1 class="v2-h1">Activity</h1>
-          <span style={`color:${V2_TOKENS.textMute};font-size:13px;font-family:${V2_TOKENS.text}`}>{total} events</span>
+      <div class="v2-pad" style="padding-top:26px;padding-bottom:26px">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+          <div>
+            <div class="v2-eyebrow" style="margin-bottom:6px">AUDIT LOG — RETENTION 90D</div>
+            <h1 class="v2-h1">Activity <span style={`color:${V2_TOKENS.textFaint};font-weight:400`}>· {total} events</span></h1>
+          </div>
+          <div style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute}`}>
+            {fmtHeadDate()} · <span style={`color:${V2_TOKENS.accent}`}>● STREAMING</span>
+          </div>
         </div>
-        <p style={`color:${V2_TOKENS.textDim};margin:0 0 18px;font-size:13px`}>{new Date().toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short" })} · streaming</p>
 
-        <div style="display:grid;grid-template-columns:1fr 270px;gap:12px">
-          <V2Card title="Stream"
-            right={<span style={`font-size:11px;color:${V2_TOKENS.accent2};font-family:${V2_TOKENS.text}`}>● live</span>}>
-            {visible.length === 0 ? (
-              <div style={`padding:40px;text-align:center;color:${V2_TOKENS.textMute};font-size:13px`}>
-                なし · keine Events für diesen Filter.
-              </div>
-            ) : visible.map((ev, i) => {
-              const ag = ev.agent_name ? { id: agentIds[ev.agent_name] ?? ev.agent_name, role: agentRoles[ev.agent_name] ?? undefined } : null;
-              return (
-                <div style={`display:grid;grid-template-columns:60px 22px 88px 1fr;align-items:center;gap:14px;padding:10px 18px;font-size:13px;${i < visible.length - 1 ? `border-bottom:1px solid ${V2_TOKENS.line};` : ""}`}>
-                  <span style={`color:${V2_TOKENS.textMute};font-size:12px;font-family:${V2_TOKENS.text}`}>{fmtTime(ev.created_at)}</span>
-                  {ag ? <V2Avatar agentId={ag.id} role={ag.role} size={20} /> : <div />}
-                  <V2Tag color={entityColor(ev.entity_type)}>{ev.entity_type}</V2Tag>
-                  <span>{ev.summary ?? ev.action}</span>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;padding-top:20px;align-items:flex-start">
+          {/* Stream */}
+          <div style="flex:1 1 560px;min-width:0">
+            <V2Card title="Stream"
+              right={<span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.accent};letter-spacing:0.1em`}>● LIVE</span>}>
+              {visible.length === 0 ? (
+                <div style={`padding:36px;text-align:center;font-family:${MONO};font-size:11px;color:${V2_TOKENS.textMute}`}>
+                  なし · no events for this filter
                 </div>
-              );
-            })}
-          </V2Card>
+              ) : visible.map((ev) => {
+                const ec = entityColor(ev.entity_type);
+                const ag = ev.agent_name
+                  ? { id: agentIds[ev.agent_name] ?? ev.agent_name, role: agentRoles[ev.agent_name] ?? undefined }
+                  : null;
+                return (
+                  <div style={`display:grid;grid-template-columns:${GRID};align-items:center;gap:13px;padding:9px 18px;border-top:1px solid ${V2_TOKENS.lineRow}`}>
+                    <span style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute}`}>{fmtTime(ev.created_at)}</span>
+                    {ag ? <V2Avatar agentId={ag.id} role={ag.role} size={18} /> : <AdminBadge />}
+                    <span style={`font-family:${MONO};font-size:9.5px;color:${ec};border:1px solid ${ec};border-radius:2px;padding:1px 7px;text-align:center;letter-spacing:0.05em`}>{ev.entity_type}</span>
+                    <span style={`font-size:12.5px;color:${V2_TOKENS.textBody};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>{ev.summary ?? ev.action}</span>
+                    <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.textMute};text-align:right;letter-spacing:0.04em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>{ev.action}</span>
+                  </div>
+                );
+              })}
+            </V2Card>
+          </div>
 
-          <div style="display:flex;flex-direction:column;gap:12px">
+          {/* Sidebar */}
+          <div style="flex:0 1 280px;min-width:250px;display:flex;flex-direction:column;gap:12px">
             <V2Card title="Filters">
-              <div style="padding:14px">
-                <div style={`font-size:10.5px;color:${V2_TOKENS.textMute};margin-bottom:6px;letter-spacing:0.08em;text-transform:uppercase`}>Entity</div>
+              <div style="padding:14px 16px">
+                <div style={`font-size:9.5px;letter-spacing:0.18em;text-transform:uppercase;color:${V2_TOKENS.textFaint};font-weight:600;margin-bottom:7px`}>Entity</div>
                 {(["message", "session", "agent"] as const).map((k) => {
                   const n = entityCounts.get(k) ?? 0;
                   const active = filterEntity === k;
                   const col = entityColor(k);
                   return (
                     <a href={buildUrl({ entity: active ? undefined : k, range: filterRange })}
-                      style={`display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:12.5px;text-decoration:none;color:inherit;border-radius:${V2_TOKENS.radius}px;${active ? `background:rgba(255,255,255,0.7);` : ""}`}>
+                      style={`display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:3px;background:${active ? V2_TOKENS.chip : "transparent"};border:1px solid ${active ? "#3a3a3a" : "transparent"};font-family:${MONO};font-size:11px;color:${V2_TOKENS.textBody};margin-bottom:3px;text-decoration:none`}>
                       <span style={`width:8px;height:8px;background:${col};display:inline-block`} />
                       <span style="flex:1">{k}</span>
-                      <span style={`color:${V2_TOKENS.textMute};font-family:${V2_TOKENS.text};font-size:11.5px`}>{n}</span>
+                      <span style={`color:${V2_TOKENS.textMute};font-size:10.5px`}>{n}</span>
                     </a>
                   );
                 })}
-                <div style={`font-size:10.5px;color:${V2_TOKENS.textMute};margin:14px 0 6px;letter-spacing:0.08em;text-transform:uppercase`}>Time</div>
+                <div style={`font-size:9.5px;letter-spacing:0.18em;text-transform:uppercase;color:${V2_TOKENS.textFaint};font-weight:600;margin:14px 0 7px`}>Time</div>
                 {RANGE_OPTIONS.map(([key, label]) => {
                   const active = (filterRange ?? "all") === key;
                   return (
                     <a href={buildUrl({ entity: filterEntity, range: key })}
-                      style={`display:block;padding:6px 10px;border-radius:${V2_TOKENS.radius}px;margin-bottom:2px;font-size:12.5px;text-decoration:none;color:${active ? V2_TOKENS.text : V2_TOKENS.textDim};${active ? "background:rgba(255,255,255,0.7);font-weight:600" : ""}`}>
+                      style={`display:block;padding:7px 10px;border-radius:3px;background:${active ? V2_TOKENS.chip : "transparent"};border:1px solid ${active ? "#3a3a3a" : "transparent"};font-size:11.5px;color:${active ? V2_TOKENS.text : V2_TOKENS.textDim};margin-bottom:3px;text-decoration:none;font-weight:${active ? "600" : "400"}`}>
                       {label}
                     </a>
                   );
@@ -134,21 +139,21 @@ export const V2ActivityPage: FC<V2ActivityProps> = ({
               </div>
             </V2Card>
 
-            <V2Card title="Top actors">
-              <div style="padding:14px">
+            <V2Card title="Top Actors">
+              <div style="padding:14px 16px">
                 {topActors.length === 0 ? (
-                  <div style={`color:${V2_TOKENS.textMute};font-size:12px;text-align:center;padding:8px`}>まだ · noch keine Actors.</div>
+                  <div style={`color:${V2_TOKENS.textMute};font-family:${MONO};font-size:11px;text-align:center;padding:8px`}>まだ · no actors yet</div>
                 ) : topActors.map(([name, n]) => {
                   const ag = agentIds[name] ? { id: agentIds[name], role: agentRoles[name] ?? undefined } : null;
                   return (
-                    <div style="margin-bottom:9px">
-                      <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;margin-bottom:3px">
-                        {ag ? <V2Avatar agentId={ag.id} role={ag.role} size={14} /> : <div style={`width:14px;height:14px;background:${V2_TOKENS.surface3};border-radius:${V2_TOKENS.radius}px`} />}
+                    <div style="margin-bottom:11px">
+                      <div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:4px">
+                        {ag ? <V2Avatar agentId={ag.id} role={ag.role} size={15} /> : <AdminBadge size={15} />}
                         <span style="flex:1">{name}</span>
-                        <span style={`color:${V2_TOKENS.textMute};font-size:11px;font-family:${V2_TOKENS.text}`}>{n}</span>
+                        <span style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute}`}>{n}</span>
                       </div>
-                      <div style={`height:4px;background:linear-gradient(180deg, rgba(217,130,175,0.08), rgba(217,130,175,0.04));border-radius:999px;overflow:hidden;box-shadow:inset 0 1px 1px rgba(217,130,175,0.06)`}>
-                        <div style={`width:${(n / topMax) * 100}%;height:100%;background:var(--v2-btn-primary-bg);box-shadow:inset 0 1px 0 rgba(255,255,255,0.45);border-radius:999px`} />
+                      <div style={`height:4px;background:${V2_TOKENS.chip};border-radius:2px;overflow:hidden`}>
+                        <div style={`width:${Math.round((n / topMax) * 100)}%;height:100%;background:${V2_TOKENS.accent};box-shadow:0 0 6px ${greenGlow(0.5)}`} />
                       </div>
                     </div>
                   );
@@ -159,14 +164,14 @@ export const V2ActivityPage: FC<V2ActivityProps> = ({
         </div>
 
         {(offset > 0 || has_more) && (
-          <div style={`display:flex;align-items:center;gap:14px;padding:18px 4px;font-size:12.5px;color:${V2_TOKENS.textMute}`}>
+          <div style={`display:flex;align-items:center;gap:14px;padding-top:16px;font-family:${MONO};font-size:11px;color:${V2_TOKENS.textMute}`}>
             {offset > 0
-              ? <V2Btn href={buildUrl({ entity: filterEntity, range: filterRange, offset: String(Math.max(0, offset - limit)) })}>← Newer</V2Btn>
-              : <span style={`color:${V2_TOKENS.line2}`}>← Newer</span>}
-            <span style={`font-family:${V2_TOKENS.text}`}>{offset + 1}–{Math.min(offset + limit, total)} of {total}</span>
+              ? <a href={buildUrl({ entity: filterEntity, range: filterRange, offset: String(Math.max(0, offset - limit)) })} style={`color:${V2_TOKENS.accent};letter-spacing:0.08em;text-decoration:none`}>← NEWER</a>
+              : <span style="color:#3a3a3a;letter-spacing:0.08em">← NEWER</span>}
+            <span>{offset + 1}–{Math.min(offset + limit, total)} of {total}</span>
             {has_more
-              ? <V2Btn href={buildUrl({ entity: filterEntity, range: filterRange, offset: String(offset + limit) })}>Older →</V2Btn>
-              : <span style={`color:${V2_TOKENS.line2}`}>Older →</span>}
+              ? <a href={buildUrl({ entity: filterEntity, range: filterRange, offset: String(offset + limit) })} style={`color:${V2_TOKENS.accent};letter-spacing:0.08em;text-decoration:none`}>OLDER →</a>
+              : <span style="color:#3a3a3a;letter-spacing:0.08em">OLDER →</span>}
           </div>
         )}
       </div>

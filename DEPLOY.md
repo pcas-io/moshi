@@ -52,7 +52,7 @@ client by design.
 Deploy. Expected:
 
 - `https://moshi.enki.run/health` → `ok`
-- `https://moshi.enki.run/` → Soft Pastel login; log in with `MESH_ADMIN_TOKEN`
+- `https://moshi.enki.run/` → SENTINEL Dark login ("Mesh Access"); log in with `MESH_ADMIN_TOKEN`
 - Dashboard → register agents, mint per-agent tokens
 - CLI install (no repo, no deps — binaries baked into the image by the
   Dockerfile Go stage, served at `/cli/*`):

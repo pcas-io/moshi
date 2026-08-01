@@ -1,9 +1,11 @@
-// V2 page layout — Soft Pastel app shell with brand, top-nav, ⌘K search button.
+// V2 page layout — SENTINEL Dark app shell with brand, top-nav, ⌘K palette.
 // Used by the v2 dashboard pages (Home, Agents, Conversations, Messages, Activity).
+// Pages with a hero (Overview) pass `hero` — the top-nav then renders inside
+// the hero surface (transparent, no rule); all other pages get a ruled topbar.
 
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
-import { V2_CSS, V2_TOKENS } from "./tokens.js";
+import { V2_CSS, V2_TOKENS, V2_HERO_BG, V2_GRID_BG } from "./tokens.js";
 
 export type V2NavKey = "HOME" | "AGENTS" | "CONVOS" | "MESSAGES" | "LOG";
 
@@ -12,6 +14,10 @@ interface V2LayoutProps {
   active?: V2NavKey;
   userRole?: string;
   csrfToken?: string;
+  /** Hero content rendered below the nav inside the hero surface (Overview). */
+  hero?: any;
+  /** Skip the .v2-wrap/.v2-pad content wrapper (full-bleed pages like Conversations). */
+  fullBleed?: boolean;
   children?: any;
 }
 
@@ -26,8 +32,8 @@ const V2_NAV: ReadonlyArray<readonly [V2NavKey, string, string, boolean]> = [
 const FAVICON = raw(
   '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,' +
   '%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 32 32\'%3E' +
-  '%3Crect width=\'32\' height=\'32\' rx=\'16\' fill=\'%23ff8fb3\'/%3E' +
-  '%3Ctext x=\'16\' y=\'23\' text-anchor=\'middle\' fill=\'%23fff\' ' +
+  '%3Crect width=\'32\' height=\'32\' rx=\'7\' fill=\'%2305e901\'/%3E' +
+  '%3Ctext x=\'16\' y=\'23\' text-anchor=\'middle\' fill=\'%230a0a0a\' ' +
   "font-family='sans-serif' font-size='19' font-weight='800'%3Em%3C/text%3E" +
   "%3C/svg%3E\">"
 );
@@ -51,11 +57,15 @@ function paletteMarkup(items: PaletteItem[], csrfToken?: string): string {
       it.kind === "nav" ? "→" :
       it.kind === "destructive" ? "✕" :
       it.kind === "mcp" ? "⌘" : "+";
-    const iconColor = it.kind === "mcp" ? "var(--v2-accent)" : "var(--v2-text-mute)";
-    const labelColor = it.kind === "mcp" ? "var(--v2-accent)" : "var(--v2-text)";
-    const labelFamily = it.kind === "mcp" ? "var(--v2-font-mono)" : "inherit";
-    const labelWeight = it.kind === "mcp" ? "600" : "500";
-    const hintC = it.kind === "destructive" ? "var(--v2-danger)" : "var(--v2-text-mute)";
+    const iconColor =
+      it.kind === "mcp" ? V2_TOKENS.accent :
+      it.kind === "destructive" ? V2_TOKENS.danger : "#888888";
+    const labelColor =
+      it.kind === "mcp" ? V2_TOKENS.accent :
+      it.kind === "destructive" ? V2_TOKENS.danger : V2_TOKENS.text;
+    const labelFamily = it.kind === "mcp" ? "var(--v2-font-mono)" : "var(--v2-font-sans)";
+    const labelWeight = it.kind === "mcp" ? "500" : "600";
+    const hintC = it.kind === "destructive" ? V2_TOKENS.danger : V2_TOKENS.textMute;
     const labelHtml =
       `<span class="v2-pal-label" style="font-family:${labelFamily};font-weight:${labelWeight};color:${labelColor}">${escapeHtml(it.label)}</span>` +
       (it.desc ? `<div class="v2-pal-desc">${escapeHtml(it.desc)}</div>` : "");
@@ -80,6 +90,11 @@ function paletteMarkup(items: PaletteItem[], csrfToken?: string): string {
         <kbd class="v2-kbd">esc</kbd>
       </div>
       <div class="v2-palette-list" id="v2-palette-list">${rows}</div>
+      <div class="v2-palette-foot">
+        <span>↵ OPEN</span><span>ESC CLOSE</span>
+        <span class="v2-palette-foot-spacer"></span>
+        <span style="color:${V2_TOKENS.accent}">MESH · ⌘K</span>
+      </div>
     </div>
   </div>`;
 }
@@ -153,23 +168,25 @@ const PALETTE_SCRIPT = raw(`<script>
 </script>`);
 
 const PALETTE_CSS = `
-.v2-palette { position: fixed; inset: 0; z-index: 100; align-items: flex-start; justify-content: center; padding-top: 80px; }
-.v2-palette-overlay { position: absolute; inset: 0; background: rgba(120,80,120,0.22); backdrop-filter: blur(2px); }
-.v2-palette-modal { position: relative; width: 540px; background: var(--v2-glass-bg-2); -webkit-backdrop-filter: var(--v2-glass-blur); backdrop-filter: var(--v2-glass-blur); border: var(--v2-glass-border); border-radius: var(--v2-radius-xl); overflow: hidden; box-shadow: var(--v2-glass-shadow); }
-.v2-palette-input-wrap { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--v2-line); }
-.v2-palette-prompt { color: var(--v2-text-mute); font-family: var(--v2-font-mono); }
-#v2-palette-input { flex: 1; background: transparent; border: none; outline: none; color: var(--v2-text); font-size: 14px; font-family: inherit; }
-.v2-palette-list { max-height: 320px; overflow-y: auto; }
-.v2-pal-row { display: flex; align-items: center; gap: 10px; padding: 9px 16px; font-size: 13px; cursor: pointer; border-left: 2px solid transparent; text-decoration: none; color: inherit; background: none; border-top: none; border-right: none; border-bottom: none; width: 100%; font-family: inherit; }
-.v2-pal-btn { display: flex; align-items: center; gap: 10px; width: 100%; background: transparent; border: none; color: inherit; font: inherit; cursor: pointer; padding: 0; text-align: left; }
-.v2-pal-row.v2-pal-active { background: linear-gradient(180deg, rgba(255,143,179,0.14), rgba(255,143,179,0.06)); border-left-color: var(--v2-accent); }
-.v2-pal-icon { width: 20px; height: 20px; border-radius: var(--v2-radius); background: var(--v2-surface-2); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-family: var(--v2-font-mono); flex-shrink: 0; }
+.v2-palette { position: fixed; inset: 0; z-index: 100; align-items: flex-start; justify-content: center; padding-top: 90px; }
+.v2-palette-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(3px); }
+.v2-palette-modal { position: relative; width: 560px; max-width: calc(100vw - 32px); background: var(--v2-modal); border: 1px solid var(--v2-line-2); border-radius: 8px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,0.7); }
+.v2-palette-input-wrap { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--v2-line-card); }
+.v2-palette-prompt { color: var(--v2-accent); font-family: var(--v2-font-mono); }
+#v2-palette-input { flex: 1; background: transparent; border: none; outline: none; color: var(--v2-text); font-size: 13.5px; font-family: var(--v2-font-sans); }
+.v2-palette-list { max-height: 340px; overflow-y: auto; }
+.v2-pal-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; font-size: 12.5px; cursor: pointer; border-left: 2px solid transparent; text-decoration: none; color: inherit; background: none; border-top: none; border-right: none; border-bottom: none; width: 100%; font-family: inherit; }
+.v2-pal-btn { display: flex; align-items: center; gap: 12px; width: 100%; background: transparent; border: none; color: inherit; font: inherit; cursor: pointer; padding: 0; text-align: left; }
+.v2-pal-row.v2-pal-active { background: #1f1f1f; border-left-color: var(--v2-accent); }
+.v2-pal-icon { width: 22px; height: 22px; border-radius: 4px; background: var(--v2-chip); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-family: var(--v2-font-mono); flex-shrink: 0; }
 .v2-pal-text { flex: 1; min-width: 0; }
-.v2-pal-label { display: block; }
-.v2-pal-desc { font-size: 11px; color: var(--v2-text-mute); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-pal-hint { font-size: 11px; font-family: var(--v2-font-mono); flex-shrink: 0; }
+.v2-pal-label { display: block; font-size: 12.5px; }
+.v2-pal-desc { font-size: 10.5px; color: var(--v2-text-mute); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-pal-hint { font-size: 10px; font-family: var(--v2-font-mono); flex-shrink: 0; }
+.v2-palette-foot { display: flex; gap: 16px; padding: 9px 16px; border-top: 1px solid var(--v2-line-card); font-family: var(--v2-font-mono); font-size: 9.5px; color: var(--v2-text-faint); letter-spacing: 0.08em; }
+.v2-palette-foot-spacer { flex: 1; }
 form.v2-pal-row { display: block; padding: 0; }
-form.v2-pal-row > .v2-pal-btn { padding: 9px 16px; }
+form.v2-pal-row > .v2-pal-btn { padding: 10px 16px; }
 `;
 
 // Mesh MCP-tool reference, surfaced in the palette so agents/operators
@@ -204,51 +221,49 @@ function defaultPaletteItems(userRole?: string): PaletteItem[] {
   return items;
 }
 
-// Responsive scaler: design renders at fixed width and CSS-scales down
-// for narrow viewports. Mirrors the prototype useDesignSize hook but as
-// vanilla JS sitting on top of the server-rendered shell.
-const SCALER_SCRIPT = raw(`<script>
-(function(){
-  var DESIGN = ${V2_TOKENS.shellWidth};
-  var COMPACT = ${V2_TOKENS.shellWidthCompact};
-  var BREAK = ${V2_TOKENS.compactBreakpoint};
-  var stage = document.querySelector('.v2-stage');
-  var scaler = document.querySelector('.v2-scaler');
-  var inner  = document.querySelector('.v2-shell');
-  if(!stage || !scaler || !inner) return;
-  var raf = 0;
-  function compute(){
-    var vw = window.innerWidth;
-    var compact = vw < BREAK;
-    var w = compact ? COMPACT : DESIGN;
-    var avail = Math.max(320, vw - 32);
-    var scale = Math.min(1, avail / w);
-    inner.style.setProperty('--v2-design-width', w + 'px');
-    scaler.style.width = w + 'px';
-    scaler.style.transform = 'scale(' + scale + ')';
-    stage.style.minHeight = (inner.offsetHeight * scale + 56) + 'px';
-  }
-  function schedule(){
-    cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(compute);
-  }
-  window.addEventListener('resize', schedule);
-  if (window.ResizeObserver) {
-    new ResizeObserver(schedule).observe(inner);
-  }
-  compute();
-})();
-</script>`);
-
 const FOOTER_LINKS = [
-  ["Hono · TypeScript"],
-  ["NATS JetStream"],
-  ["SQLite"],
-  ["Coolify @ kai (Hetzner)"],
-  ["Apache 2.0"],
+  "Hono · TypeScript",
+  "NATS JetStream",
+  "SQLite",
+  "Coolify @ kai (Hetzner)",
+  "Apache 2.0",
 ] as const;
 
-export const V2Layout: FC<V2LayoutProps> = ({ title, active, userRole, csrfToken, children }) => {
+const Topbar: FC<{ active?: V2NavKey; userRole?: string; csrfToken?: string }> = ({
+  active, userRole, csrfToken,
+}) => (
+  <div class="v2-wrap v2-pad v2-topbar" style="position:relative;z-index:2">
+    <a href="/" class="v2-brand">
+      <span class="v2-brand-mark">m</span>
+      <span class="v2-brand-name">moshi<span class="dot">.</span>moshi</span>
+    </a>
+    <nav class="v2-nav">
+      {V2_NAV.map(([key, label, href, requiresAdmin]) => {
+        if (requiresAdmin && userRole !== "admin") return null;
+        return (
+          <a key={key} href={href} class={active === key ? "active" : ""}>{label}</a>
+        );
+      })}
+    </nav>
+    <button
+      data-v2-search
+      type="button"
+      style={`display:flex;align-items:center;gap:10px;background:${V2_TOKENS.btn3};border:none;color:${V2_TOKENS.text};font-family:var(--v2-font-sans);font-size:10.5px;letter-spacing:0.15em;text-transform:uppercase;padding:9px 15px;border-radius:8px;cursor:pointer`}
+    >
+      <span style="color:#777777">⌕</span>
+      <span>Search</span>
+      <span style={`font-family:var(--v2-font-mono);color:${V2_TOKENS.textMute};letter-spacing:0.05em;text-transform:none`}>⌘K</span>
+    </button>
+    <form method="post" action="/logout" style="margin:0">
+      {csrfToken && <input type="hidden" name="csrf" value={csrfToken} />}
+      <button type="submit" class="v2-logout">Logout</button>
+    </form>
+  </div>
+);
+
+export const V2Layout: FC<V2LayoutProps> = ({
+  title, active, userRole, csrfToken, hero, fullBleed, children,
+}) => {
   const palette = defaultPaletteItems(userRole);
   return (
     <html lang="de">
@@ -257,72 +272,54 @@ export const V2Layout: FC<V2LayoutProps> = ({ title, active, userRole, csrfToken
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{title ? `${title} — moshi.moshi` : "moshi.moshi — もしもし"}</title>
         {FAVICON}
-        {/* Fonts via Google CDN. Self-hosting deferred — separate optimisation PR. */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
         <link
-          href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;500;700;800&family=Baloo+2:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
           rel="stylesheet"
         />
         {raw(`<style>${V2_CSS}${PALETTE_CSS}</style>`)}
-        <meta name="color-scheme" content="light" />
+        <meta name="color-scheme" content="dark" />
       </head>
       <body>
-        <div class="v2-stage">
-          <div class="v2-scaler">
-            <div class="v2-shell">
-              <header class="v2-topbar">
-                <div class="v2-sheen" style="border-radius:14px" />
-                <div class="v2-brand">
-                  <div class="v2-brand-mark">m</div>
-                  <span class="v2-brand-name">moshi.moshi</span>
-                </div>
-                <div class="v2-divider-v" />
-                <nav class="v2-nav">
-                  {V2_NAV.map(([key, label, href, requiresAdmin]) => {
-                    if (requiresAdmin && userRole !== "admin") return null;
-                    const isActive = active === key;
-                    return (
-                      <a key={key} href={href} class={isActive ? "active" : ""}>
-                        <span>{label}</span>
-                      </a>
-                    );
-                  })}
-                </nav>
-                <button data-v2-search class="v2-search-btn" type="button">
-                  <span style="color:var(--v2-text-mute)">⌕</span>
-                  <span style="flex:1;text-align:left">Search…</span>
-                  <kbd class="v2-kbd">⌘K</kbd>
-                </button>
-                {csrfToken && (
-                  <form method="post" action="/logout" style="margin-left:8px">
-                    <input type="hidden" name="csrf" value={csrfToken} />
-                    <button type="submit" class="v2-btn v2-btn--ghost" style="font-size:12px">Logout</button>
-                  </form>
-                )}
-              </header>
-              <main>{children}</main>
-              <footer class="v2-footer">
-                <div class="v2-sheen" style="border-radius:10px" />
-                <span class="v2-footer-domain">
-                  <span class="v2-footer-dot" />
-                  moshi.enki.run
-                </span>
-                {FOOTER_LINKS.map(([label]) => (
-                  <>
-                    <span class="v2-footer-sep">·</span>
-                    <span>{label}</span>
-                  </>
-                ))}
-                <span class="v2-footer-spacer" />
-                <span class="v2-footer-warn">NATS · single-node</span>
-              </footer>
+        <div style="min-height:100vh;display:flex;flex-direction:column">
+          {hero ? (
+            <div style={`position:relative;overflow:hidden;background:${V2_HERO_BG};display:flex;flex-direction:column`}>
+              <div style={`position:absolute;inset:0;background-image:${V2_GRID_BG};background-size:56px 56px;pointer-events:none`} />
+              <Topbar active={active} userRole={userRole} csrfToken={csrfToken} />
+              {hero}
             </div>
-          </div>
+          ) : (
+            <div class="v2-topbar-rule">
+              <Topbar active={active} userRole={userRole} csrfToken={csrfToken} />
+            </div>
+          )}
+          {fullBleed ? (
+            <main style="flex:1;display:flex;flex-direction:column">{children}</main>
+          ) : (
+            <main style="flex:1">
+              <div class="v2-wrap">{children}</div>
+            </main>
+          )}
+          <footer class="v2-footer-rule">
+            <div class="v2-wrap v2-pad v2-footer">
+              <span class="v2-footer-domain">
+                <span class="v2-footer-dot" />
+                moshi.enki.run
+              </span>
+              {FOOTER_LINKS.map((label) => (
+                <>
+                  <span class="v2-footer-sep">·</span>
+                  <span>{label}</span>
+                </>
+              ))}
+              <span class="v2-footer-spacer" />
+              <span class="v2-footer-warn">NATS · SINGLE-NODE</span>
+            </div>
+          </footer>
         </div>
         {raw(paletteMarkup(palette, csrfToken))}
         {PALETTE_SCRIPT}
-        {SCALER_SCRIPT}
       </body>
     </html>
   );

@@ -1,57 +1,48 @@
-// V2 primitives — Hono JSX components for the Soft Pastel dashboard.
+// V2 primitives — Hono JSX components for the SENTINEL Dark dashboard.
 // Pair with src/views/v2/tokens.ts (CSS) and src/views/v2/avatar.ts (SVG generator).
 
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
-import { V2_TOKENS, V2_BTN } from "./tokens.js";
+import { V2_TOKENS, greenGlow } from "./tokens.js";
 import { renderAvatarSvg, type AvatarRenderOptions } from "./avatar.js";
-
-// Specular-sheen overlay used on every glossy surface (cards, KPI tiles,
-// palette modal, top-bar). Renders as an absolutely-positioned div with
-// `mix-blend-mode: screen` so it brightens the underlying gradient.
-export const V2Sheen: FC<{ radius?: number }> = ({ radius }) => (
-  <div
-    class="v2-sheen"
-    style={radius != null ? `border-radius:${radius}px` : ""}
-  />
-);
 
 // ── Presence ────────────────────────────────────────────────────
 export type Presence = "live" | "stale" | "offline" | "never";
 
-const PRESENCE_COLOR: Record<Presence, string> = {
-  live: V2_TOKENS.accent2,
+export const PRESENCE_COLOR: Record<Presence, string> = {
+  live: V2_TOKENS.accent,
   stale: V2_TOKENS.warn,
-  offline: V2_TOKENS.textMute,
-  never: V2_TOKENS.textMute,
+  offline: "#4a4a4a",
+  never: "#4a4a4a",
 };
 
-export const V2Dot: FC<{ presence: Presence; size?: number }> = ({ presence, size = 7 }) => {
+export const V2Dot: FC<{ presence: Presence; size?: number }> = ({ presence, size = 6 }) => {
   const c = PRESENCE_COLOR[presence];
-  const ring = presence === "live"
-    ? `box-shadow: 0 0 0 3px ${withAlpha(c, 0.18)};`
-    : "";
+  const glow = presence === "live" ? `box-shadow: 0 0 8px ${greenGlow(0.6)};` : "";
   return (
     <span
       class="v2-dot"
-      style={`width:${size}px;height:${size}px;background:${c};${ring}`}
+      style={`width:${size}px;height:${size}px;background:${c};${glow}`}
     />
   );
 };
 
 // ── Avatar ──────────────────────────────────────────────────────
+// The deterministic anime portrait, framed dark: 4px radius + #333 hairline.
 export const V2Avatar: FC<{
   agentId: string;
   role?: string;
   size?: number;
   rounded?: boolean;
   ringColor?: string;
-}> = ({ agentId, role, size = 24, rounded, ringColor }) => {
+  bordered?: boolean;
+}> = ({ agentId, role, size = 24, rounded, ringColor, bordered }) => {
   const opts: AvatarRenderOptions = { size, rounded, ringColor };
+  const border = bordered ? `border:1px solid ${V2_TOKENS.line2};` : "";
   return (
     <span
       class="v2-avatar"
-      style={`display:inline-block;width:${size}px;height:${size}px;flex-shrink:0;vertical-align:middle;`}
+      style={`display:inline-flex;width:${size}px;height:${size}px;flex-shrink:0;vertical-align:middle;border-radius:4px;overflow:hidden;${border}`}
     >
       {raw(renderAvatarSvg(agentId, role, opts))}
     </span>
@@ -63,12 +54,10 @@ export const V2Card: FC<{
   title?: string;
   sub?: string;
   right?: any;
-  liftSm?: boolean;
   children?: any;
-}> = ({ title, sub, right, liftSm, children }) => {
+}> = ({ title, sub, right, children }) => {
   return (
-    <div class={liftSm ? "v2-card lift-sm" : "v2-card"}>
-      <V2Sheen />
+    <div class="v2-card">
       {(title || right) && (
         <div class="v2-card-head">
           <div style="flex:1">
@@ -78,13 +67,19 @@ export const V2Card: FC<{
           {right}
         </div>
       )}
-      <div class="v2-card-body">{children}</div>
+      <div>{children}</div>
     </div>
   );
 };
 
 // ── Button ──────────────────────────────────────────────────────
-export type V2BtnKind = "primary" | "secondary" | "ghost" | "danger-outline";
+export type V2BtnKind =
+  | "primary"
+  | "secondary"
+  | "tertiary"
+  | "ghost"
+  | "danger"
+  | "danger-outline";
 
 export const V2Btn: FC<{
   kind?: V2BtnKind;
@@ -92,27 +87,17 @@ export const V2Btn: FC<{
   href?: string;
   onclick?: string;
   children?: any;
-}> = ({ kind = "secondary", type = "button", href, onclick, children }) => {
-  const cls = `v2-btn${kind === "primary" ? " v2-btn--primary"
-    : kind === "ghost" ? " v2-btn--ghost"
-    : kind === "danger-outline" ? " v2-btn--danger-outline"
-    : ""}`;
+}> = ({ kind = "tertiary", type = "button", href, onclick, children }) => {
+  const cls = `v2-btn${kind !== "tertiary" ? ` v2-btn--${kind}` : ""}`;
   if (href) return <a class={cls} href={href}>{children}</a>;
   return <button class={cls} type={type} onclick={onclick}>{children}</button>;
 };
 
-// ── Tag (token-tinted glossy pill) ──────────────────────────────
-// Two-stop gradient + double inset shadow gives the wet-glass look.
+// ── Outlined mono tag (message types, routing, entities) ────────
 export const V2Tag: FC<{ color?: string; children?: any }> = ({ color, children }) => {
   const c = color ?? V2_TOKENS.textDim;
-  const bg = `linear-gradient(180deg, ${withAlpha(c, 0.16)}, ${withAlpha(c, 0.10)})`;
-  const border = withAlpha(c, 0.32);
-  const shadow = `inset 0 1px 0 rgba(255,255,255,0.55), inset 0 -1px 0 ${withAlpha(c, 0.08)}`;
   return (
-    <span
-      class="v2-tag"
-      style={`color:${c};background:${bg};border-color:${border};box-shadow:${shadow}`}
-    >
+    <span class="v2-tag" style={`color:${c}`}>
       {children}
     </span>
   );
@@ -125,7 +110,7 @@ export const V2Spark: FC<{
   h?: number;
   stroke?: string;
   fillAlpha?: number;
-}> = ({ data, w = 80, h = 18, stroke = V2_TOKENS.accent, fillAlpha = 0 }) => {
+}> = ({ data, w = 70, h = 18, stroke = V2_TOKENS.accent, fillAlpha = 0 }) => {
   if (data.length === 0) return <svg width={w} height={h} />;
   const max = Math.max(1, ...data);
   const pts = data.map((v, i) => {
@@ -143,28 +128,58 @@ export const V2Spark: FC<{
   );
 };
 
-// ── Heatmap row (24h activity, etc.) ────────────────────────────
+// ── Heatmap row (24h activity) ──────────────────────────────────
 export const V2Heat: FC<{
   data: number[];
   cell?: number;
   gap?: number;
-  color?: string;
   max?: number;
-}> = ({ data, cell = 8, gap = 1, color = V2_TOKENS.accent, max }) => {
+}> = ({ data, cell = 10, gap = 2, max }) => {
   const m = max ?? Math.max(1, ...data);
   return (
     <div style={`display:flex;gap:${gap}px`}>
       {data.map((v) => {
-        const a = v === 0 ? 0.07 : 0.22 + (v / m) * 0.78;
+        const bg = v === 0
+          ? "rgba(255,255,255,0.05)"
+          : greenGlow(0.18 + (v / m) * 0.82);
         return (
-          <div
-            style={`width:${cell}px;height:${cell}px;background:${withAlpha(color, a)};`}
-          />
+          <span style={`width:${cell}px;height:${cell}px;border-radius:1px;background:${bg}`} />
         );
       })}
     </div>
   );
 };
+
+// ── Shared color maps ───────────────────────────────────────────
+// Message-type marker colors, used by Home / Conversations / Messages.
+const TYPE_COLORS: Record<string, string> = {
+  incident: V2_TOKENS.danger,
+  alert: V2_TOKENS.danger,
+  incident_response: V2_TOKENS.danger,
+  incident_acknowledged: V2_TOKENS.warn,
+  deploy_status: V2_TOKENS.info,
+  deploy_request: V2_TOKENS.info,
+  question: V2_TOKENS.info,
+  answer: V2_TOKENS.accent,
+  review_result: V2_TOKENS.accent,
+  review_request: V2_TOKENS.warn,
+  script: V2_TOKENS.script,
+};
+
+export function typeColor(type: string): string {
+  return TYPE_COLORS[type] ?? V2_TOKENS.textDim;
+}
+
+// Activity entity marker colors (message/session/agent).
+export const ENTITY_COLOR: Record<string, string> = {
+  message: V2_TOKENS.accent,
+  session: V2_TOKENS.info,
+  agent: V2_TOKENS.warn,
+};
+
+export function entityColor(entity: string): string {
+  return ENTITY_COLOR[entity] ?? V2_TOKENS.textMute;
+}
 
 // ── Helpers ─────────────────────────────────────────────────────
 export function withAlpha(input: string, a: number): string {

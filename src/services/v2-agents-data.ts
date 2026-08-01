@@ -33,6 +33,7 @@ export async function loadV2AgentsData(
       presence: e.presence,
       msg24: counts.get(e.agent.name.toLowerCase()) ?? 0,
       heat: getAgentHeat(db, e.agent.name),
+      working_on: e.liveMeta?.working_on ?? e.agent.working_on,
       last_seen_at: e.effectiveLastSeen,
       created_at: e.agent.created_at,
     };

@@ -345,6 +345,7 @@ app.get("/agents", async (c) => {
       error={flash?.error}
       inspectId={c.req.query("inspect")}
       showNewForm={c.req.query("new") === "1"}
+      presenceFilter={c.req.query("presence")}
       userRole={agent.role}
     />,
   );

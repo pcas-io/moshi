@@ -1,7 +1,7 @@
-// V2 Overview ("Home") — Soft Pastel dashboard landing page.
-// Server-rendered with the v2 primitives + the dashboard-stats / layout
-// engine introduced in PR #1 and PR #2. Live-thread card hydrates via
-// SSE (see /sse/threads/:correlation_id in src/index.tsx).
+// V2 Overview ("Home") — SENTINEL Dark mission-control landing page.
+// Hero with grid pattern + green glow, KPI band, dark mesh topology,
+// SSE live thread, agent cards with working_on, recent activity.
+// Live-thread card hydrates via SSE (see /sse/threads/:correlation_id).
 
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
@@ -9,9 +9,9 @@ import type { Activity } from "../../types.js";
 import type { Presence } from "../../services/presence.js";
 import type { MeshEdge, HourlyHeat } from "../../services/dashboard-stats.js";
 import { V2Layout } from "./layout.js";
-import { V2Card, V2Btn, V2Tag, V2Dot, V2Spark, V2Avatar, withAlpha } from "./components.js";
-import { V2_TOKENS } from "./tokens.js";
-import { layoutMesh, type LayoutNode, type LayoutEdge, type Point } from "./layout-engine.js";
+import { V2Card, V2Btn, V2Avatar, V2Spark } from "./components.js";
+import { V2_TOKENS, greenGlow } from "./tokens.js";
+import { layoutMesh, type LayoutNode, type LayoutEdge } from "./layout-engine.js";
 import { renderAvatarSvgInner, renderAvatarSvg } from "./avatar.js";
 
 export interface V2HomeAgent {
@@ -56,6 +56,8 @@ export interface V2HomeProps {
   csrfToken?: string;
 }
 
+const MONO = "var(--v2-font-mono)";
+
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
@@ -69,7 +71,6 @@ function fmtSeconds(s: number): string {
   return `${Math.round(s / 86400)}d`;
 }
 
-// ── Helpers ────────────────────────────────────────────────────────
 function fmtDate(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
@@ -90,6 +91,12 @@ function fmtRel(iso: string | null, now: number = Date.now()): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+function fmtUptime(seconds: number): string {
+  if (seconds < 3600) return `${Math.max(1, Math.floor(seconds / 60))}M`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}H`;
+  return `${Math.floor(seconds / 86400)}D`;
+}
+
 // Stable hue per agent name for thread-bubble tinting.
 function hueFor(name: string): number {
   let h = 2166136261 >>> 0;
@@ -100,7 +107,7 @@ function hueFor(name: string): number {
   return h % 360;
 }
 
-// ── Mesh-topology SVG ──────────────────────────────────────────────
+// ── Mesh-topology SVG (dark) ───────────────────────────────────────
 const MESH_W = 680;
 const MESH_H = 360;
 const RECENT_MS = 2 * 60 * 60 * 1000; // 2h
@@ -109,8 +116,8 @@ const PULSE_MS = 5 * 60 * 1000;       // 5min
 const MeshGraph: FC<{ agents: V2HomeAgent[]; edges: MeshEdge[] }> = ({ agents, edges }) => {
   if (agents.length === 0) {
     return (
-      <div style={`width:${MESH_W}px;height:${MESH_H}px;display:flex;align-items:center;justify-content:center;color:${V2_TOKENS.textMute};font-family:${V2_TOKENS.text}`}>
-        まだ · noch keine Agents.
+      <div style={`width:100%;height:${MESH_H}px;display:flex;align-items:center;justify-content:center;color:${V2_TOKENS.textMute};font-family:${MONO};font-size:11px`}>
+        まだ · NO AGENTS YET
       </div>
     );
   }
@@ -119,8 +126,7 @@ const MeshGraph: FC<{ agents: V2HomeAgent[]; edges: MeshEdge[] }> = ({ agents, e
   const layoutEdges: LayoutEdge[] = edges.map((e) => ({ from: e.from, to: e.to, weight: e.count }));
   // Aggressive spread for 12+ agents on the 680x360 canvas: weak gravity
   // so nodes don't snap back to centre, strong repulsion + long edges to
-  // push them apart, generous initial radius so they start near the rim
-  // instead of converging from a small inner ring.
+  // push them apart, generous initial radius so they start near the rim.
   const positions = layoutMesh(nodes, layoutEdges, {
     width: MESH_W,
     height: MESH_H,
@@ -136,20 +142,18 @@ const MeshGraph: FC<{ agents: V2HomeAgent[]; edges: MeshEdge[] }> = ({ agents, e
   const presenceById = new Map(agents.map((a) => [a.name, a.presence]));
 
   return (
-    <svg width={MESH_W} height={MESH_H} style="display:block;overflow:visible">
+    <svg viewBox={`0 0 ${MESH_W} ${MESH_H}`} style="display:block;width:100%;max-width:820px;margin:0 auto;height:auto;overflow:visible">
       {edges.map((e, i) => {
         const a = positions.get(e.from);
         const b = positions.get(e.to);
         if (!a || !b) return null;
         const recent = now - new Date(e.last).getTime() < RECENT_MS;
         const sw = (0.5 + (e.count / maxCount) * 2).toFixed(2);
-        const stroke = recent ? V2_TOKENS.accent : V2_TOKENS.line2;
-        const opacity = recent ? "0.65" : "0.35";
         return (
           <line key={i}
             x1={a.x.toFixed(1)} y1={a.y.toFixed(1)}
             x2={b.x.toFixed(1)} y2={b.y.toFixed(1)}
-            stroke={stroke} stroke-width={sw} stroke-opacity={opacity} />
+            stroke={recent ? greenGlow(0.55) : "#333333"} stroke-width={sw} />
         );
       })}
       {edges.filter((e) => now - new Date(e.last).getTime() < PULSE_MS).map((e, i) => {
@@ -165,33 +169,35 @@ const MeshGraph: FC<{ agents: V2HomeAgent[]; edges: MeshEdge[] }> = ({ agents, e
       })}
       {agents.map((ag) => {
         const p = positions.get(ag.name)!;
-        const live = presenceById.get(ag.name) === "live";
+        const presence = presenceById.get(ag.name);
+        const live = presence === "live";
+        const stroke = live ? V2_TOKENS.accent : presence === "stale" ? V2_TOKENS.warn : "#333333";
         const N = 36;             // displayed avatar size in topology px-units
         const half = N / 2;
-        const ringR = half + 4;   // pulse ring radius
+        const ringR = half + 5;   // pulse ring radius
         const inner = renderAvatarSvgInner(ag.id, ag.role ?? undefined);
         return (
           <g key={ag.id} transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}>
             {live && (
-              <circle r={ringR} fill={V2_TOKENS.accent} opacity="0.18">
-                <animate attributeName="r" values={`${ringR - 3};${ringR + 4};${ringR - 3}`} dur="2s" repeatCount="indefinite" />
-                <animate attributeName="opacity" values="0.32;0.06;0.32" dur="2s" repeatCount="indefinite" />
+              <circle r={ringR} fill={greenGlow(0.14)}>
+                <animate attributeName="r" values={`${ringR - 3};${ringR + 3};${ringR - 3}`} dur="2s" repeatCount="indefinite" />
+                <animate attributeName="opacity" values="0.9;0.15;0.9" dur="2s" repeatCount="indefinite" />
               </circle>
             )}
-            {/* Hue-tinted backdrop square to keep the silhouette readable
-                even when many tiny avatars sit close together. */}
+            {/* Dark backdrop square with presence-colored stroke keeps the
+                silhouette readable on the charcoal canvas. */}
             <rect x={-half - 1} y={-half - 1} width={N + 2} height={N + 2}
-              rx="4" ry="4"
-              fill={`oklch(0.92 0.06 ${hueFor(ag.name)})`}
-              stroke={live ? V2_TOKENS.accent : V2_TOKENS.line2}
+              rx="5" ry="5"
+              fill="#1b1b1b"
+              stroke={stroke}
               stroke-width={live ? "1.5" : "1"} />
-            {/* Avatar pixel-art embedded as nested rects, scaled from 32→N */}
+            {/* Avatar embedded as nested SVG shapes, scaled from 32→N */}
             <g transform={`translate(${-half},${-half}) scale(${N / 32})`}
                shape-rendering="crispEdges">
               {raw(inner)}
             </g>
-            <text y={half + 14} text-anchor="middle" font-size="11"
-              style={`font-family:${V2_TOKENS.text};fill:${V2_TOKENS.textDim};font-weight:${live ? 600 : 500}`}>
+            <text y={half + 15} text-anchor="middle" font-size="11"
+              style={`font-family:var(--v2-font-sans);fill:${live ? "#d9d9d9" : "#777777"};font-weight:${live ? 600 : 400}`}>
               {ag.name}
             </text>
           </g>
@@ -201,71 +207,48 @@ const MeshGraph: FC<{ agents: V2HomeAgent[]; edges: MeshEdge[] }> = ({ agents, e
   );
 };
 
-// ── KPI card ───────────────────────────────────────────────────────
-// Mesh-native KPI card with glossy fill + optional accent stripe at top.
-const KpiCard: FC<{
-  label: string;
-  value: number | string;
-  sub: string;
-  accent?: string;
-  spark?: number[];
-}> = ({ label, value, sub, accent, spark }) => {
-  const stripeStyle = accent
-    ? `position:absolute;top:0;left:14px;right:14px;height:2px;background:linear-gradient(90deg, ${withAlpha(accent, 0)}, ${accent} 40%, ${accent} 60%, ${withAlpha(accent, 0)});border-radius:2px;`
-    : "display:none";
-  return (
-    <div class="v2-card" style={`padding:14px 16px;border-radius:${V2_TOKENS.radiusXL}px;overflow:hidden`}>
-      <span style={stripeStyle} />
-      <div style={`position:relative;font-size:10.5px;color:${V2_TOKENS.textMute};letter-spacing:0.1em;font-weight:600`}>{label}</div>
-      <div style="position:relative;display:flex;align-items:flex-end;justify-content:space-between;margin-top:6px">
-        <div>
-          <div style="font-size:28px;font-weight:700;letter-spacing:-0.03em;line-height:1">{value}</div>
-          <div style={`font-size:11.5px;color:${V2_TOKENS.textDim};margin-top:4px`}>{sub}</div>
-        </div>
-        {spark && <V2Spark data={spark} w={70} h={26} stroke={V2_TOKENS.accent} fillAlpha={0.15} />}
-      </div>
+// ── KPI cell (hero band) ───────────────────────────────────────────
+const KpiCell: FC<{ bar: string; value: string; label: string }> = ({ bar, value, label }) => (
+  <div style={`background:${V2_TOKENS.bg};padding:18px clamp(16px,3vw,36px)`}>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style={`width:3px;height:26px;background:${bar}`} />
+      <span style="font-size:26px;font-weight:700;letter-spacing:-0.04em">{value}</span>
     </div>
-  );
-};
+    <div style={`font-size:10px;letter-spacing:0.18em;color:${V2_TOKENS.textMute};text-transform:uppercase;margin-top:6px`}>{label}</div>
+  </div>
+);
 
-// ── Thread bubble ──────────────────────────────────────────────────
-function bubbleColor(from: string): string {
-  return `oklch(0.94 0.06 ${hueFor(from)})`;
-}
-
+// ── Thread bubble (dark oklch tint) ────────────────────────────────
 const ThreadBubble: FC<{
   msg: V2HomeThread["messages"][0];
   isLeft: boolean;
-  agentRole?: string | null;
-}> = ({ msg, isLeft, agentRole }) => {
-  const flexDir = isLeft ? "row" : "row-reverse";
+  agentId: string;
+  agentRole?: string;
+}> = ({ msg, isLeft, agentId, agentRole }) => {
+  const dir = isLeft ? "row" : "row-reverse";
   const align = isLeft ? "flex-start" : "flex-end";
-  const headDir = isLeft ? "row" : "row-reverse";
+  const hue = hueFor(msg.from);
   const corner = isLeft
-    ? "border-bottom-left-radius:3px;"
-    : "border-bottom-right-radius:3px;";
-  const bg = bubbleColor(msg.from);
+    ? "border-bottom-left-radius:2px;"
+    : "border-bottom-right-radius:2px;";
   return (
-    <div style={`display:flex;flex-direction:${flexDir};gap:9px;margin-bottom:10px;align-items:flex-end`}>
-      <V2Avatar agentId={msg.from} role={agentRole ?? undefined} size={20} />
-      <div style={`max-width:78%;display:flex;flex-direction:column;align-items:${align}`}>
-        <div style={`display:flex;align-items:baseline;gap:6px;margin-bottom:3px;flex-direction:${headDir}`}>
-          <span style="font-weight:600;font-size:12px">{msg.from}</span>
-          <span style={`color:${V2_TOKENS.textMute};font-size:10.5px;font-family:${V2_TOKENS.text}`}>{fmtTime(msg.created_at)}</span>
+    <div data-msg-id={msg.id} style={`display:flex;gap:10px;margin-bottom:12px;align-items:flex-end;flex-direction:${dir}`}>
+      <V2Avatar agentId={agentId} role={agentRole} size={20} bordered />
+      <div style={`max-width:82%;display:flex;flex-direction:column;align-items:${align}`}>
+        <div style={`display:flex;align-items:baseline;gap:8px;margin-bottom:3px;flex-direction:${dir}`}>
+          <span style="font-size:11.5px;font-weight:600">{msg.from}</span>
+          <span style={`font-family:${MONO};font-size:9.5px;color:${V2_TOKENS.textMute}`}>{fmtTime(msg.created_at)}</span>
         </div>
-        <div
-          data-msg-id={msg.id}
-          style={`background:${bg};border:1px solid ${V2_TOKENS.line};border-radius:12px;${corner}padding:7px 11px;font-size:12.5px;line-height:1.5;white-space:pre-wrap`}
-        >{previewPayload(msg.payload)}</div>
+        <div style={`background:oklch(0.23 0.035 ${hue});border:1px solid oklch(0.34 0.06 ${hue});border-radius:8px;${corner}padding:8px 12px;font-size:12px;line-height:1.5;color:#e8e8e8;white-space:pre-wrap`}>{previewPayload(msg.payload)}</div>
       </div>
     </div>
   );
 };
 
-function previewPayload(raw: string, max: number = 240): string {
+function previewPayload(rawStr: string, max: number = 240): string {
   // Try JSON first — show .text or first stringy field. Fall back to raw.
   try {
-    const obj = JSON.parse(raw);
+    const obj = JSON.parse(rawStr);
     if (typeof obj === "string") return obj.slice(0, max);
     if (obj && typeof obj === "object") {
       for (const key of ["text", "message", "summary", "payload"]) {
@@ -274,15 +257,14 @@ function previewPayload(raw: string, max: number = 240): string {
       }
     }
   } catch { /* fall through */ }
-  return raw.slice(0, max);
+  return rawStr.slice(0, max);
 }
 
 // ── SSE hydration script ───────────────────────────────────────────
 // Subscribes to /sse/threads/:id and appends a bubble matching the
-// server-rendered ThreadBubble exactly: avatar (cloned from a hidden
-// pool), name + timestamp header, hue-tinted bubble with corner cut on
-// the sender side. Sender vs. receiver decided by participants[0] which
-// is embedded as `data-thread-a` on the SSE container.
+// server-rendered ThreadBubble: avatar cloned from the hidden pool,
+// name + timestamp header, dark hue-tinted bubble with corner cut on
+// the sender side. Sender vs. receiver decided via `data-thread-a`.
 const SSE_SCRIPT = (correlationId: string) => raw(`<script>
 (function(){
   if (typeof EventSource === 'undefined') return;
@@ -324,33 +306,32 @@ const SSE_SCRIPT = (correlationId: string) => raw(`<script>
   function buildBubble(msg) {
     var isLeft = !threadA || msg.from.toLowerCase() === threadA;
     var hue = hueFor(msg.from);
-    var tint = 'oklch(0.94 0.06 ' + hue + ')';
-    var corner = isLeft ? 'border-bottom-left-radius:3px' : 'border-bottom-right-radius:3px';
+    var corner = isLeft ? 'border-bottom-left-radius:2px' : 'border-bottom-right-radius:2px';
 
     var wrapper = document.createElement('div');
     wrapper.setAttribute('data-msg-id', msg.id);
-    wrapper.style.cssText = 'display:flex;flex-direction:' + (isLeft ? 'row' : 'row-reverse') + ';gap:9px;margin-bottom:10px;align-items:flex-end;animation:v2-bubble-in 0.25s ease-out';
+    wrapper.style.cssText = 'display:flex;flex-direction:' + (isLeft ? 'row' : 'row-reverse') + ';gap:10px;margin-bottom:12px;align-items:flex-end;animation:v2-bubble-in 0.25s ease-out';
 
     var avBox = document.createElement('span');
-    avBox.style.cssText = 'display:inline-flex;width:20px;height:20px;flex-shrink:0;align-items:center;justify-content:center';
+    avBox.style.cssText = 'display:inline-flex;width:20px;height:20px;flex-shrink:0;border-radius:4px;overflow:hidden;border:1px solid #333333';
     var av = getAvatar(msg.from);
     if (av) avBox.appendChild(av.cloneNode(true));
 
     var col = document.createElement('div');
-    col.style.cssText = 'max-width:78%;display:flex;flex-direction:column;align-items:' + (isLeft ? 'flex-start' : 'flex-end');
+    col.style.cssText = 'max-width:82%;display:flex;flex-direction:column;align-items:' + (isLeft ? 'flex-start' : 'flex-end');
 
     var head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:baseline;gap:6px;margin-bottom:3px;flex-direction:' + (isLeft ? 'row' : 'row-reverse');
+    head.style.cssText = 'display:flex;align-items:baseline;gap:8px;margin-bottom:3px;flex-direction:' + (isLeft ? 'row' : 'row-reverse');
     var name = document.createElement('span');
-    name.style.cssText = 'font-weight:600;font-size:12px';
+    name.style.cssText = 'font-size:11.5px;font-weight:600';
     name.textContent = msg.from;
     var time = document.createElement('span');
-    time.style.cssText = 'color:rgba(74,59,77,0.42);font-size:10.5px;font-family:"JetBrains Mono",monospace';
+    time.style.cssText = 'color:#666666;font-size:9.5px;font-family:"JetBrains Mono",monospace';
     time.textContent = fmtTime(msg.created_at);
     head.appendChild(name); head.appendChild(time);
 
     var bub = document.createElement('div');
-    bub.style.cssText = 'background:' + tint + ';border:1px solid rgba(217,130,175,0.10);border-radius:12px;' + corner + ';padding:7px 11px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;box-shadow:0 1px 0 rgba(255,255,255,0.85) inset, 0 6px 16px rgba(217,130,175,0.07), 0 1px 0 rgba(217,130,175,0.12)';
+    bub.style.cssText = 'background:oklch(0.23 0.035 ' + hue + ');border:1px solid oklch(0.34 0.06 ' + hue + ');border-radius:8px;' + corner + ';padding:8px 12px;font-size:12px;line-height:1.5;color:#e8e8e8;white-space:pre-wrap';
     bub.textContent = previewPayload(msg.payload);
 
     col.appendChild(head); col.appendChild(bub);
@@ -381,148 +362,161 @@ const SSE_SCRIPT = (correlationId: string) => raw(`<script>
 export const V2HomePage: FC<V2HomeProps> = ({
   stats, agents, edges, liveThread, activities, userRole, csrfToken,
 }) => {
-  const dateLine = `${fmtDate(new Date().toISOString())} · ${stats.agentsLive}/${stats.agentsTotal} agents · ${stats.msg24h} msg/24h`;
+  const off = stats.agentsTotal - stats.agentsLive - stats.agentsStale;
+  const uptime = fmtUptime(process.uptime());
+  const perMin = (stats.msg24h / 60 / 24).toFixed(1);
+
+  const hero = (
+    <div class="v2-wrap v2-pad" style="position:relative;flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding-top:26px;padding-bottom:26px;z-index:2;min-height:280px">
+      <div class="v2-eyebrow v2-fade" style="letter-spacing:0.22em;animation-delay:0.2s">
+        MESH STATUS — {fmtDate(new Date().toISOString())}
+      </div>
+      <h1 class="v2-fade" style="margin:8px 0 10px;font-size:clamp(34px,4.6vw,62px);font-weight:700;line-height:1.02;letter-spacing:-0.05em;text-transform:uppercase;animation-delay:0.35s">
+        {stats.agentsLive}/{stats.agentsTotal} Agents <span style={`color:${V2_TOKENS.accent}`}>Online</span>
+      </h1>
+      <p class="v2-fade" style="margin:0 0 6px;font-weight:300;font-size:clamp(15px,1.6vw,19px);color:rgba(245,245,245,0.8);animation-delay:0.5s">
+        Async agent-to-agent messaging, done right.
+      </p>
+      <p class="v2-fade" style={`margin:0;font-weight:300;font-size:13px;color:${V2_TOKENS.textDim};animation-delay:0.6s`}>
+        {stats.msg24h} messages routed in the last 24 hours · {stats.threads} threads · {stats.incidents24h} incident{stats.incidents24h === 1 ? "" : "s"}/24h.
+      </p>
+      <div class="v2-fade" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;animation-delay:0.7s">
+        {userRole === "admin" && (
+          <V2Btn href="/agents?new=1" kind="primary">+ Register Agent</V2Btn>
+        )}
+        <V2Btn href="/conversations" kind="secondary">Open Conversations</V2Btn>
+      </div>
+      <div class="v2-fade" style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute};margin-top:16px;letter-spacing:0.06em;animation-delay:0.85s`}>
+        moshi.enki.run · NATS JETSTREAM · SINGLE-NODE · UPTIME {uptime}
+      </div>
+    </div>
+  );
 
   return (
-    <V2Layout title="Overview" active="HOME" userRole={userRole} csrfToken={csrfToken}>
-      <div style="padding:24px 32px">
-        {/* Page head */}
-        <div class="v2-page-head">
-          <div>
-            <h1 class="v2-h1">Overview</h1>
-            <div class="v2-page-sub">{dateLine}</div>
-          </div>
-          <div style="display:flex;gap:8px">
-            <V2Btn href="/messages">Messages</V2Btn>
-            {userRole === "admin" && <V2Btn href="/agents" kind="primary">+ New agent</V2Btn>}
-          </div>
-        </div>
-
-        {/* KPI strip — mesh-native: agent presence, message rate, thread
-            grouping rule, NATS stream usage. */}
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-          <KpiCard
-            label="AGENTS · LIVE"
-            value={`${stats.agentsLive}/${stats.agentsTotal}`}
-            sub={`${stats.agentsStale} stale · ${stats.agentsActive} active token`}
-            accent={V2_TOKENS.accent2}
-          />
-          <KpiCard
-            label="MSG · 24H"
-            value={stats.msg24h}
-            sub={`${(stats.msg24h / 60 / 24).toFixed(1)}/min avg · 60 msg/min cap`}
-            accent={V2_TOKENS.accent}
-            spark={agents.find((a) => a.heat.some((v) => v > 0))?.heat}
-          />
-          <KpiCard
-            label="THREADS"
-            value={stats.threads}
-            sub="correlation_id-grouped"
-          />
-          <KpiCard
-            label="NATS · STREAM"
+    <V2Layout title="Overview" active="HOME" userRole={userRole} csrfToken={csrfToken} hero={hero}>
+      {/* KPI band */}
+      <div style={`margin:0 calc(-1 * clamp(16px,3vw,36px));border-top:1px solid ${V2_TOKENS.line};border-bottom:1px solid ${V2_TOKENS.line}`}>
+        <div style={`background:${V2_TOKENS.line};display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1px`}>
+          <KpiCell bar={V2_TOKENS.accent} value={`${stats.agentsLive}/${stats.agentsTotal}`} label={`Agents Live · ${stats.agentsStale} stale`} />
+          <KpiCell bar={V2_TOKENS.accent} value={String(stats.msg24h)} label={`MSG / 24h · ${perMin}/min · cap 60/min`} />
+          <KpiCell bar="#3a3a3a" value={String(stats.threads)} label="Threads · correlation_id" />
+          <KpiCell
+            bar={V2_TOKENS.info}
             value={stats.stream ? fmtBytes(stats.stream.bytes) : "—"}
-            sub={
-              stats.stream
-                ? `MESH_MESSAGES · ${fmtSeconds(stats.stream.maxAgeSeconds)} · ${fmtBytes(stats.stream.maxBytes)}`
-                : "NATS unreachable"
-            }
-            accent={V2_TOKENS.info}
+            label={stats.stream
+              ? `NATS Stream · ${fmtSeconds(stats.stream.maxAgeSeconds)} · ${fmtBytes(stats.stream.maxBytes)}`
+              : "NATS Stream · unreachable"}
           />
         </div>
+      </div>
 
+      <div class="v2-pad">
         {/* Mesh + Live thread row */}
-        <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:12px;margin-bottom:18px">
-          <V2Card title="Mesh topology" sub="last 7 days"
-            right={<span style={`font-size:11px;color:${V2_TOKENS.accent2};font-family:${V2_TOKENS.text}`}>● live</span>}>
-            <div style="padding:16px;display:flex;justify-content:center">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(440px,100%),1fr));gap:14px;padding-top:24px">
+          <V2Card title="Mesh Topology" sub="last 7 days"
+            right={<span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.accent};letter-spacing:0.1em`}>● LIVE</span>}>
+            <div style="padding:10px;background-image:radial-gradient(circle,#1f1f1f 1px,transparent 1px);background-size:22px 22px">
               <MeshGraph agents={agents} edges={edges} />
             </div>
           </V2Card>
 
-          <V2Card title="Live thread"
+          <V2Card title="Live Thread"
             sub={liveThread ? liveThread.correlation_id : "no active thread"}
-            right={<V2Tag color={V2_TOKENS.accent2}>SSE</V2Tag>}>
+            right={<span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.accent};border:1px solid ${greenGlow(0.4)};padding:2px 8px;border-radius:2px;letter-spacing:0.1em`}>SSE</span>}>
             <div
               data-sse-thread={liveThread?.correlation_id ?? ""}
               data-thread-a={liveThread?.participants[0] ?? ""}
-              style="padding:14px 16px;max-height:340px;overflow-y:auto">
+              style="padding:16px 18px;max-height:360px;overflow-y:auto">
               {liveThread && liveThread.messages.length > 0 ? (
                 liveThread.messages.map((m) => {
-                  const fromAgent = agents.find((a) => a.name.toLowerCase() === m.from.toLowerCase());
                   const isLeft = liveThread.participants[0]?.toLowerCase() === m.from.toLowerCase();
-                  return <ThreadBubble msg={m} isLeft={isLeft} agentRole={fromAgent?.role} />;
+                  const fromAgent = agents.find((a) => a.name.toLowerCase() === m.from.toLowerCase());
+                  return (
+                    <ThreadBubble
+                      msg={m}
+                      isLeft={isLeft}
+                      agentId={fromAgent?.id ?? m.from}
+                      agentRole={fromAgent?.role ?? undefined}
+                    />
+                  );
                 })
               ) : (
-                <div style={`padding:24px;text-align:center;color:${V2_TOKENS.textMute};font-size:12.5px`}>
-                  しずか · noch ganz ruhig hier.
+                <div style={`padding:24px;text-align:center;color:${V2_TOKENS.textMute};font-family:${MONO};font-size:11px`}>
+                  しずか · ALL QUIET
                 </div>
+              )}
+              {liveThread && (
+                <a href={`/conversations?id=${encodeURIComponent(liveThread.correlation_id)}`}
+                  style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.accent};letter-spacing:0.08em`}>
+                  OPEN THREAD →
+                </a>
               )}
             </div>
           </V2Card>
         </div>
 
-        {/* Agents grid */}
-        <V2Card title="Agents" sub={`${stats.agentsTotal} total`}
-          right={
-            <div style="display:flex;gap:4px">
-              {["All", "Live", "Stale", "Off"].map((f, i) => (
-                <span style={`font-size:11.5px;padding:4px 11px;border-radius:999px;${i === 0 ? "background:rgba(255,255,255,0.7);" : ""}border:1px solid ${V2_TOKENS.line};color:${i === 0 ? V2_TOKENS.text : V2_TOKENS.textDim}`}>
-                  {f}
-                </span>
-              ))}
+        {/* Agents section */}
+        <div style="padding-top:24px">
+          <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px;flex-wrap:wrap">
+            <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase">
+              Agents <span style={`color:${V2_TOKENS.textMute};font-weight:400`}>— {stats.agentsTotal} registered</span>
             </div>
-          }>
-          <div style="padding:12px;display:grid;grid-template-columns:repeat(5,1fr);gap:8px">
+            <div style={`flex:1;height:1px;background:${V2_TOKENS.line};min-width:40px`} />
+            <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.accent}`}>● {stats.agentsLive} LIVE</span>
+            <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.warn}`}>● {stats.agentsStale} STALE</span>
+            <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.textFaint}`}>● {off} OFF</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px">
             {agents.map((a) => {
               const live = a.presence === "live";
-              const border = live
-                ? `border:1px solid ${withAlpha(V2_TOKENS.accent, 0.5)}`
-                : `border:${V2_TOKENS.line2}`;
-              const shadow = live
-                ? `box-shadow: 0 4px 14px ${withAlpha(V2_TOKENS.accent, 0.18)}, inset 0 1px 0 rgba(255,255,255,0.7);`
-                : "";
+              const cardBd = live ? greenGlow(0.35) : "#2a2a2a";
+              const nameColor = a.presence === "offline" || a.presence === "never" ? "#8a8a8a" : V2_TOKENS.text;
+              const dotColor = live ? V2_TOKENS.accent : a.presence === "stale" ? V2_TOKENS.warn : "#4a4a4a";
+              const dotShadow = live ? `box-shadow:0 0 8px ${greenGlow(0.6)}` : "";
               return (
-                <div style={`background:${V2_TOKENS.surface};${border};border-radius:${V2_TOKENS.radius + 2}px;padding:11px 13px;${shadow}`}>
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-                    <V2Avatar agentId={a.id} role={a.role ?? undefined} size={22} />
+                <div style={`background:${V2_TOKENS.surface};border:1px solid ${cardBd};border-radius:6px;padding:13px 14px`}>
+                  <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px">
+                    <V2Avatar agentId={a.id} role={a.role ?? undefined} size={26} />
                     <div style="flex:1;overflow:hidden">
-                      <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{a.name}</div>
-                      <div style={`font-size:10.5px;color:${V2_TOKENS.textMute};font-family:${V2_TOKENS.text}`}>{a.role ?? "—"}</div>
+                      <div style={`font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:${nameColor}`}>{a.name}</div>
+                      <div style={`font-family:${MONO};font-size:9.5px;color:${V2_TOKENS.textMute};white-space:nowrap;overflow:hidden;text-overflow:ellipsis`}>{a.role ?? "—"}</div>
                     </div>
-                    <V2Dot presence={a.presence} size={6} />
+                    <span style={`width:6px;height:6px;border-radius:50%;flex-shrink:0;background:${dotColor};${dotShadow}`} />
+                  </div>
+                  <div style={`font-size:11px;color:${a.working_on ? V2_TOKENS.textDim : "#4a4a4a"};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:10px`}>
+                    <span style={`color:${V2_TOKENS.accent}`}>▸</span> {a.working_on ?? "—"}
                   </div>
                   <div style="display:flex;align-items:flex-end;justify-content:space-between">
                     <div>
-                      <div style={`font-size:16px;font-weight:700;letter-spacing:-0.02em;color:${a.msg24 > 0 ? V2_TOKENS.text : V2_TOKENS.textMute}`}>{a.msg24}</div>
-                      <div style={`font-size:10px;color:${V2_TOKENS.textMute};letter-spacing:0.06em`}>24H</div>
+                      <div style={`font-size:15px;font-weight:700;letter-spacing:-0.02em;color:${a.msg24 > 0 ? V2_TOKENS.text : V2_TOKENS.textFaint}`}>{a.msg24}</div>
+                      <div style={`font-size:8.5px;color:${V2_TOKENS.textMute};letter-spacing:0.15em`}>24H</div>
                     </div>
-                    <V2Spark data={a.heat} w={70} h={20}
-                      stroke={a.msg24 > 0 ? V2_TOKENS.accent : V2_TOKENS.textMute} />
+                    <V2Spark data={a.heat} w={64} h={18}
+                      stroke={a.msg24 > 0 ? V2_TOKENS.accent : "#3a3a3a"} />
                   </div>
                 </div>
               );
             })}
           </div>
-        </V2Card>
+        </div>
 
         {/* Recent activity */}
-        <div style="margin-top:18px">
-          <V2Card title="Recent activity" sub="last 6 events"
-            right={<V2Btn href="/activity" kind="ghost">view all →</V2Btn>}>
+        <div style="padding-top:24px;padding-bottom:26px">
+          <V2Card title="Recent Activity" sub="last 6 events"
+            right={<a href="/activity" style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.accent};letter-spacing:0.08em`}>VIEW ALL →</a>}>
             {activities.length === 0 ? (
-              <div style={`padding:24px;text-align:center;color:${V2_TOKENS.textMute};font-size:12.5px`}>
-                まだ · noch nichts los.
+              <div style={`padding:24px;text-align:center;color:${V2_TOKENS.textMute};font-family:${MONO};font-size:11px`}>
+                まだ · NOTHING YET
               </div>
             ) : (
-              activities.slice(0, 6).map((ev, i) => {
+              activities.slice(0, 6).map((ev) => {
                 const ag = agents.find((a) => a.name === ev.agent_name);
                 return (
-                  <div style={`display:grid;grid-template-columns:80px 24px 1fr 100px;align-items:center;gap:12px;padding:9px 16px;${i < Math.min(6, activities.length) - 1 ? `border-bottom:1px solid ${V2_TOKENS.line}` : ""}`}>
-                    <span style={`color:${V2_TOKENS.textMute};font-size:11.5px;font-family:${V2_TOKENS.text}`}>{fmtRel(ev.created_at)}</span>
+                  <div style={`display:grid;grid-template-columns:56px 24px minmax(160px,1fr) minmax(110px,150px);align-items:center;gap:14px;padding:9px 18px;border-top:1px solid ${V2_TOKENS.lineRow}`}>
+                    <span style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute}`}>{fmtRel(ev.created_at)}</span>
                     {ag ? <V2Avatar agentId={ag.id} role={ag.role ?? undefined} size={18} /> : <div />}
-                    <span style="font-size:13px">{ev.summary ?? ev.action}</span>
-                    <span style={`font-size:10.5px;color:${V2_TOKENS.textMute};text-align:right;font-family:${V2_TOKENS.text};letter-spacing:0.04em`}>{ev.action}</span>
+                    <span style={`font-size:12.5px;color:${V2_TOKENS.textBody};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>{ev.summary ?? ev.action}</span>
+                    <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.textMute};text-align:right;letter-spacing:0.06em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>{ev.action}</span>
                   </div>
                 );
               })
@@ -531,7 +525,7 @@ export const V2HomePage: FC<V2HomeProps> = ({
         </div>
       </div>
 
-      {/* Hidden avatar pool — SSE script clones from here to avoid
+      {/* Hidden avatar pool — the SSE script clones from here to avoid
           re-running the avatar generator client-side. One entry per agent
           known at page render. Unknown senders fall back to no avatar. */}
       {liveThread && (

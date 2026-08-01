@@ -1,12 +1,11 @@
-// V2 Conversations — Soft Pastel split-view (list + bubble thread).
-// Replaces the v1 accordion in src/views/conversations.tsx.
+// V2 Conversations — SENTINEL Dark split-view (list panel + bubble thread).
 
 import type { FC } from "hono/jsx";
 import type { ConversationThread } from "../../services/message-queries.js";
 import type { PaginatedResult } from "../../types.js";
 import { V2Layout } from "./layout.js";
-import { V2Btn, V2Avatar } from "./components.js";
-import { V2_TOKENS } from "./tokens.js";
+import { V2Avatar, typeColor } from "./components.js";
+import { V2_TOKENS, greenGlow } from "./tokens.js";
 
 export interface V2ConversationsProps {
   result: PaginatedResult<ConversationThread>;
@@ -17,6 +16,9 @@ export interface V2ConversationsProps {
   csrfToken?: string;
   userRole?: string;
 }
+
+const MONO = "var(--v2-font-mono)";
+const LIVE_WINDOW_MS = 15 * 60_000;
 
 function fmtTime(iso: string): string {
   return new Date(iso).toTimeString().slice(0, 5);
@@ -31,13 +33,19 @@ function fmtRel(iso: string, now: number = Date.now()): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+function fmtDayLabel(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  const label = d.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
+  return d.toDateString() === now.toDateString() ? `TODAY — ${label}` : label;
+}
+
 function clip(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
-function previewPayload(raw: string, max: number = 240): string {
+function previewPayload(rawStr: string, max: number = 240): string {
   try {
-    const o = JSON.parse(raw);
+    const o = JSON.parse(rawStr);
     if (typeof o === "string") return clip(o, max);
     if (o && typeof o === "object") {
       for (const k of ["text", "message", "summary", "payload"]) {
@@ -46,7 +54,7 @@ function previewPayload(raw: string, max: number = 240): string {
       }
     }
   } catch { /* fall through */ }
-  return clip(raw, max);
+  return clip(rawStr, max);
 }
 
 function hueFor(name: string): number {
@@ -58,41 +66,48 @@ function hueFor(name: string): number {
   return h % 360;
 }
 
-const PARTICIPANT_LIMIT = 2; // a → b shown explicitly; rest folded
+const BcBadge: FC<{ size?: number }> = ({ size = 16 }) => (
+  <span style={`width:${size}px;height:${size}px;border-radius:3px;background:#2a2a2a;display:inline-flex;align-items:center;justify-content:center;font-size:7.5px;color:${V2_TOKENS.warn};font-family:${MONO};flex-shrink:0`}>BC</span>
+);
 
 const ThreadListItem: FC<{
   thread: ConversationThread;
   selected: boolean;
+  query?: string;
   agentIds: Record<string, string>;
   agentRoles: Record<string, string | null>;
-}> = ({ thread, selected, agentIds, agentRoles }) => {
+  now: number;
+}> = ({ thread, selected, query, agentIds, agentRoles, now }) => {
   const a = thread.participants[0];
   const b = thread.participants[1];
-  const aId = a ? (agentIds[a] ?? a) : "";
-  const aRole = a ? agentRoles[a] : null;
-  const bId = b ? (agentIds[b] ?? b) : "";
-  const bRole = b ? agentRoles[b] : null;
-  const isBroadcast = b === "broadcast" || (a === "broadcast");
+  const isBroadcast = a === "broadcast" || b === "broadcast";
+  const live = now - new Date(thread.last_activity).getTime() < LIVE_WINDOW_MS;
+  const title = b ? `${a} → ${b}` : a ?? "—";
+  const href = `/conversations?id=${encodeURIComponent(thread.thread_id)}${query ? `&q=${encodeURIComponent(query)}` : ""}`;
 
   return (
-    <a href={`/conversations?id=${encodeURIComponent(thread.thread_id)}`}
-      style={`display:block;padding:11px 18px;border-bottom:1px solid ${V2_TOKENS.line};text-decoration:none;color:inherit;background:${selected ? `linear-gradient(180deg, rgba(255,143,179,0.14), rgba(255,143,179,0.06))` : "transparent"};border-left:2px solid ${selected ? V2_TOKENS.accent : "transparent"}`}>
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
-        {a && <V2Avatar agentId={aId} role={aRole ?? undefined} size={16} />}
-        <span style={`color:${V2_TOKENS.textMute};font-size:11px`}>→</span>
-        {isBroadcast || !b ? (
-          <span style={`width:16px;height:16px;border-radius:${V2_TOKENS.radius}px;background:${V2_TOKENS.surface3};display:inline-flex;align-items:center;justify-content:center;font-size:9px;color:${V2_TOKENS.textMute};font-family:${V2_TOKENS.text}`}>BC</span>
-        ) : (
-          <V2Avatar agentId={bId} role={bRole ?? undefined} size={16} />
-        )}
-        <div style="flex:1" />
-        <span style={`font-size:11px;color:${V2_TOKENS.textMute};font-family:${V2_TOKENS.text}`}>{fmtRel(thread.last_activity)}</span>
+    <a href={href}
+      style={`display:block;padding:12px 18px;border-bottom:1px solid ${V2_TOKENS.lineRow};text-decoration:none;color:inherit;background:${selected ? `linear-gradient(90deg,${greenGlow(0.07)},transparent)` : "transparent"};border-left:2px solid ${selected ? V2_TOKENS.accent : "transparent"}`}>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+        {a && (a === "broadcast"
+          ? <BcBadge />
+          : <V2Avatar agentId={agentIds[a] ?? a} role={agentRoles[a] ?? undefined} size={16} />)}
+        <span style={`color:${V2_TOKENS.textFaint};font-size:10px`}>→</span>
+        {isBroadcast && a !== "broadcast" ? (
+          <BcBadge />
+        ) : b ? (
+          <V2Avatar agentId={agentIds[b] ?? b} role={agentRoles[b] ?? undefined} size={16} />
+        ) : null}
+        <span style="font-size:11.5px;font-weight:600;margin-left:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{title}</span>
+        <span style="flex:1" />
+        <span style={`width:6px;height:6px;border-radius:50%;flex-shrink:0;background:${live ? V2_TOKENS.accent : "transparent"}`} />
+        <span style={`font-family:${MONO};font-size:9.5px;color:${V2_TOKENS.textMute};flex-shrink:0`}>{fmtRel(thread.last_activity, now)}</span>
       </div>
-      <div style={`font-size:13px;font-weight:500;margin-bottom:3px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden`}>
-        {clip(previewPayload(thread.first_payload), 80)}
+      <div style="font-size:12px;color:#cccccc;line-height:1.45;overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;margin-bottom:3px">
+        {previewPayload(thread.first_payload, 80)}
       </div>
-      <div style={`font-size:12px;color:${V2_TOKENS.textDim};line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden`}>
-        {thread.first_context ?? ""}
+      <div style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.textMute};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>
+        ctx: {thread.first_context ?? "—"}
       </div>
     </a>
   );
@@ -102,61 +117,82 @@ const ThreadDetail: FC<{
   thread: ConversationThread;
   agentIds: Record<string, string>;
   agentRoles: Record<string, string | null>;
-}> = ({ thread, agentIds, agentRoles }) => {
+  now: number;
+}> = ({ thread, agentIds, agentRoles, now }) => {
   const firstSender = thread.messages[0]?.from;
+  const live = now - new Date(thread.last_activity).getTime() < LIVE_WINDOW_MS;
+  const title = thread.participants.length > 1
+    ? `${thread.participants[0]} → ${thread.participants[1]}`
+    : thread.participants[0] ?? "Empty thread";
+
+  let lastDay = "";
   return (
     <>
-      <div style={`padding:16px 28px;border-bottom:1px solid ${V2_TOKENS.line};display:flex;align-items:center;gap:12px`}>
+      <div style={`display:flex;align-items:center;gap:12px;padding:16px clamp(16px,2.4vw,28px);border-bottom:1px solid ${V2_TOKENS.line};flex-wrap:wrap`}>
         {firstSender && (
           <V2Avatar
             agentId={agentIds[firstSender] ?? firstSender}
             role={agentRoles[firstSender] ?? undefined}
-            size={26} />
+            size={26}
+            bordered />
         )}
-        <div style="flex:1">
-          <div style="font-size:14px;font-weight:600">
-            {thread.participants.length > 0 ? thread.participants.slice(0, PARTICIPANT_LIMIT).join(" → ") : "Empty thread"}
-          </div>
-          <div style={`font-size:11.5px;color:${V2_TOKENS.textMute};font-family:${V2_TOKENS.text}`}>
-            correlation_id · {thread.thread_id} · {thread.message_count} msg · last activity {fmtRel(thread.last_activity)}
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:14px;font-weight:600">{title}</div>
+          <div style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.textMute};margin-top:2px`}>
+            correlation_id · {thread.thread_id} · {thread.message_count} msg · last activity {fmtRel(thread.last_activity, now)}
           </div>
         </div>
-        <span class="v2-tag" style={`color:${V2_TOKENS.textMute};background:linear-gradient(180deg, ${V2_TOKENS.surface2}, ${V2_TOKENS.surface3});border-color:${V2_TOKENS.line2};box-shadow:inset 0 1px 0 rgba(255,255,255,0.55)`}>read-only · ADR-004</span>
+        <span style={`font-family:${MONO};font-size:9.5px;color:#888888;border:1px solid ${V2_TOKENS.line2};padding:3px 9px;border-radius:2px;letter-spacing:0.08em`}>READ-ONLY · ADR-004</span>
+        {live && (
+          <span style={`font-family:${MONO};font-size:9.5px;color:${V2_TOKENS.accent};border:1px solid ${greenGlow(0.4)};padding:3px 9px;border-radius:2px;letter-spacing:0.08em`}>● SSE LIVE</span>
+        )}
       </div>
 
-      <div style="flex:1;padding:24px 32px;overflow-y:auto">
+      <div style="flex:1;overflow-y:auto;padding:22px clamp(16px,2.4vw,32px)">
         {thread.messages.map((m) => {
-          const a = thread.participants[0];
-          const isLeft = m.from === a;
+          const isLeft = m.from === thread.participants[0];
           const hue = hueFor(m.from);
-          // Bubble: 2-stop oklch gradient + oklch border + 4-layer shadow + sheen overlay
-          const tintBg = `linear-gradient(180deg, oklch(0.97 0.05 ${hue}) 0%, oklch(0.93 0.07 ${hue}) 100%)`;
-          const tintBorder = `oklch(0.87 0.05 ${hue})`;
-          const corner = isLeft ? "border-bottom-left-radius:6px;" : "border-bottom-right-radius:6px;";
-          const bubbleShadow =
-            "0 1px 0 rgba(255,255,255,0.85) inset," +
-            " 0 6px 16px rgba(217,130,175,0.14)";
+          const corner = isLeft ? "border-bottom-left-radius:2px;" : "border-bottom-right-radius:2px;";
+          const day = new Date(m.created_at).toDateString();
+          const showSep = day !== lastDay;
+          lastDay = day;
+          const tc = typeColor(m.type);
           return (
-            <div style={`display:flex;flex-direction:${isLeft ? "row" : "row-reverse"};gap:12px;margin-bottom:18px;align-items:flex-end`}>
-              <V2Avatar agentId={agentIds[m.from] ?? m.from} role={agentRoles[m.from] ?? undefined} size={28} />
-              <div style={`max-width:70%;display:flex;flex-direction:column;align-items:${isLeft ? "flex-start" : "flex-end"}`}>
-                <div style={`display:flex;align-items:baseline;gap:8px;margin-bottom:5px;flex-direction:${isLeft ? "row" : "row-reverse"}`}>
-                  <span style="font-weight:600;font-size:12.5px">{m.from}</span>
-                  <span style={`font-size:10.5px;color:${V2_TOKENS.textMute};font-family:${V2_TOKENS.text}`}>{fmtTime(m.created_at)}</span>
+            <>
+              {showSep && (
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">
+                  <span style={`flex:1;height:1px;background:${V2_TOKENS.line}`} />
+                  <span style={`font-family:${MONO};font-size:9.5px;color:${V2_TOKENS.textFaint};letter-spacing:0.15em`}>{fmtDayLabel(m.created_at)}</span>
+                  <span style={`flex:1;height:1px;background:${V2_TOKENS.line}`} />
                 </div>
-                <div style={`position:relative;background:${tintBg};border:1px solid ${tintBorder};border-radius:18px;${corner}padding:11px 15px;font-size:13.5px;line-height:1.55;white-space:pre-wrap;box-shadow:${bubbleShadow}`}>
-                  <span class="v2-sheen" style="border-radius:18px" />
-                  <span style="position:relative">{previewPayload(m.payload, 4000)}</span>
-                </div>
-                {m.context && (
-                  <div style={`font-size:10.5px;color:${V2_TOKENS.textMute};margin-top:4px;font-family:${V2_TOKENS.text}`}>
-                    ctx: {clip(m.context, 90)}
+              )}
+              <div style={`display:flex;gap:12px;margin-bottom:18px;align-items:flex-end;flex-direction:${isLeft ? "row" : "row-reverse"}`}>
+                <V2Avatar agentId={agentIds[m.from] ?? m.from} role={agentRoles[m.from] ?? undefined} size={28} bordered />
+                <div style={`max-width:min(70%,760px);display:flex;flex-direction:column;align-items:${isLeft ? "flex-start" : "flex-end"}`}>
+                  <div style={`display:flex;align-items:baseline;gap:8px;margin-bottom:5px;flex-direction:${isLeft ? "row" : "row-reverse"}`}>
+                    <span style="font-size:12.5px;font-weight:600">{m.from}</span>
+                    <span style={`font-family:${MONO};font-size:9.5px;padding:1px 7px;border-radius:2px;border:1px solid ${tc};color:${tc}`}>{m.type}</span>
+                    <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.textMute}`}>{fmtTime(m.created_at)}</span>
                   </div>
-                )}
+                  <div style={`background:oklch(0.23 0.035 ${hue});border:1px solid oklch(0.34 0.06 ${hue});border-radius:10px;${corner}padding:11px 15px;font-size:13px;line-height:1.55;color:#e8e8e8;white-space:pre-wrap`}>
+                    {previewPayload(m.payload, 4000)}
+                  </div>
+                  {m.context && (
+                    <div style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.textMute};margin-top:4px`}>
+                      ctx: {clip(m.context, 90)}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            </>
           );
         })}
+      </div>
+
+      <div style={`padding:12px clamp(16px,2.4vw,28px);border-top:1px solid ${V2_TOKENS.line};font-family:${MONO};font-size:10px;color:${V2_TOKENS.textFaint};display:flex;gap:14px;flex-wrap:wrap`}>
+        <span>replies via <span style={`color:${V2_TOKENS.textDim}`}>mesh_reply</span> only — dashboard is read-only (ADR-004)</span>
+        <span style="flex:1" />
+        <span>payload ≤ 256 KB · context ≤ 2048 chars</span>
       </div>
     </>
   );
@@ -165,6 +201,7 @@ const ThreadDetail: FC<{
 export const V2ConversationsPage: FC<V2ConversationsProps> = ({
   result, selectedId, query, agentIds, agentRoles, csrfToken, userRole,
 }) => {
+  const now = Date.now();
   const filtered = query
     ? result.data.filter((t) => {
         const q = query.toLowerCase();
@@ -174,56 +211,60 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
       })
     : result.data;
   const opened = filtered.find((t) => t.thread_id === selectedId)
+    ?? result.data.find((t) => t.thread_id === selectedId)
     ?? filtered[0]
     ?? null;
-  const liveCount = filtered.filter((t) => Date.now() - new Date(t.last_activity).getTime() < 15 * 60_000).length;
+  const liveCount = filtered.filter((t) => now - new Date(t.last_activity).getTime() < LIVE_WINDOW_MS).length;
 
   return (
-    <V2Layout title="Conversations" active="CONVOS" userRole={userRole} csrfToken={csrfToken}>
-      <div style={`display:grid;grid-template-columns:340px 1fr;height:calc(100vh - 80px);min-height:760px`}>
-        {/* Left: list */}
-        <div style={`border-right:1px solid ${V2_TOKENS.line};display:flex;flex-direction:column;background:rgba(255,255,255,0.4)`}>
-          <div style={`padding:20px 18px 12px;border-bottom:1px solid ${V2_TOKENS.line}`}>
-            <h1 style="font-size:18px;font-weight:700;margin:0;letter-spacing:-0.02em">Conversations</h1>
-            <div style={`font-size:12.5px;color:${V2_TOKENS.textMute};margin-top:3px;font-family:${V2_TOKENS.text}`}>
-              {result.total} total · {liveCount} active
+    <V2Layout title="Conversations" active="CONVOS" userRole={userRole} csrfToken={csrfToken} fullBleed>
+      <div class="v2-wrap" style={`flex:1;display:flex;flex-wrap:wrap;align-items:stretch;min-height:720px;border-left:1px solid ${V2_TOKENS.line};border-right:1px solid ${V2_TOKENS.line}`}>
+        {/* Left: thread list */}
+        <div style={`flex:1 1 320px;max-width:400px;min-width:280px;border-right:1px solid ${V2_TOKENS.line};display:flex;flex-direction:column;background:${V2_TOKENS.panel}`}>
+          <div style={`padding:20px 18px 14px;border-bottom:1px solid ${V2_TOKENS.line}`}>
+            <div class="v2-eyebrow" style="margin-bottom:6px">THREADS — CORRELATION_ID</div>
+            <h1 style="margin:0;font-size:20px;font-weight:700;letter-spacing:-0.02em;text-transform:uppercase">Conversations</h1>
+            <div style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute};margin-top:4px`}>
+              {result.total} total · <span style={`color:${V2_TOKENS.accent}`}>{liveCount} active</span>
             </div>
             <form method="get" action="/conversations" style="margin-top:12px">
-              <input class="v2-input" type="text" name="q" placeholder="Search payload, ctx, agent…" value={query ?? ""} />
+              <input class="v2-input" type="text" name="q" placeholder="Search payload, ctx, agent…" value={query ?? ""} style="font-size:11.5px;padding:9px 12px" />
               {selectedId && <input type="hidden" name="id" value={selectedId} />}
             </form>
           </div>
           <div style="flex:1;overflow-y:auto">
             {filtered.length === 0 ? (
-              <div style={`padding:40px 20px;text-align:center;color:${V2_TOKENS.textMute};font-size:12.5px`}>
-                {query ? "なし · No matches." : "しずか · noch ganz ruhig hier — keine Conversations."}
+              <div style={`padding:34px 18px;text-align:center;font-family:${MONO};font-size:11px;color:${V2_TOKENS.textMute}`}>
+                {query ? "なし · no matches" : "しずか · all quiet — no conversations yet"}
               </div>
             ) : (
               filtered.map((t) => (
                 <ThreadListItem
                   thread={t}
                   selected={opened?.thread_id === t.thread_id}
+                  query={query}
                   agentIds={agentIds}
                   agentRoles={agentRoles}
+                  now={now}
                 />
               ))
             )}
             {result.has_more && (
               <a href={`/conversations?offset=${result.offset + result.limit}${query ? `&q=${encodeURIComponent(query)}` : ""}`}
-                style={`display:block;padding:14px;text-align:center;font-size:12px;color:${V2_TOKENS.textDim};border-top:1px solid ${V2_TOKENS.line};text-decoration:none`}>
-                Older →
+                style={`display:block;padding:13px;text-align:center;font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.accent};border-top:1px solid ${V2_TOKENS.lineRow};text-decoration:none;letter-spacing:0.08em`}>
+                OLDER →
               </a>
             )}
           </div>
         </div>
 
-        {/* Right: detail */}
-        <div style="display:flex;flex-direction:column">
+        {/* Right: thread detail */}
+        <div style="flex:1 1 480px;min-width:0;display:flex;flex-direction:column">
           {opened ? (
-            <ThreadDetail thread={opened} agentIds={agentIds} agentRoles={agentRoles} />
+            <ThreadDetail thread={opened} agentIds={agentIds} agentRoles={agentRoles} now={now} />
           ) : (
-            <div style={`flex:1;display:flex;align-items:center;justify-content:center;color:${V2_TOKENS.textMute};font-size:13px`}>
-              もしもし — wähl links eine Conversation.
+            <div style={`flex:1;display:flex;align-items:center;justify-content:center;color:${V2_TOKENS.textMute};font-family:${MONO};font-size:11px`}>
+              もしもし — pick a conversation on the left.
             </div>
           )}
         </div>
