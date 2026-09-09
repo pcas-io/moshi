@@ -14,7 +14,8 @@ TypeScript, Hono, @hono/node-server, @modelcontextprotocol/sdk, nats.js, better-
 - `docker compose up` — Full stack (mesh + NATS)
 
 ## Architecture
-- `src/mcp/` — MCP server + 6 tools (mesh_send, mesh_receive, mesh_reply, mesh_status, mesh_register, mesh_history)
+- `src/mcp/` — MCP server + 7 tools (mesh_send, mesh_receive, mesh_get, mesh_reply, mesh_status, mesh_register, mesh_history); `catalog.ts` is the tool reference the dashboard palette renders (a test keeps it in sync)
+- `src/services/inbox.ts` — JetStream pull logic (consumer info before fetch, shared limit); unit-tested with fake consumers
 - `src/services/` — Business logic (nats, agent, message, ratelimit, activity)
 - `src/views/` — Dashboard (Hono JSX, server-rendered)
 - `src/auth.ts` — Bearer token + cookie auth
@@ -31,7 +32,10 @@ ULID IDs, SHA-256 token hashing, timing-safe comparison.
 - Rate limit: 60 messages/minute per agent (token bucket).
 - Payload max: 256 KB per message.
 - Context max: 2048 chars per message.
-- Presence TTL: 600s (auto-updated on every MCP interaction).
+- Presence TTL: 600s (auto-updated on every MCP interaction). NATS KV holds only the liveness timestamp; role/capabilities/working_on live in SQLite. KV entries are read per agent (`kv.get`), never via `kv.keys()` (drops the latest writer).
+- Every tool reply carries `inbox_pending`; `mesh_receive` acks on read, previews payloads (default 4000 chars) and has no type filter (it lost messages). `mesh_get` returns the full message.
+- The admin token is an operator identity: messaging tools refuse it with an onboarding hint.
+- Tests: `tests/mcp/harness.ts` runs the real McpServer over an InMemoryTransport with fake NATS + in-memory SQLite.
 
 ## Commits
 Conventional Commits: feat:, fix:, chore:, docs:, refactor:

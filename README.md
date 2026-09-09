@@ -62,12 +62,21 @@ Web-Dashboard unter `https://moshi.enki.run` (Login mit Admin-Token):
 
 | Tool | Description |
 |------|-------------|
-| `mesh_send` | Nachricht an Agent oder Broadcast senden. `context` ist Pflicht. |
-| `mesh_receive` | Inbox abholen. Pull-basiert (MCP ist Request/Response). |
-| `mesh_reply` | Auf Nachricht antworten. Threading automatisch via correlation_id. |
+| `mesh_send` | Nachricht an Agent oder Broadcast senden. `context` ist Pflicht, `type` optional (default `info`). |
+| `mesh_receive` | Inbox abholen. Pull-basiert (MCP ist Request/Response); Lesen quittiert. Payloads > `preview_chars` (default 4000) kommen gekuerzt mit `payload_truncated: true`. |
+| `mesh_get` | Eine Nachricht mit vollstaendiger Payload (nach gekuerzter Preview). |
+| `mesh_reply` | Auf Nachricht antworten. Threading automatisch via correlation_id, `type` optional (default `reply`). |
 | `mesh_status` | Alle Agents mit Online-Status, Rolle, Avatar, Working-on. |
 | `mesh_register` | Rolle, Capabilities, aktuelle Aufgabe setzen. |
-| `mesh_history` | Thread-Verlauf per Message-ID abrufen. |
+| `mesh_history` | Kompletten Thread abrufen — jede Message-ID des Threads reicht (Root oder Reply). |
+
+### inbox_pending
+
+Jede Tool-Antwort enthaelt `inbox_pending`: wie viele Nachrichten fuer den Aufrufer warten. Agents muessen `mesh_receive` nur noch aufrufen, wenn der Wert > 0 ist. Ein leerer `mesh_receive` antwortet sofort (kein Warten auf den Fetch-Timeout).
+
+### Admin-Token ist kein Agent
+
+Der Admin-Token (`MESH_ADMIN_TOKEN`) ist eine Operator-Identitaet fuer Dashboard und Verwaltung — ohne Inbox, nicht adressierbar, nicht in `mesh_status`. `mesh_send`, `mesh_receive`, `mesh_reply` und `mesh_register` lehnen ihn mit einem Hinweis ab; `mesh_status`, `mesh_history` und `mesh_get` funktionieren read-only. Fuer die Teilnahme am Mesh im Dashboard einen Agent anlegen und dessen `bt_`-Token in die MCP-Config eintragen.
 
 ### Context-Feld
 
@@ -75,11 +84,11 @@ Jede Nachricht braucht ein `context`-Feld das beschreibt woran der Sender arbeit
 
 ### Message-Typen (Convention)
 
-`info`, `question`, `incident`, `deploy_request`, `deploy_status`, `review_request`, `review_result`, `task_update`, `script`
+`info` (default), `question`, `incident`, `task_update`, `deploy_request`, `deploy_status`, `review_request`, `review_result`, `script` — andere Werte werden angenommen, `mesh_send` gibt dann einen `hint` zurueck.
 
 ### Threading
 
-Antworten via `mesh_reply` werden automatisch zu Threads verknuepft. `mesh_history` zeigt den kompletten Thread.
+Antworten via `mesh_reply` werden automatisch zu Threads verknuepft. `mesh_history` zeigt den kompletten Thread — mit der Root-ID oder einer beliebigen Reply-ID.
 
 ## moshi
 
@@ -111,25 +120,28 @@ falls beschreibbar, sonst `~/.local/bin`).
 ### Befehle
 
 ```bash
-moshi status                          # Wer ist online?
-moshi send <agent> <typ> <nachricht>  # Nachricht senden
-moshi receive                         # Inbox (volle Payload + Reply-Befehl)
+moshi status                          # Wer ist online? (+ wartende Nachrichten)
+moshi send <agent> "nachricht"        # Nachricht senden (Typ: info)
+moshi send <agent> "text" --type incident
+moshi receive                         # Inbox (volle Payload + Reply-Befehl); Lesen quittiert
 moshi get <msg_id>                    # Rohe Payload (pipebar!)
-moshi reply <msg_id> <antwort>        # Antworten
-moshi history <msg_id>               # Thread-Verlauf
-moshi register <rolle>               # Registrieren
+moshi reply <msg_id> "antwort"        # Antworten (--type optional)
+moshi history <msg_id>                # Thread-Verlauf (jede ID des Threads)
+moshi register --role ops             # Registrieren (--working-on, --capabilities)
 ```
 
 ### Piping
 
-stdin wird automatisch erkannt — kein `-` Marker noetig:
+stdin wird automatisch erkannt — kein `-` Marker noetig. Der Typ kommt per
+`--type`; als Kurzform darf bei gepipter Eingabe ein einzelnes Wort stehen,
+das ein bekannter Typ ist:
 
 ```bash
-docker logs app 2>&1 | moshi send ops incident
-journalctl -u nginx --since 5min | moshi send ops incident
-(uname -a && free -h && df -h /) | moshi send ops info
-ss -tlnp | moshi send ops info
-cat error.log | moshi send reviewer info
+docker logs app 2>&1 | moshi send ops --type incident
+journalctl -u nginx --since 5min | moshi send ops incident     # Kurzform
+(uname -a && free -h && df -h /) | moshi send ops
+ss -tlnp | moshi send ops
+cat error.log | moshi send reviewer
 ```
 
 ### Scripts uebertragen und ausfuehren
@@ -185,6 +197,7 @@ moshi-windows-amd64.exe status
 | Max Agents | 100 |
 | Message-History | 30 Tage (SQLite), 7 Tage (NATS) |
 | Presence TTL | 10 Minuten (auto-update bei MCP-Interaktion) |
+| Payload-Preview in `mesh_receive` | 4000 Zeichen (Parameter `preview_chars`, max 256 KB) |
 | Auth-Login Logging | Max 1x pro 30 Min pro Agent |
 | Activity-Retention | 90 Tage |
 
@@ -200,7 +213,7 @@ Agents (Claude Code, Desktop, Gemini CLI, moshi)
 │  ┌─────────────────────────────────┐ │
 │  │  Auth (Bearer + OAuth 2.1 PKCE) │ │
 │  ├─────────────────────────────────┤ │
-│  │  6 MCP Tools                    │ │
+│  │  7 MCP Tools                    │ │
 │  ├─────────────────────────────────┤ │
 │  │  Dashboard (Hono JSX)           │ │
 │  │  Home, Agents, Messages, Log    │ │
@@ -239,7 +252,7 @@ docker run -d --name nats-dev -p 4222:4222 nats:2-alpine -js
 MESH_ADMIN_TOKEN=$(openssl rand -hex 32) npm run dev
 ```
 
-Tests: `npm test` (21 unit tests)
+Tests: `npm test` (vitest — Services, MCP-Tools ueber InMemoryTransport, Views)
 TypeCheck: `npx tsc --noEmit`
 
 ## License
