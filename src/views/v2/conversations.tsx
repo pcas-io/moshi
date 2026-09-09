@@ -11,6 +11,8 @@ export interface V2ConversationsProps {
   result: PaginatedResult<ConversationThread>;
   selectedId?: string;
   query?: string;
+  /** Only threads this agent took part in (?agent=). */
+  filterAgent?: string;
   agentRoles: Record<string, string | null>;
   agentIds: Record<string, string>;
   csrfToken?: string;
@@ -73,17 +75,18 @@ const BcBadge: FC<{ size?: number }> = ({ size = 16 }) => (
 const ThreadListItem: FC<{
   thread: ConversationThread;
   selected: boolean;
-  query?: string;
+  /** Query string (without "?") carrying the active filters. */
+  keepQs?: string;
   agentIds: Record<string, string>;
   agentRoles: Record<string, string | null>;
   now: number;
-}> = ({ thread, selected, query, agentIds, agentRoles, now }) => {
+}> = ({ thread, selected, keepQs, agentIds, agentRoles, now }) => {
   const a = thread.participants[0];
   const b = thread.participants[1];
   const isBroadcast = a === "broadcast" || b === "broadcast";
   const live = now - new Date(thread.last_activity).getTime() < LIVE_WINDOW_MS;
   const title = b ? `${a} → ${b}` : a ?? "—";
-  const href = `/conversations?id=${encodeURIComponent(thread.thread_id)}${query ? `&q=${encodeURIComponent(query)}` : ""}`;
+  const href = `/conversations?id=${encodeURIComponent(thread.thread_id)}${keepQs ? `&${keepQs}` : ""}`;
 
   return (
     <a href={href}
@@ -199,21 +202,19 @@ const ThreadDetail: FC<{
 };
 
 export const V2ConversationsPage: FC<V2ConversationsProps> = ({
-  result, selectedId, query, agentIds, agentRoles, csrfToken, userRole,
+  result, selectedId, query, filterAgent, agentIds, agentRoles, csrfToken, userRole,
 }) => {
   const now = Date.now();
-  const filtered = query
-    ? result.data.filter((t) => {
-        const q = query.toLowerCase();
-        return t.first_payload.toLowerCase().includes(q)
-          || t.first_context?.toLowerCase().includes(q)
-          || t.participants.some((p) => p.toLowerCase().includes(q));
-      })
-    : result.data;
+  // Search and agent filter are applied in SQL (listConversations), so
+  // `result.data` is already the filtered page.
+  const filtered = result.data;
   const opened = filtered.find((t) => t.thread_id === selectedId)
-    ?? result.data.find((t) => t.thread_id === selectedId)
     ?? filtered[0]
     ?? null;
+  const keep = new URLSearchParams();
+  if (query) keep.set("q", query);
+  if (filterAgent) keep.set("agent", filterAgent);
+  const keepQs = keep.toString();
   const liveCount = filtered.filter((t) => now - new Date(t.last_activity).getTime() < LIVE_WINDOW_MS).length;
 
   return (
@@ -228,21 +229,27 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
               {result.total} total · <span style={`color:${V2_TOKENS.accent}`}>{liveCount} active</span>
             </div>
             <form method="get" action="/conversations" style="margin-top:12px">
-              <input class="v2-input" type="text" name="q" placeholder="Search payload, ctx, agent…" value={query ?? ""} style="font-size:11.5px;padding:9px 12px" />
-              {selectedId && <input type="hidden" name="id" value={selectedId} />}
+              <input class="v2-input" type="text" name="q" placeholder="Search payload, context, message id…" value={query ?? ""} style="font-size:11.5px;padding:9px 12px" />
+              {filterAgent && <input type="hidden" name="agent" value={filterAgent} />}
             </form>
+            {filterAgent && (
+              <div style={`margin-top:8px;display:flex;gap:8px;align-items:center;font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textDim}`}>
+                <span>threads with <span style={`color:${V2_TOKENS.accent}`}>{filterAgent}</span></span>
+                <a href={`/conversations${query ? `?q=${encodeURIComponent(query)}` : ""}`} style={`color:${V2_TOKENS.textMute};text-decoration:none`}>✕ clear</a>
+              </div>
+            )}
           </div>
           <div style="flex:1;overflow-y:auto">
             {filtered.length === 0 ? (
               <div style={`padding:34px 18px;text-align:center;font-family:${MONO};font-size:11px;color:${V2_TOKENS.textMute}`}>
-                {query ? "なし · no matches" : "しずか · all quiet — no conversations yet"}
+                {query || filterAgent ? "なし · no matches" : "しずか · all quiet — no conversations yet"}
               </div>
             ) : (
               filtered.map((t) => (
                 <ThreadListItem
                   thread={t}
                   selected={opened?.thread_id === t.thread_id}
-                  query={query}
+                  keepQs={keepQs}
                   agentIds={agentIds}
                   agentRoles={agentRoles}
                   now={now}
@@ -250,7 +257,7 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
               ))
             )}
             {result.has_more && (
-              <a href={`/conversations?offset=${result.offset + result.limit}${query ? `&q=${encodeURIComponent(query)}` : ""}`}
+              <a href={`/conversations?offset=${result.offset + result.limit}${keepQs ? `&${keepQs}` : ""}`}
                 style={`display:block;padding:13px;text-align:center;font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.accent};border-top:1px solid ${V2_TOKENS.lineRow};text-decoration:none;letter-spacing:0.08em`}>
                 OLDER →
               </a>

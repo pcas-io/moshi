@@ -510,14 +510,23 @@ app.get("/messages", (c) => {
   const filterAgent = c.req.query("agent") || undefined;
   const offsetParam = parseInt(c.req.query("offset") ?? "0", 10);
   const offset = isNaN(offsetParam) || offsetParam < 0 ? 0 : offsetParam;
-  const result = listMessages(db, { limit: LIMITS.PAGINATION_DEFAULT, offset, agent: filterAgent });
+  const routingParam = c.req.query("routing");
+  const routing = routingParam === "direct" || routingParam === "broadcast" ? routingParam : undefined;
+  const query = c.req.query("q")?.trim() || undefined;
+  const result = listMessages(db, {
+    limit: LIMITS.PAGINATION_DEFAULT,
+    offset,
+    agent: filterAgent,
+    q: query,
+    routing,
+  });
   const allAgents = agents.list();
   return c.html(
     <V2MessagesPage
       result={result}
       filterAgent={filterAgent}
-      filterRouting={c.req.query("routing")}
-      query={c.req.query("q")}
+      filterRouting={routing}
+      query={query}
       agentIds={Object.fromEntries(allAgents.map((a) => [a.name, a.id]))}
       agentRoles={Object.fromEntries(allAgents.map((a) => [a.name, a.role]))}
       userRole={agent?.role ?? undefined}
@@ -553,13 +562,21 @@ app.get("/conversations", (c) => {
 
   const offsetParam = parseInt(c.req.query("offset") ?? "0", 10);
   const offset = isNaN(offsetParam) || offsetParam < 0 ? 0 : offsetParam;
-  const result = listConversations(db, { limit: LIMITS.PAGINATION_DEFAULT, offset });
+  const query = c.req.query("q")?.trim() || undefined;
+  const filterAgent = c.req.query("agent")?.trim() || undefined;
+  const result = listConversations(db, {
+    limit: LIMITS.PAGINATION_DEFAULT,
+    offset,
+    q: query,
+    agent: filterAgent,
+  });
   const allAgents = agents.list();
   return c.html(
     <V2ConversationsPage
       result={result}
       selectedId={c.req.query("id")}
-      query={c.req.query("q")}
+      query={query}
+      filterAgent={filterAgent}
       agentIds={Object.fromEntries(allAgents.map((a) => [a.name, a.id]))}
       agentRoles={Object.fromEntries(allAgents.map((a) => [a.name, a.role]))}
       userRole={agent?.role ?? undefined}
