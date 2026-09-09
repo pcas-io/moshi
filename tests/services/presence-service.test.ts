@@ -38,9 +38,9 @@ function createFakeNats(): NatsPresenceBackend & {
         timestamp: new Date().toISOString(),
       });
     },
-    async getPresence() {
+    async getPresence(agentNames: string[]) {
       if (self.failOnGet) throw new Error("nats unavailable");
-      return new Map<string, unknown>(store);
+      return new Map<string, unknown>([...store].filter(([k]) => agentNames.includes(k)));
     },
   };
   return self;

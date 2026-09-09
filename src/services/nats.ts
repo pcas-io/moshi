@@ -212,25 +212,31 @@ export class NatsService {
     await this.kv.put(`agent.${agentName}`, value);
   }
 
-  async getPresence(): Promise<Map<string, unknown>> {
+  /**
+   * Live-presence entries for the given agents, keyed by agent name.
+   *
+   * Reads each key directly instead of enumerating the bucket:
+   * `kv.keys()` (ordered consumer, deliver-last-per-subject) stops one
+   * message early on this server/client combination and never returned
+   * the most recently touched agent — so the agent that had just called
+   * the mesh always showed up as stale/offline. Direct gets are exact and
+   * run in parallel; the set of agents is known from SQLite anyway.
+   */
+  async getPresence(agentNames: string[]): Promise<Map<string, unknown>> {
     const result = new Map<string, unknown>();
-
-    const keys = await this.kv.keys();
-    for await (const key of keys) {
-      try {
-        const entry = await this.kv.get(key);
-        if (entry && entry.value.length > 0) {
-          const decoded = new TextDecoder().decode(entry.value);
-          const parsed = JSON.parse(decoded);
-          // Strip "agent." prefix from key to get agentName
-          const agentName = key.startsWith("agent.") ? key.slice(6) : key;
-          result.set(agentName, parsed);
+    const decoder = new TextDecoder();
+    await Promise.all(
+      agentNames.map(async (agentName) => {
+        try {
+          const entry = await this.kv.get(`agent.${agentName}`);
+          if (entry && entry.operation === "PUT" && entry.value.length > 0) {
+            result.set(agentName, JSON.parse(decoder.decode(entry.value)));
+          }
+        } catch {
+          // Missing or unparseable entry — treated as not live
         }
-      } catch {
-        // Skip unparseable entries
-      }
-    }
-
+      }),
+    );
     return result;
   }
 

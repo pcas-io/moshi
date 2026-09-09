@@ -99,7 +99,8 @@ export function computePresenceState(
  */
 export interface NatsPresenceBackend {
   updatePresence(agentName: string, data: Record<string, unknown>): Promise<void>;
-  getPresence(): Promise<Map<string, unknown>>;
+  /** Live entries for the given agent names (absent = not live). */
+  getPresence(agentNames: string[]): Promise<Map<string, unknown>>;
 }
 
 interface RawKvEntry {
@@ -194,7 +195,7 @@ export class PresenceService {
 
     let kv: Map<string, unknown>;
     try {
-      kv = await this.nats.getPresence();
+      kv = await this.nats.getPresence(rows.map((r) => r.name));
     } catch (err) {
       log("warn", "presence list: nats kv read failed, degrading to db-only", {
         err: String(err),

@@ -19,7 +19,7 @@ function buildApp() {
   const agents = new AgentService(db, activity);
   const presence = new PresenceService(db, {
     async updatePresence() {},
-    async getPresence() { return new Map(); },
+    async getPresence(agentNames: string[]) { return new Map(); },
   });
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
   app.use("*", async (c, next) => {

@@ -71,8 +71,8 @@ export function createFakeMeshNats(): FakeMeshNats {
     async updatePresence(agentName, data) {
       self.kv.set(agentName, { ...data, timestamp: new Date().toISOString() });
     },
-    async getPresence() {
-      return new Map<string, unknown>(self.kv);
+    async getPresence(agentNames: string[]) {
+      return new Map<string, unknown>([...self.kv].filter(([k]) => agentNames.includes(k)));
     },
   };
   return self;
