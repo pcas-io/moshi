@@ -21,12 +21,13 @@ import {
 import { createMcpServer } from "./mcp/server.js";
 import { createOAuthRoutes, cleanupExpiredOAuthTokens } from "./oauth.js";
 import { registerCliRoutes, requestOrigin } from "./services/cli-dist.js";
+import { createAgentAdminRoutes } from "./routes/agent-admin.js";
 import { RATE_LIMIT_PER_MINUTE, VERSION, LIMITS, MESSAGE_RETENTION_DAYS, ACTIVITY_RETENTION_DAYS } from "./types.js";
 import type { Env, AppVariables } from "./types.js";
 import { loadConfig, isConfigError } from "./config.js";
 import { log } from "./services/logger.js";
 import { listMessages, listConversations } from "./services/message-queries.js";
-import { setFlash, getFlash } from "./services/flash.js";
+import { getFlash } from "./services/flash.js";
 import { checkHealth } from "./services/health.js";
 import { PresenceService } from "./services/presence.js";
 import { loadV2HomeData } from "./services/v2-home-data.js";
@@ -363,147 +364,8 @@ app.get("/agents", async (c) => {
   );
 });
 
-app.post("/agents/create", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const name = (body["name"] as string)?.trim();
-  const avatar = (body["avatar"] as string)?.trim() || undefined;
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  if (!name) {
-    const flashKey = setFlash({ error: "Name ist erforderlich." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  try {
-    const { plaintextToken } = agents.create(name, avatar, agent.name);
-    const flashKey = setFlash({ newToken: plaintextToken });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Unbekannter Fehler";
-    const flashKey = setFlash({ error: msg });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-});
-
-app.post("/agents/revoke", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const id = body["id"] as string;
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  agents.revokeById(id, agent.name);
-  return c.redirect("/agents");
-});
-
-app.post("/agents/reactivate", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const id = body["id"] as string;
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  const result = agents.reactivate(id, agent.name);
-  if (result) {
-    const flashKey = setFlash({ newToken: result.plaintextToken });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-  return c.redirect("/agents");
-});
-
-app.post("/agents/rename", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const id = body["id"] as string;
-  const name = (body["name"] as string)?.trim();
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  if (!name) {
-    const flashKey = setFlash({ error: "Name ist erforderlich." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  try {
-    agents.rename(id, name, agent.name);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Unbekannter Fehler";
-    const flashKey = setFlash({ error: msg });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  return c.redirect("/agents");
-});
-
-app.post("/agents/reset-token", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const id = body["id"] as string;
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  const result = agents.resetToken(id, agent.name);
-  if (result) {
-    const flashKey = setFlash({ newToken: result.plaintextToken });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-  return c.redirect("/agents");
-});
-
-app.post("/agents/delete", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const id = body["id"] as string;
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  agents.deleteById(id, agent.name);
-  return c.redirect("/agents");
-});
+// --- Agent admin actions (create/revoke/reactivate/rename/reset-token/delete) ---
+app.route("/agents", createAgentAdminRoutes({ agents, cookieSecretFor }));
 
 // --- Dashboard: Messages ---
 app.get("/messages", (c) => {
