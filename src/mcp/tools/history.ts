@@ -1,12 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type Database from "better-sqlite3";
-
-function ok(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-  };
-}
+import { ok, error } from "../shared.js";
+import type { ToolContext } from "../shared.js";
 
 interface MessageRow {
   id: string;
@@ -22,21 +18,50 @@ interface MessageRow {
   created_at: string;
 }
 
-export function registerHistoryTools(
-  server: McpServer,
-  db: Database.Database,
-): void {
+function rowToMessage(row: MessageRow) {
+  return {
+    id: row.id,
+    from: row.from_agent,
+    to: row.to_agent,
+    type: row.type,
+    payload: row.payload,
+    context: row.context,
+    correlation_id: row.correlation_id,
+    reply_to: row.reply_to,
+    priority: row.priority,
+    ttl_seconds: row.ttl_seconds,
+    created_at: row.created_at,
+  };
+}
+
+/**
+ * Thread root for any message id: replies carry the root in
+ * `correlation_id`, the root message carries none — so a reply id passed
+ * to mesh_history used to return just that one message (A8). Unknown ids
+ * fall back to the id itself (the root may already be rotated out).
+ */
+export function resolveThreadRoot(db: Database.Database, messageId: string): string {
+  const row = db
+    .prepare("SELECT COALESCE(correlation_id, id) AS root FROM messages WHERE id = ?")
+    .get(messageId) as { root: string } | undefined;
+  return row?.root ?? messageId;
+}
+
+export function registerHistoryTools(server: McpServer, ctx: ToolContext): void {
+  const { db } = ctx;
+
   // ── mesh_history ──────────────────────────────────────────────
   server.tool(
     "mesh_history",
-    "View the full conversation thread for a given correlation_id. Returns messages in chronological order.",
+    "View the full conversation thread a message belongs to. Accepts any message id of the thread (root or reply). Returns messages in chronological order.",
     {
-      correlation_id: z.string().describe("The correlation ID (thread root) to look up"),
+      correlation_id: z.string().describe("Any message id of the thread — the root id (= correlation_id) or a reply id"),
       limit: z.number().min(1).max(200).optional().describe("Max messages to return (default: 50)"),
     },
     { readOnlyHint: true },
     async (params) => {
       const limit = params.limit ?? 50;
+      const root = resolveThreadRoot(db, params.correlation_id);
 
       const rows = db
         .prepare(
@@ -45,7 +70,7 @@ export function registerHistoryTools(
            ORDER BY created_at ASC
            LIMIT ?`,
         )
-        .all(params.correlation_id, params.correlation_id, limit) as MessageRow[];
+        .all(root, root, limit) as MessageRow[];
 
       if (rows.length === 0) {
         return ok({
@@ -54,21 +79,29 @@ export function registerHistoryTools(
         });
       }
 
-      const messages = rows.map((row) => ({
-        id: row.id,
-        from: row.from_agent,
-        to: row.to_agent,
-        type: row.type,
-        payload: row.payload,
-        context: row.context,
-        correlation_id: row.correlation_id,
-        reply_to: row.reply_to,
-        priority: row.priority,
-        ttl_seconds: row.ttl_seconds,
-        created_at: row.created_at,
-      }));
+      const messages = rows.map(rowToMessage);
+      return ok({ thread_id: root, messages, count: messages.length });
+    },
+  );
 
-      return ok({ messages, count: messages.length });
+  // ── mesh_get ──────────────────────────────────────────────────
+  server.tool(
+    "mesh_get",
+    "Fetch one message with its complete payload — use it after mesh_receive returned a truncated preview (payload_truncated=true).",
+    {
+      message_id: z.string().describe("The message id (msg_…) from mesh_receive or mesh_history"),
+    },
+    { readOnlyHint: true },
+    async (params) => {
+      const row = db
+        .prepare("SELECT * FROM messages WHERE id = ?")
+        .get(params.message_id) as MessageRow | undefined;
+      if (!row) {
+        return error(
+          `Message not found: ${params.message_id} (history is kept for 30 days).`,
+        );
+      }
+      return ok(rowToMessage(row));
     },
   );
 }

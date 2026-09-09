@@ -239,23 +239,28 @@ app.all("/mcp", async (c) => {
 
   const agent = c.get("agent");
   const agentName = agent?.name ?? "anonymous";
+  const isAdmin = agent?.role === "admin";
 
-  // Ensure NATS consumers exist for this agent
-  try {
-    await nats.ensureConsumer(agentName);
-  } catch {
-    // Non-fatal — consumer creation may fail on first request, retry on next
+  // Ensure NATS consumers exist for this agent. The admin identity has no
+  // inbox by design (see ADMIN_NOT_AGENT_HINT), so no consumers for it.
+  if (!isAdmin) {
+    try {
+      await nats.ensureConsumer(agentName);
+    } catch {
+      // Non-fatal — consumer creation may fail on first request, retry on next
+    }
   }
 
-  const server = createMcpServer(
+  const server = createMcpServer({
     nats,
     agents,
     activity,
     rateLimiter,
     presence,
-    agentName,
     db,
-  );
+    agentName,
+    isAdmin,
+  });
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless — new transport per request

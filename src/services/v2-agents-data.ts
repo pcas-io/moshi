@@ -27,13 +27,13 @@ export async function loadV2AgentsData(
     return {
       id: e.agent.id,
       name: e.agent.name,
-      role: e.liveMeta?.role ?? e.agent.role,
+      role: e.agent.role,
       capabilities: caps,
       is_active: Boolean(e.agent.is_active),
       presence: e.presence,
       msg24: counts.get(e.agent.name.toLowerCase()) ?? 0,
       heat: getAgentHeat(db, e.agent.name),
-      working_on: e.liveMeta?.working_on ?? e.agent.working_on,
+      working_on: e.agent.working_on,
       last_seen_at: e.effectiveLastSeen,
       created_at: e.agent.created_at,
     };

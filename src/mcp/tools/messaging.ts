@@ -1,57 +1,66 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type Database from "better-sqlite3";
-import type { NatsService } from "../../services/nats.ts";
-import type { AgentService } from "../../services/agent.ts";
-import type { ActivityService } from "../../services/activity.ts";
-import type { RateLimiter } from "../../services/ratelimit.ts";
-import type { Message } from "../../types.ts";
-import { MESSAGE_PRIORITIES } from "../../types.ts";
+import type { Message } from "../../types.js";
+import {
+  MESSAGE_PRIORITIES,
+  RECOMMENDED_MESSAGE_TYPES,
+  DEFAULT_MESSAGE_TYPE,
+  REPLY_MESSAGE_TYPE,
+  DEFAULT_PREVIEW_CHARS,
+  MIN_PREVIEW_CHARS,
+  MAX_PAYLOAD_BYTES,
+} from "../../types.js";
 import {
   createMessage,
   isMessageExpired,
   deserializeMessage,
   sendAndPersistMessage,
-} from "../../services/message.ts";
-import { log } from "../../services/logger.ts";
+} from "../../services/message.js";
+import { log } from "../../services/logger.js";
+import { ok, error, adminError, pendingCount } from "../shared.js";
+import type { ToolContext } from "../shared.js";
 
-function ok(data: unknown) {
+const TYPE_LIST = RECOMMENDED_MESSAGE_TYPES.join(", ");
+
+function isRecommendedType(type: string): boolean {
+  return (RECOMMENDED_MESSAGE_TYPES as readonly string[]).includes(type);
+}
+
+/** Inbox view of a message: payload cut to `previewChars`, with enough
+ *  metadata for the agent to decide whether `mesh_get` is worth a call. */
+export function previewMessage(msg: Message, previewChars: number) {
+  const length = msg.payload.length;
+  const truncated = length > previewChars;
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+    ...msg,
+    payload: truncated ? msg.payload.slice(0, previewChars) : msg.payload,
+    payload_length: length,
+    payload_truncated: truncated,
   };
 }
 
-function error(message: string) {
-  return {
-    content: [{ type: "text" as const, text: message }],
-    isError: true as const,
-  };
-}
+export function registerMessagingTools(server: McpServer, ctx: ToolContext): void {
+  const { nats, agents, activity, rateLimiter, agentName, db } = ctx;
 
-export function registerMessagingTools(
-  server: McpServer,
-  nats: NatsService,
-  agents: AgentService,
-  activity: ActivityService,
-  rateLimiter: RateLimiter,
-  agentName: string,
-  db: Database.Database,
-): void {
   // ── mesh_send ─────────────────────────────────────────────────
   server.tool(
     "mesh_send",
-    "Send a message to another agent or broadcast to all agents. The context field is REQUIRED — describe your current project, task, and status so the recipient understands your situation.",
+    "Send a message to another agent or broadcast to all agents. The context field is REQUIRED — describe your current project, task, and status so the recipient understands your situation. The reply carries inbox_pending: how many messages are waiting for YOU.",
     {
-      to: z.string().describe("Target agent name, or 'broadcast' for all agents"),
-      type: z.string().describe("Message type (e.g. deploy_request, question, info, task_update)"),
-      payload: z.string().max(262144).describe("Message content (max 256 KB)"),
+      to: z.string().describe("Target agent name (see mesh_status), or 'broadcast' for all agents"),
+      type: z
+        .string()
+        .optional()
+        .describe(`Message type, default "${DEFAULT_MESSAGE_TYPE}". Recommended: ${TYPE_LIST}. Other values are accepted.`),
+      payload: z.string().max(MAX_PAYLOAD_BYTES).describe("Message content (max 256 KB)"),
       context: z.string().max(2048).describe("Your current project, task, and status (max 2048 chars) — REQUIRED for recipient to understand your situation"),
       correlation_id: z.string().optional().describe("Thread ID to continue an existing conversation"),
       priority: z.enum(MESSAGE_PRIORITIES).optional().describe("Message priority (low, normal, high)"),
       ttl_seconds: z.number().optional().describe("Delivery deadline in seconds (default: 86400 = 24h). After expiry, mesh_receive silently drops the message — but it remains in history until the 30-day DB rotation."),
     },
     async (params) => {
-      // Rate limit check
+      if (ctx.isAdmin) return adminError();
+
       const rateCheck = rateLimiter.check(agentName);
       if (!rateCheck.allowed) {
         return error(
@@ -59,7 +68,6 @@ export function registerMessagingTools(
         );
       }
 
-      // Validate target agent (unless broadcast)
       if (params.to !== "broadcast") {
         const targetAgent = agents.getByName(params.to);
         if (!targetAgent || !targetAgent.is_active) {
@@ -69,11 +77,11 @@ export function registerMessagingTools(
         }
       }
 
-      // Create message
+      const type = params.type?.trim() || DEFAULT_MESSAGE_TYPE;
       const msg = createMessage({
         from: agentName,
         to: params.to,
-        type: params.type,
+        type,
         payload: params.payload,
         context: params.context,
         correlation_id: params.correlation_id,
@@ -96,15 +104,11 @@ export function registerMessagingTools(
         );
       }
 
-      // Presence is already refreshed by authMiddleware on this request
-      // via PresenceService.touch — no need to touch NATS KV again here.
-
-      // Log activity
       activity.logAsync({
         action: "message_sent",
         entity_type: "message",
         entity_id: msg.id,
-        summary: `${agentName} → ${params.to} [${params.type}]`,
+        summary: `${agentName} → ${params.to} [${type}]`,
         agent_name: agentName,
       });
 
@@ -113,6 +117,10 @@ export function registerMessagingTools(
         to: msg.to,
         type: msg.type,
         created_at: msg.created_at,
+        inbox_pending: await pendingCount(ctx),
+        ...(isRecommendedType(type)
+          ? {}
+          : { hint: `type "${type}" is not a recommended type (${TYPE_LIST}) — delivered anyway.` }),
       });
     },
   );
@@ -120,62 +128,66 @@ export function registerMessagingTools(
   // ── mesh_receive ──────────────────────────────────────────────
   server.tool(
     "mesh_receive",
-    "Check for new messages in your inbox. Returns unread messages from other agents and broadcasts.",
+    "Check for new messages in your inbox. Returns unread messages from other agents and broadcasts — reading acknowledges them. Long payloads are cut to preview_chars (payload_truncated=true); fetch the full text with mesh_get.",
     {
       limit: z.number().min(1).max(50).optional().describe("Max messages to fetch (default: 10, max: 50)"),
-      type: z.string().optional().describe("Filter by message type (e.g. 'question', 'deploy_request')"),
+      preview_chars: z
+        .number()
+        .int()
+        .min(MIN_PREVIEW_CHARS)
+        .max(MAX_PAYLOAD_BYTES)
+        .optional()
+        .describe(`Max payload characters per message (default ${DEFAULT_PREVIEW_CHARS}). Longer payloads are truncated and flagged; use mesh_get(message_id) for the full text.`),
     },
     async (params) => {
-      const limit = params.limit ?? 10;
+      if (ctx.isAdmin) return adminError();
 
-      // Pull from NATS. C4: NATS unavailability degrades gracefully —
-      // return an empty inbox with a hint so the caller knows to retry.
-      let pulled: Awaited<ReturnType<typeof nats.pullMessages>>;
+      const limit = params.limit ?? 10;
+      const previewChars = params.preview_chars ?? DEFAULT_PREVIEW_CHARS;
+
+      // C4: NATS unavailability degrades gracefully — empty inbox plus a
+      // hint so the caller knows to retry.
+      let pull: Awaited<ReturnType<typeof nats.pullInbox>>;
       try {
-        pulled = await nats.pullMessages(agentName, limit);
+        pull = await nats.pullInbox(agentName, limit);
       } catch (err) {
         log("warn", "nats pull failed in mesh_receive", {
           agent: agentName,
           err: String(err),
         });
-        return ok({ messages: [], hint: "nats_unavailable, retry shortly" });
+        return ok({ messages: [], inbox_pending: null, hint: "nats_unavailable, retry shortly" });
       }
 
-      const messages: Message[] = [];
+      const messages: ReturnType<typeof previewMessage>[] = [];
+      let truncated = 0;
 
-      for (const pm of pulled) {
+      for (const pm of pull.messages) {
         let msg: Message;
         try {
           msg = deserializeMessage(pm.data);
         } catch {
-          // Unparseable message — ack and skip
-          pm.ack();
+          pm.ack(); // unparseable — drop
           continue;
         }
-
-        // Check TTL — expired messages are silently acked
-        if (isMessageExpired(msg)) {
-          pm.ack();
-          continue;
-        }
-
-        // Type filter — non-matching messages are NOT acked (remain in queue)
-        if (params.type && msg.type !== params.type) {
-          continue;
-        }
-
-        // Valid message — ack and collect
         pm.ack();
-        messages.push(msg);
+        if (isMessageExpired(msg)) continue; // past its delivery deadline
+        const view = previewMessage(msg, previewChars);
+        if (view.payload_truncated) truncated++;
+        messages.push(view);
       }
-
-      // Presence is already refreshed by authMiddleware for this request.
 
       if (messages.length === 0) {
-        return ok({ messages: [], hint: "No new messages." });
+        return ok({ messages: [], inbox_pending: pull.remaining, hint: "No new messages." });
       }
 
-      return ok({ messages, count: messages.length });
+      return ok({
+        messages,
+        count: messages.length,
+        inbox_pending: pull.remaining,
+        ...(truncated > 0
+          ? { hint: `${truncated} payload(s) truncated at preview_chars=${previewChars} — call mesh_get(message_id) for the full text.` }
+          : {}),
+      });
     },
   );
 
@@ -185,11 +197,16 @@ export function registerMessagingTools(
     "Reply to a specific message. Threading is automatic — the reply is linked to the original conversation thread.",
     {
       message_id: z.string().describe("ID of the message to reply to"),
-      payload: z.string().max(262144).describe("Reply content (max 256 KB)"),
+      payload: z.string().max(MAX_PAYLOAD_BYTES).describe("Reply content (max 256 KB)"),
       context: z.string().max(2048).describe("Your current project, task, and status (max 2048 chars)"),
+      type: z
+        .string()
+        .optional()
+        .describe(`Message type of the reply, default "${REPLY_MESSAGE_TYPE}" (e.g. review_result answering a review_request)`),
     },
     async (params) => {
-      // Rate limit check
+      if (ctx.isAdmin) return adminError();
+
       const rateCheck = rateLimiter.check(agentName);
       if (!rateCheck.allowed) {
         return error(
@@ -197,39 +214,30 @@ export function registerMessagingTools(
         );
       }
 
-      // Look up original message
       const original = db
-        .prepare("SELECT * FROM messages WHERE id = ?")
+        .prepare("SELECT id, from_agent, correlation_id FROM messages WHERE id = ?")
         .get(params.message_id) as
-        | {
-            id: string;
-            from_agent: string;
-            to_agent: string;
-            type: string;
-            correlation_id: string | null;
-          }
+        | { id: string; from_agent: string; correlation_id: string | null }
         | undefined;
 
       if (!original) {
         return error(`Message not found: ${params.message_id}`);
       }
 
-      // Determine thread root
       const threadRoot = original.correlation_id ?? original.id;
-
-      // Create reply message
+      const type = params.type?.trim() || REPLY_MESSAGE_TYPE;
       const msg = createMessage({
         from: agentName,
         to: original.from_agent,
-        type: "reply",
+        type,
         payload: params.payload,
         context: params.context,
         correlation_id: threadRoot,
         reply_to: params.message_id,
       });
 
-      // Dual-write: NATS first (delivery), DB second (history).
-      // Same reliability semantics as mesh_send — see Mesh-ADR-006.
+      // Dual-write: NATS first (delivery), DB second (history) — same
+      // reliability semantics as mesh_send, see Mesh-ADR-006.
       const subject = `mesh.agents.${original.from_agent.toLowerCase()}.inbox`;
       const result = await sendAndPersistMessage(nats, db, msg, subject);
       if (!result.delivered) {
@@ -238,9 +246,6 @@ export function registerMessagingTools(
         );
       }
 
-      // Presence is already refreshed by authMiddleware for this request.
-
-      // Log activity
       activity.logAsync({
         action: "message_sent",
         entity_type: "message",
@@ -256,6 +261,7 @@ export function registerMessagingTools(
         correlation_id: msg.correlation_id,
         reply_to: msg.reply_to,
         created_at: msg.created_at,
+        inbox_pending: await pendingCount(ctx),
       });
     },
   );

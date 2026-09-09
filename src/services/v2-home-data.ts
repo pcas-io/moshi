@@ -42,11 +42,11 @@ export async function loadV2HomeData(
     return {
       id: e.agent.id,
       name,
-      role: e.liveMeta?.role ?? e.agent.role,
+      role: e.agent.role,
       presence: e.presence,
       msg24: msgCounts.get(name.toLowerCase()) ?? 0,
       heat: getAgentHeat(db, name),
-      working_on: e.liveMeta?.working_on ?? e.agent.working_on,
+      working_on: e.agent.working_on,
       last_seen_at: e.effectiveLastSeen,
     };
   });

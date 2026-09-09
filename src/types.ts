@@ -24,9 +24,16 @@ export const MESSAGE_RETENTION_DAYS = 30;
 export const ACTIVITY_RETENTION_DAYS = 90;
 
 export const RECOMMENDED_MESSAGE_TYPES = [
-  "deploy_request", "deploy_status", "review_request", "review_result",
-  "task_update", "incident", "info", "question",
+  "info", "question", "incident", "task_update",
+  "deploy_request", "deploy_status", "review_request", "review_result", "script",
 ] as const;
+export const DEFAULT_MESSAGE_TYPE = "info";
+export const REPLY_MESSAGE_TYPE = "reply";
+
+/** `mesh_receive` returns at most this many payload chars per message
+ *  unless the caller asks for more — full text via `mesh_get`. */
+export const DEFAULT_PREVIEW_CHARS = 4000;
+export const MIN_PREVIEW_CHARS = 100;
 
 // === Message Envelope ===
 export interface Message {
