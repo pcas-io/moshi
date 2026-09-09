@@ -231,11 +231,24 @@ export class AgentService {
   }
 
   rename(id: string, newName: string, adminName?: string): boolean {
+    // Same NATS-safety rule as create() — an unvalidated rename used to
+    // leave the agent with an unroutable inbox subject (C6).
+    if (!isValidAgentName(newName)) {
+      throw new Error(AGENT_NAME_RULE);
+    }
+
     const agent = this.db
       .prepare("SELECT name FROM agents WHERE id = ?")
       .get(id) as { name: string } | undefined;
 
     if (!agent) return false;
+
+    const taken = this.db
+      .prepare("SELECT id FROM agents WHERE name = ? COLLATE NOCASE AND id != ?")
+      .get(newName, id) as { id: string } | undefined;
+    if (taken) {
+      throw new Error(`Name "${newName}" ist bereits vergeben.`);
+    }
 
     const oldName = agent.name;
     const now = new Date().toISOString();

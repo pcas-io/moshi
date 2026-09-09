@@ -6,6 +6,7 @@
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
 import { V2_CSS, V2_TOKENS, V2_HERO_BG, V2_GRID_BG } from "./tokens.js";
+import { MCP_TOOL_CATALOG } from "../../mcp/catalog.js";
 
 export type V2NavKey = "HOME" | "AGENTS" | "CONVOS" | "MESSAGES" | "LOG";
 
@@ -191,16 +192,8 @@ form.v2-pal-row > .v2-pal-btn { padding: 10px 16px; }
 
 // Mesh MCP-tool reference, surfaced in the palette so agents/operators
 // can search by tool name and recall the signature without leaving the
-// dashboard. Items navigate to the moshi README anchor for full docs.
-const MCP_TOOLS: ReadonlyArray<readonly [string, string, string]> = [
-  ["mesh_register", "(role, capabilities, ttl_seconds) → ok",   "Agent declares itself + capabilities for routing"],
-  ["mesh_send",     "(to, type, payload, context) → message_id", "Send to agent / broadcast / capability:* — context required"],
-  ["mesh_receive",  "(limit?) → messages[]",                     "Pull own inbox (consumer durable per agent)"],
-  ["mesh_reply",    "(reply_to, payload, context) → message_id", "Reply on existing thread — correlation_id auto"],
-  ["mesh_status",   "() → agents[] {presence, role}",            "Roster + presence (live/stale/offline/never)"],
-  ["mesh_history",  "(correlation_id, limit?) → messages[]",     "Thread by correlation_id, oldest-first"],
-];
-
+// dashboard. Sourced from src/mcp/catalog.ts, which a test keeps in sync
+// with the registered tools. Items navigate to the README for full docs.
 const MCP_DOC_URL = "https://github.com/pcas-io/moshi#mcp-tools";
 
 function defaultPaletteItems(userRole?: string): PaletteItem[] {
@@ -214,8 +207,8 @@ function defaultPaletteItems(userRole?: string): PaletteItem[] {
     items.push({ kind: "nav",    label: "Go to Agents",     href: "/agents",         hint: "G A" });
     items.push({ kind: "action", label: "Register new agent…", href: "/agents?new=1", hint: "N A" });
   }
-  for (const [name, sig, desc] of MCP_TOOLS) {
-    items.push({ kind: "mcp", label: name, desc, hint: sig, href: MCP_DOC_URL });
+  for (const tool of MCP_TOOL_CATALOG) {
+    items.push({ kind: "mcp", label: tool.name, desc: tool.desc, hint: tool.signature, href: MCP_DOC_URL });
   }
   items.push({ kind: "destructive", label: "Log out", formAction: "/logout", formMethod: "post", hint: "destructive" });
   return items;

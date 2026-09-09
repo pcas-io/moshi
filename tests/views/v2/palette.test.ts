@@ -3,6 +3,11 @@
 
 import { describe, it, expect } from "vitest";
 import { V2Layout } from "../../../src/views/v2/layout";
+import { MCP_TOOL_CATALOG } from "../../../src/mcp/catalog";
+
+function escapeForHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 
 async function renderLayout(props: Parameters<typeof V2Layout>[0]): Promise<string> {
   // Hono's FC returns JSX which has a toString() that resolves the tree.
@@ -49,14 +54,14 @@ describe("V2Layout palette", () => {
     expect(html).toContain('autocomplete="off"');
   });
 
-  it("includes mesh MCP-tool entries with signatures", async () => {
+  it("includes every catalog MCP-tool entry with its signature", async () => {
     const html = await renderLayout({ active: "HOME", children: "x" });
-    expect(html).toContain("mesh_register");
-    expect(html).toContain("mesh_send");
-    expect(html).toContain("mesh_status");
-    expect(html).toContain("mesh_history");
+    for (const tool of MCP_TOOL_CATALOG) {
+      expect(html).toContain(tool.name);
+      expect(html).toContain(escapeForHtml(tool.signature));
+    }
     // Sig (hint) and desc render
     expect(html).toContain("v2-pal-desc");
-    expect(html).toContain("→ message_id");
+    expect(html).toContain("mesh_get");
   });
 });

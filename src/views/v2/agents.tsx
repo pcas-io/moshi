@@ -28,6 +28,8 @@ export interface V2AgentsAgent {
 export interface V2AgentsProps {
   agents: V2AgentsAgent[];
   csrfToken: string;
+  /** Public origin of this deployment (scheme + host) for setup snippets. */
+  origin: string;
   newToken?: string;
   error?: string;
   inspectId?: string;
@@ -139,7 +141,7 @@ const Snippet: FC<{ label: string; code: string }> = ({ label, code }) => (
   </div>
 );
 
-const TokenPanel: FC<{ newToken: string }> = ({ newToken }) => (
+const TokenPanel: FC<{ newToken: string; origin: string }> = ({ newToken, origin }) => (
   <div id="v2-token-panel" style={`margin-top:20px;background:linear-gradient(180deg,${greenGlow(0.06)},${greenGlow(0.02)}),${V2_TOKENS.surface};border:1px solid ${greenGlow(0.35)};border-radius:8px;overflow:hidden`}>
     <div style={`display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid ${greenGlow(0.18)}`}>
       <div style="flex:1">
@@ -159,20 +161,20 @@ const TokenPanel: FC<{ newToken: string }> = ({ newToken }) => (
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));gap:12px">
         <Snippet
           label="moshi CLI — install / update (no repo needed)"
-          code={`curl -fsSL https://moshi.enki.run/install.sh | sh
+          code={`curl -fsSL ${origin}/install.sh | sh
 moshi self-update   # verify against server build`}
         />
         <Snippet
           label="Claude Code · CLI (registers the MCP server)"
           code={`claude mcp add --transport http moshi \\
-  https://moshi.enki.run/mcp \\
+  ${origin}/mcp \\
   --header "Authorization: Bearer ${newToken}"`}
         />
         <Snippet
           label="Claude Code / Gemini CLI · mcpServers config"
           code={`"moshi": {
   "type": "streamable-http",
-  "url": "https://moshi.enki.run/mcp",
+  "url": "${origin}/mcp",
   "headers": { "Authorization": "Bearer ${newToken}" }
 }`}
         />
@@ -180,13 +182,13 @@ moshi self-update   # verify against server build`}
           label="Claude Desktop · OAuth 2.1 + PKCE"
           code={`"moshi": {
   "command": "npx",
-  "args": ["-y", "mcp-remote", "https://moshi.enki.run/mcp"]
+  "args": ["-y", "mcp-remote", "${origin}/mcp"]
 }
 // browser OAuth flow → paste bearer token`}
         />
         <Snippet
           label="moshi (Go binary) — for humans"
-          code={`export MESH_TOKEN="${newToken}"
+          code={`export MESH_TOKEN="${newToken}"${origin === "https://moshi.enki.run" ? "" : `\nexport MESH_URL="${origin}/mcp"`}
 moshi status`}
         />
       </div>
@@ -340,7 +342,7 @@ const DeleteModal: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({ agent, c
 );
 
 export const V2AgentsPage: FC<V2AgentsProps> = ({
-  agents, csrfToken, newToken, error, inspectId, showNewForm, presenceFilter, userRole,
+  agents, csrfToken, origin, newToken, error, inspectId, showNewForm, presenceFilter, userRole,
 }) => {
   const total = agents.length;
   const live = agents.filter((a) => a.presence === "live").length;
@@ -396,7 +398,7 @@ export const V2AgentsPage: FC<V2AgentsProps> = ({
           </div>
         )}
 
-        {newToken && <TokenPanel newToken={newToken} />}
+        {newToken && <TokenPanel newToken={newToken} origin={origin} />}
         {showNewForm && <NewAgentForm csrfToken={csrfToken} />}
 
         <div style="display:flex;flex-wrap:wrap;gap:12px;padding-top:20px;align-items:flex-start">

@@ -20,7 +20,7 @@ import {
 } from "./auth.js";
 import { createMcpServer } from "./mcp/server.js";
 import { createOAuthRoutes, cleanupExpiredOAuthTokens } from "./oauth.js";
-import { registerCliRoutes } from "./services/cli-dist.js";
+import { registerCliRoutes, requestOrigin } from "./services/cli-dist.js";
 import { RATE_LIMIT_PER_MINUTE, VERSION, LIMITS, MESSAGE_RETENTION_DAYS, ACTIVITY_RETENTION_DAYS } from "./types.js";
 import type { Env, AppVariables } from "./types.js";
 import { loadConfig, isConfigError } from "./config.js";
@@ -352,6 +352,7 @@ app.get("/agents", async (c) => {
     <V2AgentsPage
       agents={agentsData}
       csrfToken={csrfToken}
+      origin={requestOrigin(c)}
       newToken={flash?.newToken}
       error={flash?.error}
       inspectId={c.req.query("inspect")}
