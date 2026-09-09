@@ -12,6 +12,8 @@ import {
 interface LoginProps {
   error?: boolean;
   csrfToken: string;
+  /** Relative path to return to after login (validated by the route). */
+  next?: string;
 }
 
 // Self-contained SENTINEL Dark login — "Mesh Access". Grid pattern + green
@@ -112,7 +114,7 @@ const STYLE = `
   .warn { color: ${V2_TOKENS.warn}; }
 `;
 
-export const LoginPage: FC<LoginProps> = ({ error, csrfToken }) => {
+export const LoginPage: FC<LoginProps> = ({ error, csrfToken, next }) => {
   return (
     <html lang="de">
       <head>
@@ -155,6 +157,7 @@ export const LoginPage: FC<LoginProps> = ({ error, csrfToken }) => {
               <div class="card fade">
                 <form method="post" action="/login">
                   <input type="hidden" name="csrf" value={csrfToken} />
+                  {next && <input type="hidden" name="next" value={next} />}
                   <div class="label">Admin Token</div>
                   <input
                     name="token"

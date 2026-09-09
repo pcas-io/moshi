@@ -16,6 +16,7 @@ import {
   validateCsrfToken,
   generateSessionCookie,
   getCookieSecret,
+  safeNextPath,
 } from "./auth.js";
 import { createMcpServer } from "./mcp/server.js";
 import { createOAuthRoutes, cleanupExpiredOAuthTokens } from "./oauth.js";
@@ -161,7 +162,10 @@ app.get("/login", (c) => {
   const cookieSecret = getCookieSecret(c.env as unknown as Record<string, string | undefined>);
   const csrfToken = generateCsrfToken(cookieSecret);
   const error = c.req.query("error") === "1";
-  return c.html(<LoginPage error={error} csrfToken={csrfToken} />);
+  const next = safeNextPath(c.req.query("next"));
+  return c.html(
+    <LoginPage error={error} csrfToken={csrfToken} next={next === "/" ? undefined : next} />,
+  );
 });
 
 app.post("/login", async (c) => {
@@ -169,9 +173,11 @@ app.post("/login", async (c) => {
   const body = await c.req.parseBody();
   const token = body["token"] as string;
   const csrf = body["csrf"] as string;
+  const next = safeNextPath(typeof body["next"] === "string" ? body["next"] : undefined);
+  const loginError = `/login?error=1${next !== "/" ? `&next=${encodeURIComponent(next)}` : ""}`;
 
   if (!validateCsrfToken(csrf, cookieSecret)) {
-    return c.redirect("/login?error=1");
+    return c.redirect(loginError);
   }
 
   const adminToken = c.env.MESH_ADMIN_TOKEN;
@@ -192,7 +198,7 @@ app.post("/login", async (c) => {
   }
 
   if (!resolvedName) {
-    return c.redirect("/login?error=1");
+    return c.redirect(loginError);
   }
 
   const sessionValue = generateSessionCookie(resolvedName, cookieSecret);
@@ -203,7 +209,7 @@ app.post("/login", async (c) => {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   });
 
-  return c.redirect("/");
+  return c.redirect(next);
 });
 
 // --- Auth middleware on all other routes ---

@@ -117,6 +117,34 @@ export function validateSessionCookie(
   return timingSafeEqual(mac, expectedMac) ? name : null;
 }
 
+// --- Browser navigation vs. API call ---
+// A person opening the dashboard root without a session used to get a raw
+// `{"error":"Unauthorized"}` (C1). Only plain browser navigations are sent
+// to the login page: GET, an Accept header that wants HTML, and no bearer
+// token (a client that presented a token deserves the 401 + discovery
+// header). /mcp is never redirected — MCP clients speak JSON.
+export function isBrowserNavigation(req: {
+  method: string;
+  path: string;
+  accept: string | undefined;
+  authorization: string | undefined;
+}): boolean {
+  if (req.method !== "GET") return false;
+  if (req.path === "/mcp") return false;
+  if (req.authorization) return false;
+  return /\btext\/html\b/i.test(req.accept ?? "");
+}
+
+// Only same-origin relative paths are allowed as post-login targets —
+// anything else (absolute URLs, protocol-relative //host, backslashes)
+// falls back to the dashboard root to rule out open redirects.
+export function safeNextPath(next: string | undefined): string {
+  if (!next) return "/";
+  if (!next.startsWith("/") || next.startsWith("//") || next.includes("\\")) return "/";
+  if (next.startsWith("/login") || next.startsWith("/logout")) return "/";
+  return next;
+}
+
 // --- Auth middleware ---
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -229,6 +257,20 @@ export function authMiddleware(
     }
 
     // --- No valid auth ---
+    // Browsers get the login page (with a way back), everything else the
+    // JSON 401 below.
+    if (
+      isBrowserNavigation({
+        method: c.req.method,
+        path,
+        accept: c.req.header("Accept"),
+        authorization: authHeader,
+      })
+    ) {
+      const query = new URL(c.req.url).search;
+      return c.redirect(`/login?next=${encodeURIComponent(path + query)}`, 302);
+    }
+
     // RFC 9728 / MCP auth spec: point unauthenticated clients at the
     // protected-resource metadata so remote connectors can discover the
     // OAuth flow instead of reporting the server as unreachable.
