@@ -1,26 +1,29 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { NatsService } from "../../services/nats.ts";
-import type { AgentService } from "../../services/agent.ts";
-import type { PresenceService } from "../../services/presence.ts";
+import { ok, adminError, pendingCount } from "../shared.js";
+import type { ToolContext } from "../shared.js";
 
-function ok(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-  };
+/** `agents.capabilities` is a JSON array in a TEXT column; tolerate the
+ *  free-form values older rows may carry. */
+export function parseCapabilities(raw: string | null): string[] | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(String);
+  } catch {
+    // fall through — treat as free-form text
+  }
+  const parts = raw.split(/[,\s]+/).filter(Boolean);
+  return parts.length > 0 ? parts : null;
 }
 
-export function registerRegistryTools(
-  server: McpServer,
-  nats: NatsService,
-  agents: AgentService,
-  presence: PresenceService,
-  agentName: string,
-): void {
+export function registerRegistryTools(server: McpServer, ctx: ToolContext): void {
+  const { presence, agentName } = ctx;
+
   // ── mesh_status ───────────────────────────────────────────────
   server.tool(
     "mesh_status",
-    "See which agents are online and what they are working on. No parameters needed.",
+    "See which agents are online and what they are working on. No parameters needed. Also returns inbox_pending — how many messages are waiting for you.",
     {},
     { readOnlyHint: true },
     async () => {
@@ -31,35 +34,38 @@ export function registerRegistryTools(
       const agentList = entries.map((e) => ({
         name: e.agent.name,
         avatar: e.agent.avatar ?? null,
-        role: e.liveMeta?.role ?? e.agent.role ?? null,
-        capabilities:
-          e.liveMeta?.capabilities ??
-          (e.agent.capabilities ? JSON.parse(e.agent.capabilities) : null),
+        role: e.agent.role ?? null,
+        capabilities: parseCapabilities(e.agent.capabilities),
         is_active: e.agent.is_active === 1,
         // `online` kept for backward compatibility — equivalent to presence === "live"
         online: e.presence === "live",
         presence: e.presence,
-        working_on: e.liveMeta?.working_on ?? e.agent.working_on ?? null,
+        working_on: e.agent.working_on ?? null,
         last_seen_at: e.effectiveLastSeen,
       }));
 
-      return ok({ agents: agentList, count: agentList.length });
+      return ok({
+        agents: agentList,
+        count: agentList.length,
+        inbox_pending: await pendingCount(ctx),
+      });
     },
   );
 
   // ── mesh_register ─────────────────────────────────────────────
   server.tool(
     "mesh_register",
-    "Announce your role, capabilities, and current task so other agents can discover you.",
+    "Announce your role, capabilities, and current task so other agents can discover you. Call it once per session; presence itself is refreshed by every MCP call.",
     {
       role: z.string().optional().describe("Your role (e.g. 'deploy-agent', 'code-reviewer')"),
       capabilities: z.array(z.string()).optional().describe("List of capabilities (e.g. ['deploy', 'rollback', 'monitor'])"),
       working_on: z.string().optional().describe("What you are currently working on"),
     },
     async (params) => {
-      // Single presence write-path: SQLite + NATS KV updated atomically
-      // (from the caller's perspective). NATS KV failures are logged
-      // internally by the service and never surface here.
+      if (ctx.isAdmin) return adminError();
+
+      // Single presence write-path: SQLite is the store for the metadata,
+      // NATS KV only carries the liveness flag.
       await presence.touch(agentName, {
         role: params.role,
         capabilities: params.capabilities,
@@ -69,9 +75,7 @@ export function registerRegistryTools(
       return ok({
         agent: agentName,
         registered: true,
-        role: params.role ?? null,
-        capabilities: params.capabilities ?? null,
-        working_on: params.working_on ?? null,
+        inbox_pending: await pendingCount(ctx),
       });
     },
   );

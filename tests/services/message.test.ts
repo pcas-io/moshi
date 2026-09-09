@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   createMessage,
   isMessageExpired,
@@ -109,9 +109,16 @@ describe("Message Service", () => {
       context: "test",
       ttl_seconds: 60,
     });
-    // Force created_at to exactly "60 seconds ago" — expiry boundary
-    msg.created_at = new Date(Date.now() - 60_000).toISOString();
-    expect(isMessageExpired(msg)).toBe(false);
+    // Freeze the clock: created_at exactly 60 s ago, checked in the same
+    // millisecond — otherwise a tick between the two Date.now() calls
+    // turns the boundary case into a flaky failure.
+    vi.useFakeTimers();
+    try {
+      msg.created_at = new Date(Date.now() - 60_000).toISOString();
+      expect(isMessageExpired(msg)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("is expired 1ms past the deadline", () => {

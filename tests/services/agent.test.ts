@@ -102,6 +102,23 @@ describe("AgentService", () => {
     expect(agents.getByName("agent-a")).toBeNull();
   });
 
+  it("rejects NATS-unsafe names on rename, like create does (C6)", () => {
+    const { agent } = agents.create("agent-a");
+    for (const bad of ["claude code", "a.b", "*", "", "x/y"]) {
+      expect(() => agents.rename(agent.id, bad)).toThrow(/NATS/);
+    }
+    expect(agents.getByName("agent-a")?.name).toBe("agent-a");
+  });
+
+  it("refuses to rename onto an existing name (case-insensitive) with a readable error", () => {
+    const { agent } = agents.create("agent-a");
+    agents.create("agent-b");
+    expect(() => agents.rename(agent.id, "AGENT-B")).toThrow(/bereits vergeben/);
+    // Pure case change of the own name stays allowed.
+    expect(agents.rename(agent.id, "Agent-A")).toBe(true);
+    expect(agents.getByName("agent-a")?.name).toBe("Agent-A");
+  });
+
   it("lists agents without token_hash", () => {
     agents.create("agent-b");
     agents.create("agent-a");

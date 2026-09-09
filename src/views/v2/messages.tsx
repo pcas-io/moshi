@@ -65,10 +65,9 @@ const RoutingChip: FC<{
 export const V2MessagesPage: FC<V2MessagesProps> = ({
   result, filterAgent, filterRouting, query, agentIds, agentRoles, userRole, csrfToken,
 }) => {
-  const { data: messages, total, has_more, offset, limit } = result;
-  const filtered = messages
-    .filter((m) => !filterRouting || routingOf(m.to) === filterRouting)
-    .filter((m) => !query || m.context.toLowerCase().includes(query.toLowerCase()));
+  // Filtering (agent, routing, free text) happens in SQL — see
+  // listMessages — so `result` is already the filtered, paginated page.
+  const { data: filtered, total, has_more, offset, limit } = result;
   const prevOff = Math.max(0, offset - limit);
   const nextOff = offset + limit;
 
@@ -87,7 +86,7 @@ export const V2MessagesPage: FC<V2MessagesProps> = ({
         </div>
 
         <form method="get" action="/messages" style="display:flex;gap:8px;align-items:center;padding-top:16px;flex-wrap:wrap">
-          <input class="v2-input" type="text" name="q" placeholder="Search context, correlation_id…" value={query ?? ""} style="width:280px;max-width:100%;font-size:11.5px;padding:9px 12px" />
+          <input class="v2-input" type="text" name="q" placeholder="Search payload, context, message/thread id…" value={query ?? ""} style="width:280px;max-width:100%;font-size:11.5px;padding:9px 12px" />
           <input class="v2-input" type="text" name="agent" placeholder="from/to filter" value={filterAgent ?? ""} style="width:160px;font-size:11.5px;padding:9px 12px" />
           {filterRouting && <input type="hidden" name="routing" value={filterRouting} />}
           <V2Btn type="submit">Apply</V2Btn>

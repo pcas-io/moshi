@@ -55,7 +55,10 @@ function platformKey(name: string): string {
   return name.replace(/^moshi-/, "").replace(/\.exe$/, "");
 }
 
-function origin(c: { req: { header: (n: string) => string | undefined } }): string {
+/** Public origin of this deployment as seen by the client (honours the
+ *  proxy's x-forwarded-proto). Shared with the dashboard setup snippets so
+ *  a self-hosted moshi never advertises someone else's domain (C5). */
+export function requestOrigin(c: { req: { header: (n: string) => string | undefined } }): string {
   const proto = c.req.header("x-forwarded-proto") ?? "https";
   const host = c.req.header("host") ?? "moshi.enki.run";
   return `${proto}://${host}`;
@@ -129,14 +132,14 @@ export function registerCliRoutes(app: App): void {
   });
 
   app.get("/install.sh", (c) =>
-    c.body(installSh(origin(c)), 200, {
+    c.body(installSh(requestOrigin(c)), 200, {
       "Content-Type": "text/x-shellscript; charset=utf-8",
       "Cache-Control": "no-cache",
     }),
   );
 
   app.get("/install.ps1", (c) =>
-    c.body(installPs1(origin(c)), 200, {
+    c.body(installPs1(requestOrigin(c)), 200, {
       "Content-Type": "text/plain; charset=utf-8",
       "Cache-Control": "no-cache",
     }),

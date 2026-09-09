@@ -58,22 +58,69 @@ function rowToMessageView(row: MessageRow): MessageView {
   };
 }
 
+export type MessageRouting = "direct" | "broadcast";
+
+/** Escape LIKE metacharacters so user input matches literally. */
+function likePattern(q: string): string {
+  return `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+}
+
 /**
- * Paginated list of messages, newest first. Optional agent filter matches
- * either `from_agent` or `to_agent` case-insensitively.
+ * Free-text filter shared by both list queries: substring match on
+ * payload and context (case-insensitive for ASCII via LIKE), exact match
+ * on message id / thread id. Returns an SQL fragment + its bindings.
+ */
+function searchCondition(q: string): { sql: string; bindings: unknown[] } {
+  const like = likePattern(q);
+  return {
+    sql: "(payload LIKE ? ESCAPE '\\' OR context LIKE ? ESCAPE '\\' OR id = ? OR correlation_id = ?)",
+    bindings: [like, like, q, q],
+  };
+}
+
+function participantCondition(agent: string): { sql: string; bindings: unknown[] } {
+  return {
+    sql: "(from_agent = ? COLLATE NOCASE OR to_agent = ? COLLATE NOCASE)",
+    bindings: [agent, agent],
+  };
+}
+
+export interface ListMessagesParams {
+  limit: number;
+  offset: number;
+  /** Sender or recipient, case-insensitive. */
+  agent?: string;
+  /** Free-text search (see `searchCondition`). Whitespace-only = no filter. */
+  q?: string;
+  routing?: MessageRouting;
+}
+
+/**
+ * Paginated list of messages, newest first. All filters are applied in
+ * SQL so pagination and totals stay correct (C2 — the dashboard used to
+ * filter only the 50 rows of the current page, and only by context).
  */
 export function listMessages(
   db: Database.Database,
-  params: { limit: number; offset: number; agent?: string },
+  params: ListMessagesParams,
 ): PaginatedResult<MessageView> {
-  const { limit, offset, agent } = params;
+  const { limit, offset, agent, routing } = params;
+  const q = params.q?.trim();
   const conditions: string[] = [];
   const bindings: unknown[] = [];
 
   if (agent) {
-    conditions.push("(from_agent = ? COLLATE NOCASE OR to_agent = ? COLLATE NOCASE)");
-    bindings.push(agent, agent);
+    const c = participantCondition(agent);
+    conditions.push(c.sql);
+    bindings.push(...c.bindings);
   }
+  if (q) {
+    const c = searchCondition(q);
+    conditions.push(c.sql);
+    bindings.push(...c.bindings);
+  }
+  if (routing === "broadcast") conditions.push("to_agent = 'broadcast'");
+  if (routing === "direct") conditions.push("to_agent != 'broadcast'");
 
   const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
   const rows = db
@@ -114,24 +161,55 @@ export interface ConversationThread {
   messages: MessageView[];
 }
 
+export interface ListConversationsParams {
+  limit: number;
+  offset: number;
+  /** Only threads with at least one message matching the search. */
+  q?: string;
+  /** Only threads the agent took part in (sender or recipient). */
+  agent?: string;
+}
+
 /**
  * Paginated list of conversation threads, ordered by most-recent activity.
  * A thread is all messages sharing the same `correlation_id` (or the single
  * message itself if `correlation_id` is null — treated as a one-message
- * thread rooted on its own id).
+ * thread rooted on its own id). Filters select whole threads: a thread
+ * is included when ANY of its messages matches.
  */
 export function listConversations(
   db: Database.Database,
-  params: { limit: number; offset: number },
+  params: ListConversationsParams,
 ): PaginatedResult<ConversationThread> {
-  const { limit, offset } = params;
+  const { limit, offset, agent } = params;
+  const q = params.q?.trim();
+
+  const matchConditions: string[] = [];
+  const matchBindings: unknown[] = [];
+  if (q) {
+    const c = searchCondition(q);
+    matchConditions.push(c.sql);
+    matchBindings.push(...c.bindings);
+  }
+  if (agent) {
+    const c = participantCondition(agent);
+    matchConditions.push(c.sql);
+    matchBindings.push(...c.bindings);
+  }
+  // Restrict to threads that contain a matching message.
+  const threadFilter = matchConditions.length > 0
+    ? ` WHERE COALESCE(correlation_id, id) IN (
+        SELECT DISTINCT COALESCE(correlation_id, id) FROM messages
+        WHERE ${matchConditions.join(" AND ")})`
+    : "";
 
   // Count total threads
   const countRow = db
     .prepare(
-      "SELECT COUNT(*) as total FROM (SELECT DISTINCT COALESCE(correlation_id, id) FROM messages)",
+      `SELECT COUNT(*) as total FROM (
+        SELECT DISTINCT COALESCE(correlation_id, id) FROM messages${threadFilter})`,
     )
-    .get() as { total: number } | undefined;
+    .get(...matchBindings) as { total: number } | undefined;
   const total = countRow?.total ?? 0;
 
   // Get thread summaries (paginated)
@@ -142,12 +220,12 @@ export function listConversations(
         MIN(created_at) AS started_at,
         MAX(created_at) AS last_activity,
         COUNT(*) AS message_count
-      FROM messages
+      FROM messages${threadFilter}
       GROUP BY COALESCE(correlation_id, id)
       ORDER BY MAX(created_at) DESC
       LIMIT ? OFFSET ?`,
     )
-    .all(limit, offset) as ThreadSummary[];
+    .all(...matchBindings, limit, offset) as ThreadSummary[];
 
   if (summaries.length === 0) {
     return { data: [], has_more: false, total, limit, offset };

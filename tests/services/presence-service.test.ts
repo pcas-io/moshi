@@ -38,9 +38,9 @@ function createFakeNats(): NatsPresenceBackend & {
         timestamp: new Date().toISOString(),
       });
     },
-    async getPresence() {
+    async getPresence(agentNames: string[]) {
       if (self.failOnGet) throw new Error("nats unavailable");
-      return new Map<string, unknown>(store);
+      return new Map<string, unknown>([...store].filter(([k]) => agentNames.includes(k)));
     },
   };
   return self;
@@ -72,7 +72,7 @@ describe("PresenceService.touch", () => {
     expect(deltaMs).toBeLessThan(5000);
   });
 
-  it("writes to NATS KV on touch", async () => {
+  it("writes only a liveness flag to NATS KV on touch (D4)", async () => {
     await presence.touch("alpha", {
       role: "deployer",
       capabilities: ["deploy", "rollback"],
@@ -80,9 +80,15 @@ describe("PresenceService.touch", () => {
     });
     const entry = nats.store.get("alpha");
     expect(entry).toBeDefined();
-    expect(entry!.role).toBe("deployer");
-    expect(entry!.capabilities).toEqual(["deploy", "rollback"]);
-    expect(entry!.working_on).toBe("prod release");
+    expect(Object.keys(entry!)).toEqual(["timestamp"]);
+    // Metadata lives in SQLite only — and survives a later bare touch.
+    await presence.touch("alpha");
+    const row = db
+      .prepare("SELECT role, capabilities, working_on FROM agents WHERE name = ?")
+      .get("alpha") as { role: string; capabilities: string; working_on: string };
+    expect(row.role).toBe("deployer");
+    expect(JSON.parse(row.capabilities)).toEqual(["deploy", "rollback"]);
+    expect(row.working_on).toBe("prod release");
   });
 
   it("matches agent name case-insensitively on SQLite update", async () => {
@@ -158,11 +164,7 @@ describe("PresenceService.list", () => {
     expect(result).toHaveLength(1);
     expect(result[0].agent.name).toBe("alpha");
     expect(result[0].presence).toBe("live");
-    expect(result[0].liveMeta).toEqual({
-      role: "deployer",
-      capabilities: undefined,
-      working_on: undefined,
-    });
+    expect(result[0].agent.role).toBe("deployer");
   });
 
   it("classifies an agent never seen and not in KV as never", async () => {
@@ -170,7 +172,6 @@ describe("PresenceService.list", () => {
     // No touch, no last_seen_at
     const result = await presence.list();
     expect(result[0].presence).toBe("never");
-    expect(result[0].liveMeta).toBeNull();
     expect(result[0].effectiveLastSeen).toBeNull();
   });
 

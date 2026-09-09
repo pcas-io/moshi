@@ -1,45 +1,39 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type Database from "better-sqlite3";
-import { VERSION } from "../types.ts";
-import type { NatsService } from "../services/nats.ts";
-import type { AgentService } from "../services/agent.ts";
-import type { ActivityService } from "../services/activity.ts";
-import type { RateLimiter } from "../services/ratelimit.ts";
-import type { PresenceService } from "../services/presence.ts";
-import { registerMessagingTools } from "./tools/messaging.ts";
-import { registerRegistryTools } from "./tools/registry.ts";
-import { registerHistoryTools } from "./tools/history.ts";
+import { VERSION, DEFAULT_PREVIEW_CHARS } from "../types.js";
+import type { ToolContext } from "./shared.js";
+import { registerMessagingTools } from "./tools/messaging.js";
+import { registerRegistryTools } from "./tools/registry.js";
+import { registerHistoryTools } from "./tools/history.js";
 
-export function createMcpServer(
-  nats: NatsService,
-  agents: AgentService,
-  activity: ActivityService,
-  rateLimiter: RateLimiter,
-  presence: PresenceService,
-  agentName: string,
-  db: Database.Database,
-): McpServer {
+export type { ToolContext, MeshNats } from "./shared.js";
+
+const ADMIN_INSTRUCTIONS =
+  "NOTE: this connection uses the ADMIN token. The admin is an operator identity, not an agent: " +
+  "mesh_send, mesh_receive, mesh_reply and mesh_register are refused. Create an agent in the " +
+  "dashboard (/agents) and reconnect with its bt_ token to take part in the mesh. " +
+  "mesh_status, mesh_history and mesh_get work as read-only observation tools.";
+
+export function createMcpServer(ctx: ToolContext): McpServer {
+  const instructions = [
+    "moshi enables async communication between AI agents via message passing.",
+    "Use mesh_send to send messages to other agents. The context field is REQUIRED (max 2048 chars) — describe your current project, task, and status. Payload max is 256 KB. type defaults to 'info'.",
+    "Use mesh_receive to check for new messages. Reading acknowledges them. Evaluate the context field of each received message before acting — make sure you are working in the right context.",
+    `Every reply carries inbox_pending (messages waiting for you) — only call mesh_receive when it is > 0. Payloads longer than ${DEFAULT_PREVIEW_CHARS} chars arrive truncated (payload_truncated=true); mesh_get(message_id) returns the full text.`,
+    "Use mesh_reply to respond to a specific message (threading is automatic).",
+    "Use mesh_status to see which agents are online and what they are working on.",
+    "Use mesh_register once per session to announce your role, capabilities, and current task.",
+    "Use mesh_history with any message id of a thread to read the whole thread.",
+  ];
+  if (ctx.isAdmin) instructions.push(ADMIN_INSTRUCTIONS);
+
   const server = new McpServer(
-    {
-      name: "moshi",
-      version: VERSION,
-    },
-    {
-      instructions: [
-        "moshi enables async communication between AI agents via message passing.",
-        "Use mesh_send to send messages to other agents. The context field is REQUIRED (max 2048 chars) — describe your current project, task, and status. Payload max is 256 KB.",
-        "Use mesh_receive to check for new messages. Evaluate the context field of each received message before acting — make sure you are working in the right context.",
-        "Use mesh_reply to respond to a specific message (threading is automatic).",
-        "Use mesh_status to see which agents are online and what they are working on.",
-        "Use mesh_register to announce your role, capabilities, and current task.",
-        "Use mesh_history to view the full conversation thread for a correlation_id.",
-      ].join(" "),
-    },
+    { name: "moshi", version: VERSION },
+    { instructions: instructions.join(" ") },
   );
 
-  registerMessagingTools(server, nats, agents, activity, rateLimiter, agentName, db);
-  registerRegistryTools(server, nats, agents, presence, agentName);
-  registerHistoryTools(server, db);
+  registerMessagingTools(server, ctx);
+  registerRegistryTools(server, ctx);
+  registerHistoryTools(server, ctx);
 
   return server;
 }

@@ -11,6 +11,20 @@ import type {
   KV,
 } from "nats";
 import { log } from "./logger.js";
+import {
+  pullInbox,
+  inboxPending,
+  inboxConsumerName,
+  broadcastConsumerName,
+} from "./inbox.js";
+import type {
+  ConsumerSource,
+  InboxPull,
+  InboxPending,
+  PulledMessage,
+} from "./inbox.js";
+
+export type { PulledMessage, InboxPull, InboxPending } from "./inbox.js";
 
 const STREAM_NAME = "MESH_MESSAGES";
 const KV_BUCKET = "mesh-presence";
@@ -25,11 +39,6 @@ const MAX_BYTES = 1_073_741_824;
 const KV_TTL_MS = 600_000;
 // 30s ack wait in nanoseconds
 const ACK_WAIT_NS = 30 * 1_000_000_000;
-
-export interface PulledMessage {
-  data: Uint8Array;
-  ack: () => void;
-}
 
 export class NatsService {
   private nc!: NatsConnection;
@@ -103,8 +112,8 @@ export class NatsService {
 
   async ensureConsumer(agentName: string): Promise<void> {
     const normalizedName = agentName.toLowerCase();
-    const inboxConsumer = `agent-${normalizedName}`;
-    const broadcastConsumer = `agent-${normalizedName}-broadcast`;
+    const inboxConsumer = inboxConsumerName(agentName);
+    const broadcastConsumer = broadcastConsumerName(agentName);
 
     // Inbox consumer (lowercase subject for case-insensitive routing)
     try {
@@ -134,9 +143,8 @@ export class NatsService {
   }
 
   async deleteConsumer(agentName: string): Promise<void> {
-    const normalizedName = agentName.toLowerCase();
-    const inboxConsumer = `agent-${normalizedName}`;
-    const broadcastConsumer = `agent-${normalizedName}-broadcast`;
+    const inboxConsumer = inboxConsumerName(agentName);
+    const broadcastConsumer = broadcastConsumerName(agentName);
 
     try {
       await this.jsm.consumers.delete(STREAM_NAME, inboxConsumer);
@@ -151,55 +159,25 @@ export class NatsService {
     }
   }
 
-  async pullMessages(
-    agentName: string,
-    limit: number,
-  ): Promise<PulledMessage[]> {
-    const results: PulledMessage[] = [];
+  private consumerSource(): ConsumerSource {
+    return {
+      get: (name: string) => this.js.consumers.get(STREAM_NAME, name),
+    };
+  }
 
-    const normalizedName = agentName.toLowerCase();
+  /**
+   * Pull up to `limit` waiting messages (inbox + broadcast, shared limit).
+   * Consults consumer info first so an empty inbox returns immediately
+   * instead of blocking on the fetch deadline. Throws when the broker is
+   * unreachable — callers degrade to "retry shortly".
+   */
+  async pullInbox(agentName: string, limit: number): Promise<InboxPull> {
+    return pullInbox(this.consumerSource(), agentName, limit);
+  }
 
-    // Pull from inbox consumer
-    try {
-      const inboxConsumer = await this.js.consumers.get(
-        STREAM_NAME,
-        `agent-${normalizedName}`,
-      );
-      const inboxMessages = await inboxConsumer.fetch({
-        max_messages: limit,
-        expires: 2000,
-      });
-      for await (const msg of inboxMessages) {
-        results.push({
-          data: msg.data,
-          ack: () => msg.ack(),
-        });
-      }
-    } catch {
-      // Consumer may not exist yet — skip
-    }
-
-    // Pull from broadcast consumer
-    try {
-      const broadcastConsumer = await this.js.consumers.get(
-        STREAM_NAME,
-        `agent-${normalizedName}-broadcast`,
-      );
-      const broadcastMessages = await broadcastConsumer.fetch({
-        max_messages: limit,
-        expires: 1000,
-      });
-      for await (const msg of broadcastMessages) {
-        results.push({
-          data: msg.data,
-          ack: () => msg.ack(),
-        });
-      }
-    } catch {
-      // Consumer may not exist yet — skip
-    }
-
-    return results;
+  /** Waiting-message count for `agentName` without consuming anything. */
+  async inboxPending(agentName: string): Promise<InboxPending> {
+    return inboxPending(this.consumerSource(), agentName);
   }
 
   /**
@@ -234,25 +212,31 @@ export class NatsService {
     await this.kv.put(`agent.${agentName}`, value);
   }
 
-  async getPresence(): Promise<Map<string, unknown>> {
+  /**
+   * Live-presence entries for the given agents, keyed by agent name.
+   *
+   * Reads each key directly instead of enumerating the bucket:
+   * `kv.keys()` (ordered consumer, deliver-last-per-subject) stops one
+   * message early on this server/client combination and never returned
+   * the most recently touched agent — so the agent that had just called
+   * the mesh always showed up as stale/offline. Direct gets are exact and
+   * run in parallel; the set of agents is known from SQLite anyway.
+   */
+  async getPresence(agentNames: string[]): Promise<Map<string, unknown>> {
     const result = new Map<string, unknown>();
-
-    const keys = await this.kv.keys();
-    for await (const key of keys) {
-      try {
-        const entry = await this.kv.get(key);
-        if (entry && entry.value.length > 0) {
-          const decoded = new TextDecoder().decode(entry.value);
-          const parsed = JSON.parse(decoded);
-          // Strip "agent." prefix from key to get agentName
-          const agentName = key.startsWith("agent.") ? key.slice(6) : key;
-          result.set(agentName, parsed);
+    const decoder = new TextDecoder();
+    await Promise.all(
+      agentNames.map(async (agentName) => {
+        try {
+          const entry = await this.kv.get(`agent.${agentName}`);
+          if (entry && entry.operation === "PUT" && entry.value.length > 0) {
+            result.set(agentName, JSON.parse(decoder.decode(entry.value)));
+          }
+        } catch {
+          // Missing or unparseable entry — treated as not live
         }
-      } catch {
-        // Skip unparseable entries
-      }
-    }
-
+      }),
+    );
     return result;
   }
 

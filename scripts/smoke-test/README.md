@@ -14,7 +14,7 @@ Beantwortet beim Deployment / Refactor / Code-Review in ~2 Minuten die Frage:
 Deckt ab:
 
 - **Admin-CRUD** — Login, Agent anlegen, Revoke (deactivate), Reactivate, Reset-Token, Delete
-- **MCP Bearer-Flow** — alle 6 Tools: `mesh_register`, `mesh_status`, `mesh_send`, `mesh_receive`, `mesh_reply`, `mesh_history` + Broadcast-Pfad + Threading
+- **MCP Bearer-Flow** — die Tools `mesh_register`, `mesh_status`, `mesh_send`, `mesh_receive`, `mesh_reply`, `mesh_history` + Broadcast-Pfad + Threading (`mesh_get` seit dem Top-5-Review zusaetzlich)
 - **`moshi`** — Go-Binary inkl. Pipe-Mode (`echo ... | moshi send`)
 - **Dashboard-Views** — Home, Messages, Conversations, Activity (curl + HTML-contains)
 - **Revoke-Auth-Guard** — nach `revoke` muss der alte Token ein 401 bekommen

@@ -16,16 +16,18 @@ import {
   validateCsrfToken,
   generateSessionCookie,
   getCookieSecret,
+  safeNextPath,
 } from "./auth.js";
 import { createMcpServer } from "./mcp/server.js";
 import { createOAuthRoutes, cleanupExpiredOAuthTokens } from "./oauth.js";
-import { registerCliRoutes } from "./services/cli-dist.js";
+import { registerCliRoutes, requestOrigin } from "./services/cli-dist.js";
+import { createAgentAdminRoutes } from "./routes/agent-admin.js";
 import { RATE_LIMIT_PER_MINUTE, VERSION, LIMITS, MESSAGE_RETENTION_DAYS, ACTIVITY_RETENTION_DAYS } from "./types.js";
 import type { Env, AppVariables } from "./types.js";
 import { loadConfig, isConfigError } from "./config.js";
 import { log } from "./services/logger.js";
 import { listMessages, listConversations } from "./services/message-queries.js";
-import { setFlash, getFlash } from "./services/flash.js";
+import { getFlash } from "./services/flash.js";
 import { checkHealth } from "./services/health.js";
 import { PresenceService } from "./services/presence.js";
 import { loadV2HomeData } from "./services/v2-home-data.js";
@@ -161,7 +163,10 @@ app.get("/login", (c) => {
   const cookieSecret = getCookieSecret(c.env as unknown as Record<string, string | undefined>);
   const csrfToken = generateCsrfToken(cookieSecret);
   const error = c.req.query("error") === "1";
-  return c.html(<LoginPage error={error} csrfToken={csrfToken} />);
+  const next = safeNextPath(c.req.query("next"));
+  return c.html(
+    <LoginPage error={error} csrfToken={csrfToken} next={next === "/" ? undefined : next} />,
+  );
 });
 
 app.post("/login", async (c) => {
@@ -169,9 +174,11 @@ app.post("/login", async (c) => {
   const body = await c.req.parseBody();
   const token = body["token"] as string;
   const csrf = body["csrf"] as string;
+  const next = safeNextPath(typeof body["next"] === "string" ? body["next"] : undefined);
+  const loginError = `/login?error=1${next !== "/" ? `&next=${encodeURIComponent(next)}` : ""}`;
 
   if (!validateCsrfToken(csrf, cookieSecret)) {
-    return c.redirect("/login?error=1");
+    return c.redirect(loginError);
   }
 
   const adminToken = c.env.MESH_ADMIN_TOKEN;
@@ -192,7 +199,7 @@ app.post("/login", async (c) => {
   }
 
   if (!resolvedName) {
-    return c.redirect("/login?error=1");
+    return c.redirect(loginError);
   }
 
   const sessionValue = generateSessionCookie(resolvedName, cookieSecret);
@@ -203,7 +210,7 @@ app.post("/login", async (c) => {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   });
 
-  return c.redirect("/");
+  return c.redirect(next);
 });
 
 // --- Auth middleware on all other routes ---
@@ -239,23 +246,28 @@ app.all("/mcp", async (c) => {
 
   const agent = c.get("agent");
   const agentName = agent?.name ?? "anonymous";
+  const isAdmin = agent?.role === "admin";
 
-  // Ensure NATS consumers exist for this agent
-  try {
-    await nats.ensureConsumer(agentName);
-  } catch {
-    // Non-fatal — consumer creation may fail on first request, retry on next
+  // Ensure NATS consumers exist for this agent. The admin identity has no
+  // inbox by design (see ADMIN_NOT_AGENT_HINT), so no consumers for it.
+  if (!isAdmin) {
+    try {
+      await nats.ensureConsumer(agentName);
+    } catch {
+      // Non-fatal — consumer creation may fail on first request, retry on next
+    }
   }
 
-  const server = createMcpServer(
+  const server = createMcpServer({
     nats,
     agents,
     activity,
     rateLimiter,
     presence,
-    agentName,
     db,
-  );
+    agentName,
+    isAdmin,
+  });
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless — new transport per request
@@ -341,6 +353,7 @@ app.get("/agents", async (c) => {
     <V2AgentsPage
       agents={agentsData}
       csrfToken={csrfToken}
+      origin={requestOrigin(c)}
       newToken={flash?.newToken}
       error={flash?.error}
       inspectId={c.req.query("inspect")}
@@ -351,147 +364,8 @@ app.get("/agents", async (c) => {
   );
 });
 
-app.post("/agents/create", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const name = (body["name"] as string)?.trim();
-  const avatar = (body["avatar"] as string)?.trim() || undefined;
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  if (!name) {
-    const flashKey = setFlash({ error: "Name ist erforderlich." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  try {
-    const { plaintextToken } = agents.create(name, avatar, agent.name);
-    const flashKey = setFlash({ newToken: plaintextToken });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Unbekannter Fehler";
-    const flashKey = setFlash({ error: msg });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-});
-
-app.post("/agents/revoke", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const id = body["id"] as string;
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  agents.revokeById(id, agent.name);
-  return c.redirect("/agents");
-});
-
-app.post("/agents/reactivate", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const id = body["id"] as string;
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  const result = agents.reactivate(id, agent.name);
-  if (result) {
-    const flashKey = setFlash({ newToken: result.plaintextToken });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-  return c.redirect("/agents");
-});
-
-app.post("/agents/rename", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const id = body["id"] as string;
-  const name = (body["name"] as string)?.trim();
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  if (!name) {
-    const flashKey = setFlash({ error: "Name ist erforderlich." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  try {
-    agents.rename(id, name, agent.name);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Unbekannter Fehler";
-    const flashKey = setFlash({ error: msg });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  return c.redirect("/agents");
-});
-
-app.post("/agents/reset-token", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const id = body["id"] as string;
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  const result = agents.resetToken(id, agent.name);
-  if (result) {
-    const flashKey = setFlash({ newToken: result.plaintextToken });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-  return c.redirect("/agents");
-});
-
-app.post("/agents/delete", async (c) => {
-  const agent = c.get("agent");
-  if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-
-  const cookieSecret = cookieSecretFor(c.env);
-  const body = await c.req.parseBody();
-  const id = body["id"] as string;
-  const csrf = body["csrf"] as string;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
-    return c.redirect(`/agents?flash=${flashKey}`);
-  }
-
-  agents.deleteById(id, agent.name);
-  return c.redirect("/agents");
-});
+// --- Agent admin actions (create/revoke/reactivate/rename/reset-token/delete) ---
+app.route("/agents", createAgentAdminRoutes({ agents, cookieSecretFor }));
 
 // --- Dashboard: Messages ---
 app.get("/messages", (c) => {
@@ -499,14 +373,23 @@ app.get("/messages", (c) => {
   const filterAgent = c.req.query("agent") || undefined;
   const offsetParam = parseInt(c.req.query("offset") ?? "0", 10);
   const offset = isNaN(offsetParam) || offsetParam < 0 ? 0 : offsetParam;
-  const result = listMessages(db, { limit: LIMITS.PAGINATION_DEFAULT, offset, agent: filterAgent });
+  const routingParam = c.req.query("routing");
+  const routing = routingParam === "direct" || routingParam === "broadcast" ? routingParam : undefined;
+  const query = c.req.query("q")?.trim() || undefined;
+  const result = listMessages(db, {
+    limit: LIMITS.PAGINATION_DEFAULT,
+    offset,
+    agent: filterAgent,
+    q: query,
+    routing,
+  });
   const allAgents = agents.list();
   return c.html(
     <V2MessagesPage
       result={result}
       filterAgent={filterAgent}
-      filterRouting={c.req.query("routing")}
-      query={c.req.query("q")}
+      filterRouting={routing}
+      query={query}
       agentIds={Object.fromEntries(allAgents.map((a) => [a.name, a.id]))}
       agentRoles={Object.fromEntries(allAgents.map((a) => [a.name, a.role]))}
       userRole={agent?.role ?? undefined}
@@ -542,13 +425,21 @@ app.get("/conversations", (c) => {
 
   const offsetParam = parseInt(c.req.query("offset") ?? "0", 10);
   const offset = isNaN(offsetParam) || offsetParam < 0 ? 0 : offsetParam;
-  const result = listConversations(db, { limit: LIMITS.PAGINATION_DEFAULT, offset });
+  const query = c.req.query("q")?.trim() || undefined;
+  const filterAgent = c.req.query("agent")?.trim() || undefined;
+  const result = listConversations(db, {
+    limit: LIMITS.PAGINATION_DEFAULT,
+    offset,
+    q: query,
+    agent: filterAgent,
+  });
   const allAgents = agents.list();
   return c.html(
     <V2ConversationsPage
       result={result}
       selectedId={c.req.query("id")}
-      query={c.req.query("q")}
+      query={query}
+      filterAgent={filterAgent}
       agentIds={Object.fromEntries(allAgents.map((a) => [a.name, a.id]))}
       agentRoles={Object.fromEntries(allAgents.map((a) => [a.name, a.role]))}
       userRole={agent?.role ?? undefined}

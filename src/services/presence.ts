@@ -4,12 +4,15 @@
  * Presence is a derived 4-state signal combining two backing stores:
  *
  * - **NATS KV `mesh-presence` bucket** (auto-expires after `liveMs`): the
- *   "is the agent currently running" signal. Written on any agent
- *   interaction (auth middleware, MCP tool calls). Missing ⇒ not live.
- * - **SQLite `agents.last_seen_at`** (persistent, never cleared): the
- *   audit-trail of when the agent was last seen ever. Used to distinguish
+ *   "is the agent currently running" signal — a pure liveness flag with a
+ *   timestamp, nothing else. Written on any agent interaction (auth
+ *   middleware, MCP tool calls). Missing ⇒ not live.
+ * - **SQLite `agents`** (persistent, never cleared): `last_seen_at` is the
+ *   audit-trail of when the agent was last seen ever — used to distinguish
  *   "recently dead" (stale) from "long gone" (offline) from "never used"
- *   (never).
+ *   (never). `role`, `capabilities` and `working_on` live here too, and
+ *   only here (D4: the KV bucket used to carry a copy of that metadata, but
+ *   every bare liveness touch overwrote it, so it was never reliable).
  *
  * Together the two stores derive the `Presence` state via the pure
  * `computePresenceState` function below. This is the ONLY place presence
@@ -57,12 +60,11 @@ export interface PresenceMeta {
 }
 
 /** An agent joined with its computed presence state — the shape every
- *  view/API layer should consume once the service class is wired in. */
+ *  view/API layer should consume. Role / capabilities / working_on are
+ *  read from `agent` (SQLite is the only store for them). */
 export interface AgentWithPresence {
   agent: Agent;
   presence: Presence;
-  /** NATS KV metadata if the agent is live, otherwise null. */
-  liveMeta: PresenceMeta | null;
   /** Effective last-seen timestamp: NATS KV `timestamp` if live,
    *  otherwise the SQLite `last_seen_at`. Null only if truly never seen. */
   effectiveLastSeen: string | null;
@@ -97,13 +99,11 @@ export function computePresenceState(
  */
 export interface NatsPresenceBackend {
   updatePresence(agentName: string, data: Record<string, unknown>): Promise<void>;
-  getPresence(): Promise<Map<string, unknown>>;
+  /** Live entries for the given agent names (absent = not live). */
+  getPresence(agentNames: string[]): Promise<Map<string, unknown>>;
 }
 
 interface RawKvEntry {
-  role?: string;
-  capabilities?: string[];
-  working_on?: string;
   timestamp?: string;
 }
 
@@ -162,13 +162,11 @@ export class PresenceService {
       )
       .run(...values);
 
-    // 2. NATS KV — best effort, the bucket has its own TTL auto-expire
+    // 2. NATS KV — best effort liveness flag (timestamp only), the bucket
+    //    has its own TTL auto-expire. Metadata deliberately stays out of
+    //    KV: a bare touch would overwrite it (D4).
     try {
-      await this.nats.updatePresence(agentName, {
-        role: meta.role,
-        capabilities: meta.capabilities,
-        working_on: meta.working_on,
-      });
+      await this.nats.updatePresence(agentName, {});
     } catch (err) {
       log("warn", "presence touch: nats kv update failed", {
         agent: agentName,
@@ -197,7 +195,7 @@ export class PresenceService {
 
     let kv: Map<string, unknown>;
     try {
-      kv = await this.nats.getPresence();
+      kv = await this.nats.getPresence(rows.map((r) => r.name));
     } catch (err) {
       log("warn", "presence list: nats kv read failed, degrading to db-only", {
         err: String(err),
@@ -210,14 +208,7 @@ export class PresenceService {
       const inKV = kv.has(agent.name);
       const effectiveLastSeen = raw?.timestamp ?? agent.last_seen_at ?? null;
       const presence = computePresenceState(inKV, effectiveLastSeen, now);
-      const liveMeta: PresenceMeta | null = inKV
-        ? {
-            role: raw?.role,
-            capabilities: raw?.capabilities,
-            working_on: raw?.working_on,
-          }
-        : null;
-      return { agent, presence, liveMeta, effectiveLastSeen };
+      return { agent, presence, effectiveLastSeen };
     });
   }
 
