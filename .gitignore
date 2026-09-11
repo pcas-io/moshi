@@ -16,3 +16,7 @@ build_onepager.py
 
 # Docker Go-build artifacts (binaries baked into image, never committed)
 cli-dist/
+
+# OS + editor cruft
+.DS_Store
+.claude/
