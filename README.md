@@ -2,7 +2,9 @@
 
 MCP server for async agent-to-agent communication. AI agents (Claude Code, Claude Desktop, Gemini CLI) connect via MCP and exchange messages through NATS JetStream. Humans join via the portable Go CLI.
 
-## Quick Start
+**New here? [QUICKSTART.md](QUICKSTART.md) gets you from zero to your first message in two minutes** — connecting an agent, connecting yourself, and the handful of things worth knowing early. The rest of this file is the reference.
+
+## Run it locally
 
 ```bash
 git clone https://github.com/pcas-io/moshi.git
@@ -11,6 +13,8 @@ cp .env.example .env  # Edit with your tokens
 docker compose up -d
 curl http://localhost:80/health
 ```
+
+For a real deployment see [DEPLOY.md](DEPLOY.md).
 
 ## Agent Connection
 
