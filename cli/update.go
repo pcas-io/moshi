@@ -46,7 +46,7 @@ func platformKey() string {
 func baseURL(mcpURL string) string {
 	u, err := url.Parse(mcpURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		fatal("Ungueltige Server-URL: %s", mcpURL)
+		fatal("Invalid server URL: %s", mcpURL)
 	}
 	return u.Scheme + "://" + u.Host
 }
@@ -64,32 +64,32 @@ func cmdSelfUpdate(mcpURL string) {
 	base := baseURL(mcpURL)
 	self, err := selfSHA256()
 	if err != nil {
-		fatal("Eigene Binary nicht lesbar: %v", err)
+		fatal("Cannot read my own binary: %v", err)
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(base + "/cli/version")
 	if err != nil {
-		fatal("Server nicht erreichbar (%s/cli/version): %v", base, err)
+		fatal("Cannot reach the server (%s/cli/version): %v", base, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		fatal("Versionsabfrage fehlgeschlagen: HTTP %d", resp.StatusCode)
+		fatal("Version lookup failed: HTTP %d", resp.StatusCode)
 	}
 	var vr struct {
 		Platforms map[string]string `json:"platforms"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&vr); err != nil {
-		fatal("Versionsantwort nicht lesbar: %v", err)
+		fatal("Could not parse the version response: %v", err)
 	}
 
 	key := platformKey()
 	want, ok := vr.Platforms[key]
 	if !ok || want == "" {
-		fatal("Server bietet kein Build fuer %s", key)
+		fatal("The server has no build for %s", key)
 	}
 	if want == self {
-		fmt.Printf("✓ Bereits aktuell (%s, build %s)\n", key, self[:12])
+		fmt.Printf("✓ Already up to date (%s, build %s)\n", key, self[:12])
 		return
 	}
 
@@ -98,53 +98,53 @@ func cmdSelfUpdate(mcpURL string) {
 		ext = ".exe"
 	}
 	asset := fmt.Sprintf("%s/cli/moshi-%s%s", base, key, ext)
-	fmt.Printf("↓ Update %s → %s …\n", self[:12], want[:12])
+	fmt.Printf("↓ Updating %s → %s …\n", self[:12], want[:12])
 
 	dresp, err := client.Get(asset)
 	if err != nil {
-		fatal("Download fehlgeschlagen (%s): %v", asset, err)
+		fatal("Download failed (%s): %v", asset, err)
 	}
 	defer dresp.Body.Close()
 	if dresp.StatusCode != 200 {
-		fatal("Download fehlgeschlagen: HTTP %d", dresp.StatusCode)
+		fatal("Download failed: HTTP %d", dresp.StatusCode)
 	}
 	data, err := io.ReadAll(dresp.Body)
 	if err != nil {
-		fatal("Download-Stream-Fehler: %v", err)
+		fatal("Download stream error: %v", err)
 	}
 
 	got := sha256.Sum256(data)
 	if hex.EncodeToString(got[:]) != want {
-		fatal("Integritaetspruefung fehlgeschlagen — heruntergeladene Binary entspricht nicht dem Server-Hash. Abbruch.")
+		fatal("Integrity check failed — the downloaded binary does not match the server hash. Aborting.")
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
-		fatal("Eigener Pfad nicht bestimmbar: %v", err)
+		fatal("Cannot determine my own path: %v", err)
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
 	dir := filepath.Dir(exe)
 	tmp := filepath.Join(dir, ".moshi.update.tmp")
 	if err := os.WriteFile(tmp, data, 0o755); err != nil {
-		fatal("Schreiben fehlgeschlagen (%s): %v — Rechte? Versuche sudo oder MOSHI_BIN_DIR.", tmp, err)
+		fatal("Write failed (%s): %v — permissions? Try sudo or MOSHI_BIN_DIR.", tmp, err)
 	}
 
 	if runtime.GOOS == "windows" {
-		// Windows kann die laufende .exe nicht ueberschreiben — wegrenamen,
-		// dann die neue an ihren Platz.
+		// Windows cannot overwrite the running .exe — rename it away,
+		// then move the new one into place.
 		_ = os.Remove(exe + ".old")
 		if err := os.Rename(exe, exe+".old"); err != nil {
 			_ = os.Remove(tmp)
-			fatal("Rename der alten Binary fehlgeschlagen: %v", err)
+			fatal("Renaming the old binary failed: %v", err)
 		}
 		if err := os.Rename(tmp, exe); err != nil {
-			fatal("Installation fehlgeschlagen: %v (alte unter %s.old)", err, exe)
+			fatal("Install failed: %v (the old binary is at %s.old)", err, exe)
 		}
 	} else {
 		if err := os.Rename(tmp, exe); err != nil {
 			_ = os.Remove(tmp)
-			fatal("Atomarer Replace fehlgeschlagen (%s): %v — Rechte?", exe, err)
+			fatal("Atomic replace failed (%s): %v — permissions?", exe, err)
 		}
 	}
-	fmt.Printf("✓ Aktualisiert: %s (build %s)\n", exe, want[:12])
+	fmt.Printf("✓ Updated: %s (build %s)\n", exe, want[:12])
 }

@@ -35,8 +35,8 @@ func cmdStatus(url, token string) {
 	agents, _ := result["agents"].([]any)
 
 	if len(agents) == 0 {
-		fmt.Println("Keine Agents registriert.")
-		hint("Erstelle Agents im Dashboard: " + baseURL(url) + "/agents")
+		fmt.Println("No agents registered.")
+		hint("Create agents in the dashboard: " + baseURL(url) + "/agents")
 		return
 	}
 
@@ -64,29 +64,29 @@ func cmdStatus(url, token string) {
 		}
 		fmt.Printf("%-18s %-15s %-8s %s\n", name, role, status, workingOn)
 	}
-	fmt.Printf("\n%d Agent(en)\n", len(agents))
+	fmt.Printf("\n%d agent(s)\n", len(agents))
 	pendingHint(result)
 }
 
 func cmdSend(url, token string, args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "moshi send: Empfaenger fehlt.")
+		fmt.Fprintln(os.Stderr, "moshi send: recipient missing.")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  Usage:")
-		fmt.Fprintln(os.Stderr, `    moshi send <agent> "nachricht"`)
+		fmt.Fprintln(os.Stderr, `    moshi send <agent> "message"`)
 		fmt.Fprintln(os.Stderr, `    echo "text" | moshi send <agent>`)
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Beispiele:")
-		fmt.Fprintln(os.Stderr, `    moshi send ops "Server neugestartet"`)
-		fmt.Fprintln(os.Stderr, `    moshi send ops "DB nicht erreichbar" --type incident`)
+		fmt.Fprintln(os.Stderr, "  Examples:")
+		fmt.Fprintln(os.Stderr, `    moshi send ops "server restarted"`)
+		fmt.Fprintln(os.Stderr, `    moshi send ops "DB unreachable" --type incident`)
 		fmt.Fprintln(os.Stderr, `    docker logs app 2>&1 | moshi send ops --type incident`)
-		fmt.Fprintln(os.Stderr, `    docker logs app 2>&1 | moshi send ops incident      (Kurzform)`)
-		fmt.Fprintln(os.Stderr, `    moshi send broadcast "Wartung um 22 Uhr"`)
+		fmt.Fprintln(os.Stderr, `    docker logs app 2>&1 | moshi send ops incident      (shorthand)`)
+		fmt.Fprintln(os.Stderr, `    moshi send broadcast "maintenance at 22:00"`)
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Typ ist optional (default: info)")
-		fmt.Fprintln(os.Stderr, "  Typen: "+strings.Join(knownTypes, ", "))
+		fmt.Fprintln(os.Stderr, "  Type is optional (default: info)")
+		fmt.Fprintln(os.Stderr, "  Types: "+strings.Join(knownTypes, ", "))
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Wer ist da?  moshi status")
+		fmt.Fprintln(os.Stderr, "  Who is around?  moshi status")
 		os.Exit(1)
 	}
 
@@ -133,11 +133,11 @@ func cmdSend(url, token string, args []string) {
 	} else if piped {
 		payload = readStdin()
 	} else {
-		fmt.Fprintf(os.Stderr, "moshi send %s: Nachricht fehlt.\n\n", to)
-		fmt.Fprintln(os.Stderr, "  Drei Wege eine Nachricht zu senden:")
-		fmt.Fprintf(os.Stderr, "    moshi send %s \"Dein Text hier\"\n", to)
-		fmt.Fprintf(os.Stderr, "    echo \"Dein Text\" | moshi send %s\n", to)
-		fmt.Fprintf(os.Stderr, "    cat datei.txt | moshi send %s\n", to)
+		fmt.Fprintf(os.Stderr, "moshi send %s: message missing.\n\n", to)
+		fmt.Fprintln(os.Stderr, "  Three ways to send a message:")
+		fmt.Fprintf(os.Stderr, "    moshi send %s \"your text here\"\n", to)
+		fmt.Fprintf(os.Stderr, "    echo \"your text\" | moshi send %s\n", to)
+		fmt.Fprintf(os.Stderr, "    cat file.txt | moshi send %s\n", to)
 		os.Exit(1)
 	}
 
@@ -146,14 +146,14 @@ func cmdSend(url, token string, args []string) {
 	}
 
 	if payload == "" {
-		fmt.Fprintln(os.Stderr, "moshi send: Leere Nachricht. Nichts zu senden.")
+		fmt.Fprintln(os.Stderr, "moshi send: empty message. Nothing to send.")
 		os.Exit(1)
 	}
 
 	// Warn if payload is approaching the 256 KB limit (>240 KB)
 	payloadBytes := len([]byte(payload))
 	if payloadBytes > 245760 {
-		fmt.Fprintf(os.Stderr, "Warnung: Payload ist %d KB (Limit: 256 KB)\n", payloadBytes/1024)
+		fmt.Fprintf(os.Stderr, "Warning: payload is %d KB (limit: 256 KB)\n", payloadBytes/1024)
 	}
 
 	params := map[string]any{
@@ -164,7 +164,7 @@ func cmdSend(url, token string, args []string) {
 	}
 
 	result := mcpCall(url, token, "mesh_send", params)
-	fmt.Printf("✓ Gesendet an %s [%s] (%s)\n", to, msgType, str(result["id"]))
+	fmt.Printf("✓ Sent to %s [%s] (%s)\n", to, msgType, str(result["id"]))
 	if h := str(result["hint"]); h != "" {
 		hint(h)
 	}
@@ -174,7 +174,7 @@ func cmdSend(url, token string, args []string) {
 func readStdin() string {
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		fatal("Stdin lesen fehlgeschlagen: %v", err)
+		fatal("Reading stdin failed: %v", err)
 	}
 	return strings.TrimSpace(string(data))
 }
@@ -189,15 +189,15 @@ func cmdReceive(url, token string, args []string) {
 			if i+1 < len(args) {
 				n, err := strconv.Atoi(args[i+1])
 				if err != nil {
-					fatal("--limit braucht eine Zahl, z.B. --limit 10")
+					fatal("--limit needs a number, e.g. --limit 10")
 				}
 				params["limit"] = n
 				i++
 			} else {
-				fatal("--limit braucht eine Zahl, z.B. --limit 10")
+				fatal("--limit needs a number, e.g. --limit 10")
 			}
 		case "--type":
-			fatal("--type gibt es bei receive nicht mehr: der Filter liess nicht passende Nachrichten unbestaetigt und verlor sie nach mehreren Abrufen. Alles abholen mit: moshi receive — Threads nach Typ ansehen im Dashboard oder mit moshi history <msg_id>.")
+			fatal("receive no longer has --type: the filter left non-matching messages unacked and lost them after a few pulls. Fetch everything with: moshi receive — browse threads by type in the dashboard or with moshi history <msg_id>.")
 		}
 	}
 
@@ -205,11 +205,11 @@ func cmdReceive(url, token string, args []string) {
 	messages, _ := result["messages"].([]any)
 
 	if len(messages) == 0 {
-		fmt.Println("Keine neuen Nachrichten.")
+		fmt.Println("No new messages.")
 		return
 	}
 
-	fmt.Printf("%-15s %-15s %-8s %s\n", "VON", "TYP", "ZEIT", "NACHRICHT")
+	fmt.Printf("%-15s %-15s %-8s %s\n", "FROM", "TYPE", "TIME", "MESSAGE")
 	fmt.Println(strings.Repeat("─", 70))
 
 	for i, m := range messages {
@@ -228,11 +228,11 @@ func cmdReceive(url, token string, args []string) {
 		}
 
 		// Header
-		fmt.Printf("[%s] %s %s → %s [%s]\n", timeStr, color("\033[1m", from), color("\033[33m", msgType), "du", msgID[:20]+"...")
+		fmt.Printf("[%s] %s %s → %s [%s]\n", timeStr, color("\033[1m", from), color("\033[33m", msgType), "you", msgID[:20]+"...")
 
 		// Context
 		if context != "" && context != "moshi" {
-			fmt.Printf("  Kontext: %s\n", context)
+			fmt.Printf("  Context: %s\n", context)
 		}
 
 		// Full payload
@@ -243,31 +243,31 @@ func cmdReceive(url, token string, args []string) {
 		fmt.Println()
 
 		// Reply hint
-		fmt.Printf("  → %s\n", color("\033[2m", fmt.Sprintf("moshi reply %s \"antwort\"", msgID)))
+		fmt.Printf("  → %s\n", color("\033[2m", fmt.Sprintf("moshi reply %s \"your answer\"", msgID)))
 
 		if i < len(messages)-1 {
 			fmt.Println(strings.Repeat("─", 70))
 		}
 	}
 
-	fmt.Printf("\n%d Nachricht(en)\n", len(messages))
+	fmt.Printf("\n%d message(s)\n", len(messages))
 	if n := num(result["inbox_pending"]); n > 0 {
-		hint(fmt.Sprintf("%d weitere Nachricht(en) warten: moshi receive", n))
+		hint(fmt.Sprintf("%d more message(s) waiting: moshi receive", n))
 	}
 }
 
 func cmdGet(url, token string, args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "moshi get: Message-ID fehlt.")
+		fmt.Fprintln(os.Stderr, "moshi get: message ID missing.")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  Usage: moshi get <message_id>")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Gibt nur die rohe Payload aus — ideal zum Pipen:")
+		fmt.Fprintln(os.Stderr, "  Prints the raw payload and nothing else — made for piping:")
 		fmt.Fprintln(os.Stderr, "    moshi get msg_01ABC... > script.sh")
 		fmt.Fprintln(os.Stderr, "    moshi get msg_01ABC... | bash")
 		fmt.Fprintln(os.Stderr, "    moshi get msg_01ABC... | python3")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Message-IDs findest du in: moshi receive")
+		fmt.Fprintln(os.Stderr, "  Message IDs come from: moshi receive")
 		os.Exit(1)
 	}
 
@@ -280,11 +280,11 @@ func cmdGet(url, token string, args []string) {
 
 func cmdReply(url, token string, args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "moshi reply: Message-ID fehlt.")
+		fmt.Fprintln(os.Stderr, "moshi reply: message ID missing.")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Usage: moshi reply <message_id> <antwort> [--type review_result]")
+		fmt.Fprintln(os.Stderr, "  Usage: moshi reply <message_id> <answer> [--type review_result] [--context <c>]")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Die Message-ID findest du in der Ausgabe von: moshi receive")
+		fmt.Fprintln(os.Stderr, "  The message ID is in the output of: moshi receive")
 		os.Exit(1)
 	}
 
@@ -308,8 +308,8 @@ func cmdReply(url, token string, args []string) {
 	} else if stdinHasData() {
 		payload = strings.TrimRight(readStdin(), "\n")
 	} else {
-		fmt.Fprintf(os.Stderr, "moshi reply: Antworttext fehlt.\n\n")
-		fmt.Fprintf(os.Stderr, "  Beispiel: moshi reply %s \"Deine Antwort\"\n", msgID)
+		fmt.Fprintf(os.Stderr, "moshi reply: answer text missing.\n\n")
+		fmt.Fprintf(os.Stderr, "  Example: moshi reply %s \"your answer\"\n", msgID)
 		os.Exit(1)
 	}
 
@@ -323,16 +323,16 @@ func cmdReply(url, token string, args []string) {
 	}
 
 	result := mcpCall(url, token, "mesh_reply", params)
-	fmt.Printf("✓ Antwort gesendet (%s)\n", str(result["id"]))
+	fmt.Printf("✓ Reply sent (%s)\n", str(result["id"]))
 	pendingHint(result)
 }
 
 func cmdHistory(url, token string, args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "moshi history: Thread-ID fehlt.")
+		fmt.Fprintln(os.Stderr, "moshi history: thread ID missing.")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  Usage: moshi history <message_id>")
-		fmt.Fprintln(os.Stderr, "  Zeigt alle Nachrichten in einem Thread (Frage + Antworten) — jede ID des Threads reicht.")
+		fmt.Fprintln(os.Stderr, "  Shows every message in a thread (question + replies) — any ID from the thread works.")
 		os.Exit(1)
 	}
 
@@ -344,7 +344,7 @@ func cmdHistory(url, token string, args []string) {
 	messages, _ := result["messages"].([]any)
 
 	if len(messages) == 0 {
-		fmt.Println("Keine Nachrichten in diesem Thread.")
+		fmt.Println("No messages in this thread.")
 		return
 	}
 
@@ -352,7 +352,7 @@ func cmdHistory(url, token string, args []string) {
 	if threadID == "" {
 		threadID = args[0]
 	}
-	fmt.Printf("Thread: %s (%d Nachrichten)\n\n", threadID, len(messages))
+	fmt.Printf("Thread: %s (%d messages)\n\n", threadID, len(messages))
 
 	for _, m := range messages {
 		msg := m.(map[string]any)
@@ -395,27 +395,27 @@ func cmdRegister(url, token string, args []string) {
 				role = args[i+1]
 				i++
 			} else {
-				fatal("--role braucht einen Wert, z.B. --role ops")
+				fatal("--role needs a value, e.g. --role ops")
 			}
 		case "--capabilities":
 			if i+1 < len(args) {
 				params["capabilities"] = strings.Split(args[i+1], ",")
 				i++
 			} else {
-				fatal("--capabilities braucht einen Wert, z.B. --capabilities ssh,docker")
+				fatal("--capabilities needs a value, e.g. --capabilities ssh,docker")
 			}
 		case "--working-on":
 			if i+1 < len(args) {
 				params["working_on"] = args[i+1]
 				i++
 			} else {
-				fatal("--working-on braucht einen Wert, z.B. --working-on \"Debugging\"")
+				fatal("--working-on needs a value, e.g. --working-on \"debugging the deploy\"")
 			}
 		}
 	}
 	params["role"] = role
 
 	result := mcpCall(url, token, "mesh_register", params)
-	fmt.Printf("✓ Registriert als %s (%s)\n", role, hostname)
+	fmt.Printf("✓ Registered as %s (%s)\n", role, hostname)
 	pendingHint(result)
 }

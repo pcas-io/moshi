@@ -26,12 +26,12 @@ func mcpCall(url, token, tool string, args map[string]any) map[string]any {
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		fatal("Interner Fehler (JSON encode): %v", err)
+		fatal("Internal error (JSON encode): %v", err)
 	}
 
 	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonBody))
 	if err != nil {
-		fatal("Interner Fehler (Request): %v", err)
+		fatal("Internal error (request): %v", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -42,49 +42,49 @@ func mcpCall(url, token, tool string, args map[string]any) map[string]any {
 	resp, err := client.Do(req)
 	if err != nil {
 		if strings.Contains(err.Error(), "no such host") {
-			fatal("Server nicht erreichbar: %s\nPruefe MESH_URL oder --url", url)
+			fatal("Cannot reach the server: %s\nCheck MESH_URL or --url", url)
 		}
 		if strings.Contains(err.Error(), "connection refused") {
-			fatal("Verbindung abgelehnt: %s\nLaeuft der Server?", url)
+			fatal("Connection refused: %s\nIs the server running?", url)
 		}
 		if strings.Contains(err.Error(), "timeout") {
-			fatal("Timeout bei Verbindung zu %s", url)
+			fatal("Timed out connecting to %s", url)
 		}
-		fatal("Verbindung fehlgeschlagen: %v", err)
+		fatal("Connection failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fatal("Antwort konnte nicht gelesen werden: %v", err)
+		fatal("Could not read the response: %v", err)
 	}
 
 	if resp.StatusCode == 401 {
-		fmt.Fprintln(os.Stderr, "moshi: Nicht autorisiert.")
+		fmt.Fprintln(os.Stderr, "moshi: Not authorized.")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Moegliche Ursachen:")
-		fmt.Fprintln(os.Stderr, "  - Token ist falsch oder abgelaufen")
-		fmt.Fprintln(os.Stderr, "  - Agent wurde deaktiviert")
+		fmt.Fprintln(os.Stderr, "  Possible causes:")
+		fmt.Fprintln(os.Stderr, "  - the token is wrong or expired")
+		fmt.Fprintln(os.Stderr, "  - the agent was deactivated")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Token pruefen: echo $MESH_TOKEN")
+		fmt.Fprintln(os.Stderr, "  Check the token: echo $MESH_TOKEN")
 		os.Exit(1)
 	}
 
 	if resp.StatusCode == 503 {
-		fatal("Server ist ueberlastet oder nicht bereit (503). Versuche es gleich nochmal.")
+		fatal("Server is overloaded or not ready (503). Try again in a moment.")
 	}
 
 	if resp.StatusCode == 413 {
-		fatal("Nachricht zu gross: Payload max. 256 KB. Kuerze den Inhalt oder teile ihn auf.")
+		fatal("Message too large: payload max. 256 KB. Shorten it or split it up.")
 	}
 
 	if resp.StatusCode != 200 {
-		fatal("Server-Fehler (HTTP %d): %s", resp.StatusCode, truncate(string(respBody), 200))
+		fatal("Server error (HTTP %d): %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 
 	var rpcResp map[string]any
 	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
-		fatal("Server-Antwort nicht lesbar. Antwort: %s", truncate(string(respBody), 200))
+		fatal("Could not parse the server response: %s", truncate(string(respBody), 200))
 	}
 
 	if rpcErr, ok := rpcResp["error"].(map[string]any); ok {
@@ -95,7 +95,7 @@ func mcpCall(url, token, tool string, args map[string]any) map[string]any {
 	result, _ := rpcResp["result"].(map[string]any)
 	content, _ := result["content"].([]any)
 	if len(content) == 0 {
-		fatal("Leere Antwort vom Server. Versuche es nochmal.")
+		fatal("Empty response from the server. Try again.")
 	}
 
 	first := content[0].(map[string]any)
@@ -103,7 +103,7 @@ func mcpCall(url, token, tool string, args map[string]any) map[string]any {
 
 	if isErr, ok := result["isError"].(bool); ok && isErr {
 		if strings.Contains(text, "not found") && strings.Contains(text, "mesh_status") {
-			fatal("Agent nicht gefunden. Verfuegbare Agents: moshi status")
+			fatal("Agent not found. See who exists: moshi status")
 		}
 		// Everything else (rate limit, admin-token hint, nats_unavailable,
 		// …) is already a full sentence from the server — pass it through.
@@ -112,26 +112,26 @@ func mcpCall(url, token, tool string, args map[string]any) map[string]any {
 
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
-		fatal("Antwort konnte nicht verarbeitet werden: %s", truncate(text, 200))
+		fatal("Could not process the response: %s", truncate(text, 200))
 	}
 
 	return parsed
 }
 
 // friendlyError rewrites the JSON-RPC error messages a human is likely
-// to hit into actionable German; unknown ones are passed through.
+// to hit into actionable advice; unknown ones are passed through.
 func friendlyError(msg, url string) string {
 	lower := strings.ToLower(msg)
 	if strings.Contains(lower, "too_big") || strings.Contains(lower, "too big") {
-		return "Nachricht zu gross: Payload max. 256 KB, Kontext max. 2048 Zeichen. Kuerze den Inhalt oder teile ihn auf."
+		return "Message too large: payload max. 256 KB, context max. 2048 chars. Shorten it or split it up."
 	}
 	if strings.Contains(msg, "Not Acceptable") {
-		return fmt.Sprintf("Server hat die Anfrage abgelehnt. Moeglicherweise falsche URL?\n  Aktuelle URL: %s", url)
+		return fmt.Sprintf("The server rejected the request. Wrong URL?\n  Current URL: %s\n  It must point at the MCP endpoint and end in /mcp.", url)
 	}
 	if strings.Contains(lower, "validation error") || strings.Contains(lower, "invalid arguments") {
-		return "Ungueltige Eingabe: " + msg
+		return "Invalid input: " + msg
 	}
-	return "Server-Fehler: " + msg
+	return "Server error: " + msg
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -193,6 +193,6 @@ func fatal(format string, args ...any) {
 // — every tool reply carries inbox_pending since the Top-5 review fixes.
 func pendingHint(result map[string]any) {
 	if n := num(result["inbox_pending"]); n > 0 {
-		hint(fmt.Sprintf("%d Nachricht(en) warten in deiner Inbox: moshi receive", n))
+		hint(fmt.Sprintf("%d message(s) waiting in your inbox: moshi receive", n))
 	}
 }
