@@ -2,20 +2,21 @@
 // in one place so the route handler in `src/index.tsx` stays compact.
 
 import type Database from "better-sqlite3";
-import type { ActivityService } from "./activity.js";
 import type { PresenceService } from "./presence.js";
 import type { NatsService } from "./nats.js";
 import { getHomeStats } from "./home-stats.js";
 import { listConversations } from "./message-queries.js";
+import { buildAttentionItems } from "./attention.js";
+import { checkHealth, type HealthResult } from "./health.js";
 import {
-  getAgentHeat,
   getAgentMsgCounts24h,
   getIncidents24h,
-  getMeshEdges,
   getThreadsCount,
+  incidentTypeSql,
 } from "./dashboard-stats.js";
 import type {
   V2HomeAgent,
+  V2HomeIncident,
   V2HomeProps,
   V2HomeThread,
 } from "../views/v2/home.js";
@@ -23,42 +24,92 @@ import type {
 export type V2HomeDataInput = {
   db: Database.Database;
   presence: PresenceService;
-  activity: ActivityService;
+  /** Only for the health check behind the needs-attention band. */
   nats?: NatsService;
 };
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+interface IncidentRow {
+  created_at: string;
+  closed_by: string | null;
+  closed_at: string | null;
+}
+
+/**
+ * The newest incident of the last 24h, plus the first agent who answered it.
+ * Home's lead sentence names that agent and how long they took; without this
+ * the sentence would be guesswork.
+ *
+ * "Answered" is the same signal `attention.ts` uses for the inverse case:
+ * somebody other than the reporter spoke in the thread afterwards. There is
+ * no ack flag on a message and inventing one would change the wire format.
+ */
+export function getLatestIncident(
+  db: Database.Database,
+  now: Date = new Date(),
+): V2HomeIncident | null {
+  const since = new Date(now.getTime() - MS_PER_DAY).toISOString();
+  const row = db
+    .prepare(
+      `SELECT m.created_at,
+              (SELECT r.from_agent FROM messages r
+                WHERE COALESCE(r.correlation_id, r.id) = COALESCE(m.correlation_id, m.id)
+                  AND r.created_at > m.created_at
+                  AND r.from_agent <> m.from_agent COLLATE NOCASE
+                ORDER BY r.created_at ASC LIMIT 1) AS closed_by,
+              (SELECT MIN(r.created_at) FROM messages r
+                WHERE COALESCE(r.correlation_id, r.id) = COALESCE(m.correlation_id, m.id)
+                  AND r.created_at > m.created_at
+                  AND r.from_agent <> m.from_agent COLLATE NOCASE) AS closed_at
+       FROM messages m
+       WHERE m.created_at > ? AND ${incidentTypeSql("m")}
+       ORDER BY m.created_at DESC
+       LIMIT 1`,
+    )
+    .get(since) as IncidentRow | undefined;
+
+  if (!row) return null;
+  const openedMs = new Date(row.created_at).getTime();
+  const closedMs = row.closed_at ? new Date(row.closed_at).getTime() : null;
+  return {
+    openedAt: row.created_at,
+    closedBy: row.closed_by,
+    // Round up: "closed it 0 minutes later" reads as a bug, not as speed.
+    minutesToClose: closedMs === null
+      ? null
+      : Math.max(1, Math.round((closedMs - openedMs) / 60_000)),
+  };
+}
+
 export async function loadV2HomeData(
-  { db, presence, activity, nats }: V2HomeDataInput,
+  { db, presence, nats }: V2HomeDataInput,
 ): Promise<Omit<V2HomeProps, "userRole" | "csrfToken">> {
-  const [baseStats, presenceEntries, edges] = await Promise.all([
+  const [baseStats, presenceEntries] = await Promise.all([
     getHomeStats(db, presence),
     presence.list(),
-    Promise.resolve(getMeshEdges(db)),
   ]);
 
   const msgCounts = getAgentMsgCounts24h(db);
-  const agents: V2HomeAgent[] = presenceEntries.map((e) => {
-    const name = e.agent.name;
-    return {
-      id: e.agent.id,
-      name,
-      role: e.agent.role,
-      presence: e.presence,
-      msg24: msgCounts.get(name.toLowerCase()) ?? 0,
-      heat: getAgentHeat(db, name),
-      working_on: e.agent.working_on,
-      last_seen_at: e.effectiveLastSeen,
-    };
-  });
+  const agents: V2HomeAgent[] = presenceEntries.map((e) => ({
+    id: e.agent.id,
+    name: e.agent.name,
+    role: e.agent.role,
+    presence: e.presence,
+    msg24: msgCounts.get(e.agent.name.toLowerCase()) ?? 0,
+    working_on: e.agent.working_on,
+    last_seen_at: e.effectiveLastSeen,
+  }));
 
   const liveThread: V2HomeThread | null = (() => {
     const recent = listConversations(db, { limit: 1, offset: 0 });
     const t = recent.data[0];
     if (!t) return null;
-    const participants = Array.from(new Set(t.messages.map((m) => m.from)));
     return {
       correlation_id: t.thread_id,
-      participants,
+      context: t.first_context,
+      participants: t.participants,
+      messageCount: t.message_count,
       messages: t.messages.map((m) => ({
         id: m.id,
         from: m.from,
@@ -69,15 +120,14 @@ export async function loadV2HomeData(
     };
   })();
 
-  const activities = activity.list({ limit: 6, offset: 0 }).data;
-
-  // Stream stats are best-effort — render a placeholder if NATS is offline.
-  let stream: { bytes: number; messages: number; maxAgeSeconds: number; maxBytes: number } | null = null;
+  // Health feeds the needs-attention band, and a backend that cannot answer
+  // must not take the page down with it.
+  let health: HealthResult | null = null;
   if (nats) {
     try {
-      stream = await nats.getStreamStats();
+      health = await checkHealth(db, nats);
     } catch {
-      stream = null;
+      health = null;
     }
   }
 
@@ -89,15 +139,13 @@ export async function loadV2HomeData(
       agentsTotal: baseStats.totalAgents,
       agentsLive,
       agentsStale,
-      agentsActive: presenceEntries.filter((e) => e.agent.is_active).length,
       msg24h: baseStats.recentMessages,
       threads: getThreadsCount(db),
       incidents24h: getIncidents24h(db),
-      stream,
     },
     agents,
-    edges,
+    attention: buildAttentionItems({ db, health }),
+    latestIncident: getLatestIncident(db),
     liveThread,
-    activities,
   };
 }

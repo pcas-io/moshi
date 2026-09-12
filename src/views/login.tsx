@@ -2,190 +2,278 @@ import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
 import {
   V2_TOKENS,
-  V2_LOGIN_BG,
-  V2_GRID_BG,
   V2_FONT_FAMILY_SANS,
   V2_FONT_FAMILY_MONO,
-  greenGlow,
 } from "./v2/tokens.js";
+import type { HealthResult } from "../services/health.js";
 
-interface LoginProps {
+const T = V2_TOKENS;
+
+export interface LoginProps {
+  /** True after a rejected POST /login — renders the inline error. */
   error?: boolean;
   csrfToken: string;
   /** Relative path to return to after login (validated by the route). */
   next?: string;
+  /**
+   * Backend health from `checkHealth`. Drives the footer sentence only. When
+   * absent the footer states the healthy phrase, so the route may skip the
+   * ping on a page nobody is signed in to yet.
+   */
+  health?: HealthResult | null;
+  /**
+   * Public host agents connect to. Defaults to the same value `requestOrigin`
+   * falls back to, so a self-hosted deployment can pass its own instead of
+   * reading someone else's domain off the sign-in page.
+   */
+  host?: string;
 }
 
-// Self-contained SENTINEL Dark login — "Mesh Access". Grid pattern + green
-// radial glow, staggered fadeUp, charcoal card. Dark-only, matching the
-// dashboard's `color-scheme: dark`.
+/** Matches the fallback in `requestOrigin` (services/cli-dist.ts). */
+export const DEFAULT_LOGIN_HOST = "moshi.enki.run";
+
+export const HEALTHY_STATUS_PHRASE = "All systems normal";
+
+/**
+ * The footer sentence. Degradation is named in the same sentence position and
+ * the same 13px dim style — this footer informs, it does not alarm, so there
+ * is no coloured chip and the live dot keeps its colour.
+ *
+ * Derived from the two pingable backends rather than `status`, so a future
+ * third failure reason cannot silently render as "All systems normal".
+ */
+export function loginStatusPhrase(health?: HealthResult | null): string {
+  if (!health) return HEALTHY_STATUS_PHRASE;
+  const natsDown = health.nats !== "connected";
+  const dbDown = health.db !== "ok";
+  if (natsDown && dbDown) {
+    return "NATS and the database are unreachable — nothing is moving";
+  }
+  if (natsDown) return "NATS unreachable — messages are queued";
+  if (dbDown) return "The database is not responding — history is stale";
+  return HEALTHY_STATUS_PHRASE;
+}
+
+/**
+ * Copy, not data: three fixed claims under the lead. Never server-driven, so
+ * there is no zero case — if a fourth is ever added the column just grows.
+ */
+const LOGIN_FACTS = [
+  "Works with Claude Code, Claude Desktop and Gemini CLI over MCP",
+  "Threads, presence and an audit trail you can read",
+  "Join it yourself with a 6 MB binary — no agent required",
+] as const;
+
+// Sign in is the one page without the app shell, so it carries its own CSS
+// instead of importing V2_CSS: everything below is what inline styles cannot
+// express (resets, placeholder, focus ring, hover, one keyframe).
 const STYLE = `
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
-  body {
-    font-family: ${V2_FONT_FAMILY_SANS};
-    color: ${V2_TOKENS.text};
-    background: ${V2_LOGIN_BG};
-    -webkit-font-smoothing: antialiased;
-  }
-  @keyframes v2-fade-up {
-    0%   { opacity: 0; transform: translateY(20px); filter: blur(4px); }
-    100% { opacity: 1; transform: translateY(0);    filter: blur(0); }
-  }
-  .fade { opacity: 0; animation: v2-fade-up 0.7s cubic-bezier(0.16,1,0.3,1) forwards; }
-  @media (prefers-reduced-motion: reduce) { .fade { animation: none; opacity: 1; } }
-  .grid-bg {
-    position: fixed; inset: 0; pointer-events: none;
-    background-image: ${V2_GRID_BG};
-    background-size: 56px 56px;
-  }
-  .page { position: relative; min-height: 100vh; display: flex; flex-direction: column; }
-  .center { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
-  .col { width: 400px; max-width: 100%; }
-  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; animation-delay: 0.15s; }
-  .mark {
-    width: 38px; height: 38px; border-radius: 8px;
-    background: ${V2_TOKENS.accent}; color: ${V2_TOKENS.accentInk};
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 21px;
-  }
-  .brand-name { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
-  .brand-name .dot { color: ${V2_TOKENS.accent}; }
-  .brand-sub { font-family: ${V2_FONT_FAMILY_MONO}; font-size: 10.5px; color: ${V2_TOKENS.textMute}; margin-top: 3px; }
-  h1 {
-    margin: 0 0 6px; font-size: clamp(30px, 4.5vw, 40px); font-weight: 700;
-    line-height: 1.05; letter-spacing: -0.05em; text-transform: uppercase;
-    animation-delay: 0.3s;
-  }
-  h1 .accent { color: ${V2_TOKENS.accent}; }
-  .tagline {
-    margin: 0 0 26px; font-weight: 300; font-size: 14px;
-    color: ${V2_TOKENS.textDim}; animation-delay: 0.45s;
-  }
-  .card {
-    background: ${V2_TOKENS.surface}; border: 1px solid ${V2_TOKENS.lineCard};
-    border-radius: 8px; padding: 22px; animation-delay: 0.6s;
-  }
-  .label {
-    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
-    color: ${V2_TOKENS.textMute}; font-weight: 600; margin-bottom: 8px;
-  }
-  input[type=password] {
-    width: 100%; background: ${V2_TOKENS.inset};
-    border: 1px solid ${V2_TOKENS.line2}; border-radius: 4px;
-    color: ${V2_TOKENS.text}; font-family: ${V2_FONT_FAMILY_MONO};
-    font-size: 13px; padding: 12px 14px; outline: none;
-  }
-  input[type=password]:focus { border-color: ${greenGlow(0.55)}; }
-  input[type=password]::placeholder { color: ${V2_TOKENS.textFaint}; }
-  .error {
-    margin-top: 10px; font-size: 12px; color: ${V2_TOKENS.danger};
-    font-weight: 600; display: flex; align-items: center; gap: 7px;
-  }
-  .error .dot { width: 6px; height: 6px; border-radius: 50%; background: ${V2_TOKENS.danger}; }
-  button {
-    width: 100%; margin-top: 14px;
-    background: ${V2_TOKENS.accent}; border: none; color: ${V2_TOKENS.accentInk};
-    font-family: ${V2_FONT_FAMILY_SANS}; font-weight: 700; font-size: 12px;
-    letter-spacing: 0.08em; text-transform: uppercase;
-    padding: 13px 18px; border-radius: 2px; cursor: pointer;
-  }
-  button:hover { filter: brightness(1.12); }
-  .hint {
-    margin-top: 14px; font-family: ${V2_FONT_FAMILY_MONO};
-    font-size: 10px; color: ${V2_TOKENS.textFaint}; line-height: 1.7;
-  }
-  .mcp-line {
-    margin-top: 18px; font-family: ${V2_FONT_FAMILY_MONO};
-    font-size: 10px; color: ${V2_TOKENS.textFaint}; letter-spacing: 0.06em;
-    animation-delay: 0.75s;
-  }
-  .mcp-line .url { color: ${V2_TOKENS.textDim}; }
-  footer {
-    position: relative; display: flex; align-items: center; gap: 14px;
-    padding: 12px clamp(16px, 3vw, 36px); border-top: 1px solid ${V2_TOKENS.line};
-    font-family: ${V2_FONT_FAMILY_MONO}; font-size: 10.5px;
-    color: ${V2_TOKENS.textMute}; flex-wrap: wrap;
-  }
-  .domain { display: inline-flex; align-items: center; gap: 7px; color: ${V2_TOKENS.text}; font-weight: 600; }
-  .domain .dot { width: 7px; height: 7px; border-radius: 50%; background: ${V2_TOKENS.accent}; box-shadow: 0 0 8px ${greenGlow(0.6)}; }
-  .sep { color: #333333; }
-  .spacer { flex: 1; }
-  .warn { color: ${V2_TOKENS.warn}; }
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: ${T.paper};
+  color: ${T.ink};
+  font-family: ${V2_FONT_FAMILY_SANS};
+  font-size: 15px;
+  line-height: 1.6;
+  text-wrap: pretty;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+button, input { font-family: inherit; }
+a { color: ${T.greenText}; text-decoration: none; }
+a:hover { color: ${T.greenDeep}; }
+
+/* The input carries outline:none inline, so its focus ring must be a shadow. */
+input:focus {
+  border-color: ${T.greenLine};
+  box-shadow: 0 0 0 3px rgba(14,138,62,.12);
+}
+/* Same ring the app shell paints (V2_INTERACTION_CSS); this page cannot
+   import that stylesheet, and a 12% green shadow alone is ~1.05:1 on white. */
+button:focus-visible, a:focus-visible {
+  outline: 2px solid ${T.green};
+  outline-offset: 2px;
+}
+/* faint, not dim: the field's ground is paper, where dim measures 4.25:1. */
+input::placeholder { color: ${T.faint}; }
+
+/* Solid fills darken ~8% on hover; nothing moves. */
+button[type="submit"]:hover { filter: brightness(0.94); }
+
+@keyframes m-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.m-rise { animation: m-rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) both; }
+@media (prefers-reduced-motion: reduce) { .m-rise { animation: none; } }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #dfd8cc; border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
 `;
 
-export const LoginPage: FC<LoginProps> = ({ error, csrfToken, next }) => {
+const FAVICON =
+  '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,' +
+  "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E" +
+  "%3Crect width='32' height='32' rx='7' fill='%230e8a3e'/%3E" +
+  "%3Ctext x='16' y='23' text-anchor='middle' fill='%23ffffff' " +
+  "font-family='sans-serif' font-size='19' font-weight='800'%3Em%3C/text%3E" +
+  '%3C/svg%3E">';
+
+const FONT_HREF =
+  "https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700" +
+  "&family=JetBrains+Mono:wght@400;500;600&display=swap";
+
+// Inline code chip inside the note sentence.
+const CHIP = `font-family:${V2_FONT_FAMILY_MONO};font-size:12px;background:${T.subtle};padding:1px 6px;border-radius:5px;color:${T.body}`;
+
+export const LoginPage: FC<LoginProps> = ({
+  error,
+  csrfToken,
+  next,
+  health,
+  host = DEFAULT_LOGIN_HOST,
+}) => {
   return (
-    <html lang="de">
+    <html lang="en">
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="color-scheme" content="dark" />
+        <meta name="color-scheme" content="light" />
         <title>もしもし — moshi.moshi</title>
-        {raw(
-          '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,' +
-          '%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 32 32\'%3E' +
-          '%3Crect width=\'32\' height=\'32\' rx=\'7\' fill=\'%2305e901\'/%3E' +
-          '%3Ctext x=\'16\' y=\'23\' text-anchor=\'middle\' fill=\'%230a0a0a\' ' +
-          "font-family='sans-serif' font-size='19' font-weight='800'%3Em%3C/text%3E" +
-          "%3C/svg%3E\">"
-        )}
+        {raw(FAVICON)}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
-          rel="stylesheet"
-        />
+        <link href={FONT_HREF} rel="stylesheet" />
         {raw(`<style>${STYLE}</style>`)}
       </head>
       <body>
-        <div class="page">
-          <div class="grid-bg" />
-          <div class="center">
-            <div class="col">
-              <div class="brand fade">
-                <div class="mark">m</div>
+        <div
+          style={`min-height:100vh;display:flex;flex-direction:column;background:radial-gradient(900px 520px at 50% 110%, #eef7ef, transparent 70%), ${T.paper}`}
+        >
+          <div
+            style={`flex:1;display:grid;grid-template-columns:repeat(auto-fit, minmax(min(340px,100%), 1fr));gap:48px;align-items:center;max-width:${T.maxWidthDoc}px;margin:0 auto;padding:64px 28px;width:100%`}
+          >
+            <div>
+              <div style="display:flex;align-items:center;gap:12px;margin-bottom:28px">
+                <div
+                  style={`width:44px;height:44px;border-radius:13px;background:${T.green};color:${T.card};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:22px`}
+                >
+                  m
+                </div>
                 <div>
-                  <div class="brand-name">moshi<span class="dot">.</span>moshi</div>
-                  <div class="brand-sub">もしもし — who's there?</div>
+                  <div style="font-size:20px;font-weight:600;letter-spacing:-0.01em">
+                    moshi<span style={`color:${T.green}`}>.</span>moshi
+                  </div>
+                  {/* 12px, so faint rather than dim — dim only holds 4.5:1 at 13px and up. */}
+                  <div style={`font-family:${V2_FONT_FAMILY_MONO};font-size:12px;color:${T.faint}`}>
+                    もしもし — who's there?
+                  </div>
                 </div>
               </div>
-              <h1 class="fade">Mesh <span class="accent">Access</span></h1>
-              <p class="tagline fade">
-                Async agent-to-agent messaging, done right. Sign in with your admin token.
+
+              <h1 style="margin:0 0 14px;font-size:38px;font-weight:600;line-height:1.15;letter-spacing:-0.025em">
+                A mailbox<br />for your agents.
+              </h1>
+              <p style={`margin:0 0 22px;font-size:17px;color:${T.body};max-width:34ch`}>
+                Your Claude Code, Claude Desktop and Gemini agents talk to each other over MCP —
+                asynchronously, with a thread history you can read.
               </p>
-              <div class="card fade">
+
+              <div style="display:flex;flex-direction:column;gap:12px;max-width:36ch">
+                {LOGIN_FACTS.map((fact) => (
+                  <div key={fact} style="display:flex;gap:10px;align-items:flex-start">
+                    <span
+                      style={`width:20px;height:20px;border-radius:7px;background:${T.greenSoft};color:${T.greenDeep};display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;margin-top:3px`}
+                    >
+                      ✓
+                    </span>
+                    <span style={`font-size:14px;color:${T.body}`}>{fact}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div
+                class="m-rise"
+                style={`background:${T.card};border:1px solid ${T.line};border-radius:${T.radiusPanel}px;padding:28px;box-shadow:0 1px 2px rgba(36,33,29,.04), 0 16px 40px -28px rgba(36,33,29,.3)`}
+              >
                 <form method="post" action="/login">
                   <input type="hidden" name="csrf" value={csrfToken} />
                   {next && <input type="hidden" name="next" value={next} />}
-                  <div class="label">Admin Token</div>
+                  <h2 style="margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.01em">
+                    Sign in
+                  </h2>
+                  <p style={`margin:0 0 20px;font-size:14px;color:${T.dim}`}>
+                    Paste your admin token, or an agent's bearer token to see its own view.
+                  </p>
+                  <label
+                    for="token"
+                    style={`display:block;font-size:13px;font-weight:600;color:${T.body};margin-bottom:7px`}
+                  >
+                    Token
+                  </label>
                   <input
+                    id="token"
                     name="token"
                     type="password"
                     placeholder="bt_••••••••••••••••"
                     autofocus
                     autocomplete="current-password"
+                    aria-invalid={error ? "true" : undefined}
+                    aria-describedby={error ? "token-error" : undefined}
+                    style={`width:100%;background:${T.paper};border:1px solid ${T.lineStrong};border-radius:${T.radiusControl}px;color:${T.ink};font-family:${V2_FONT_FAMILY_MONO};font-size:14px;padding:13px 15px;outline:none`}
                   />
                   {error && (
-                    <div class="error"><span class="dot" />Invalid token — check MESH_ADMIN_TOKEN.</div>
+                    <div
+                      id="token-error"
+                      role="alert"
+                      style={`display:flex;align-items:center;gap:7px;margin-top:10px;font-size:13px;font-weight:600;color:${T.red}`}
+                    >
+                      <span style={`width:6px;height:6px;border-radius:50%;background:${T.red};flex-shrink:0`} />
+                      Invalid token — check MESH_ADMIN_TOKEN.
+                    </div>
                   )}
-                  <button type="submit">Sign In</button>
+                  <button
+                    type="submit"
+                    style={`width:100%;margin-top:14px;background:${T.green};border:none;color:${T.card};font-weight:600;font-size:15px;padding:14px 18px;border-radius:${T.radiusControl}px;cursor:pointer`}
+                  >
+                    Sign in
+                  </button>
                 </form>
-                <div class="hint">
-                  Bearer token · stored as SHA-256 hash · sessions signed with MESH_COOKIE_SECRET
+                <div
+                  style={`display:flex;gap:8px;align-items:flex-start;margin-top:18px;padding-top:18px;border-top:1px solid ${T.lineSoft}`}
+                >
+                  <span style={`font-size:13px;color:${T.dim}`}>
+                    {"No token yet? It lives in your deployment's "}
+                    <span style={CHIP}>MESH_ADMIN_TOKEN</span>
+                    {" — the same value you set in "}
+                    <span style={CHIP}>.env</span>
+                    {"."}
+                  </span>
                 </div>
               </div>
-              <div class="mcp-line fade">
-                AGENTS CONNECT VIA MCP — <span class="url">https://moshi.enki.run/mcp</span>
+              {/* On paper, not on card: dim is 4.25:1 there, faint is 5.04:1. */}
+              <div style={`margin-top:16px;font-size:13px;color:${T.faint};text-align:center`}>
+                {"Agents don't sign in here — they connect to "}
+                <span style={`font-family:${V2_FONT_FAMILY_MONO};font-size:12.5px;color:${T.body}`}>
+                  {host}/mcp
+                </span>
               </div>
             </div>
           </div>
-          <footer>
-            <span class="domain"><span class="dot" />moshi.enki.run</span>
-            <span class="sep">·</span><span>NATS JetStream</span>
-            <span class="sep">·</span><span>Apache 2.0</span>
-            <span class="spacer" />
-            <span class="warn">NATS · SINGLE-NODE</span>
+
+          <footer style={`border-top:1px solid ${T.line};background:${T.card}`}>
+            <div
+              style={`max-width:${T.maxWidthDoc}px;margin:0 auto;padding:16px 28px;display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:${T.dim}`}
+            >
+              <span style={`display:inline-flex;align-items:center;gap:8px;color:${T.ink};font-weight:600`}>
+                <span style={`width:8px;height:8px;border-radius:50%;background:${T.live}`} />
+                {host}
+              </span>
+              <span>{loginStatusPhrase(health)}</span>
+              <span style="flex:1" />
+              <span>Apache 2.0</span>
+            </div>
           </footer>
         </div>
       </body>

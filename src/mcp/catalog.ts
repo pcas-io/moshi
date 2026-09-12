@@ -28,7 +28,7 @@ export const MCP_TOOL_CATALOG: readonly McpToolRef[] = [
   {
     name: "mesh_receive",
     signature: `(limit?=10, preview_chars?=${DEFAULT_PREVIEW_CHARS}) → {messages[], inbox_pending}`,
-    desc: "Pull own inbox — acks on read, long payloads are previewed",
+    desc: "Pull its own inbox — reading acks, long payloads arrive previewed",
   },
   {
     name: "mesh_get",
@@ -43,7 +43,7 @@ export const MCP_TOOL_CATALOG: readonly McpToolRef[] = [
   {
     name: "mesh_status",
     signature: "() → {agents[] {presence, role, working_on}, inbox_pending}",
-    desc: "Roster + presence (live / stale / offline / never)",
+    desc: "Who is around: online, quiet, asleep, never seen",
   },
   {
     name: "mesh_history",

@@ -1,86 +1,123 @@
 import { describe, it, expect } from "vitest";
-import { deriveAvatarSpec, renderAvatarSvg, renderAvatarSvgInner } from "../../../src/views/v2/avatar";
+import {
+  deriveAvatarSpec,
+  initialsFor,
+  renderAvatarSvg,
+  renderAvatarSvgInner,
+} from "../../../src/views/v2/avatar";
+
+describe("initialsFor", () => {
+  it("takes one letter per segment for a multi-segment name", () => {
+    expect(initialsFor("dex-eu")).toBe("DE");
+    expect(initialsFor("triage-1")).toBe("T1");
+    expect(initialsFor("sec-warden")).toBe("SW");
+    expect(initialsFor("cortex_local")).toBe("CL");
+    expect(initialsFor("pm mira")).toBe("PM");
+  });
+
+  it("takes the first two letters of a single-segment name", () => {
+    expect(initialsFor("scout")).toBe("SC");
+    expect(initialsFor("qa")).toBe("QA");
+  });
+
+  it("reads a one-character name as a single letter, not a blank", () => {
+    expect(initialsFor("x")).toBe("X");
+  });
+
+  it("ignores segments beyond the second", () => {
+    expect(initialsFor("a-b-c-d")).toBe("AB");
+  });
+
+  it("drops non-alphanumerics and falls back rather than rendering nothing", () => {
+    expect(initialsFor("")).toBe("??");
+    expect(initialsFor("!!")).toBe("??");
+  });
+});
 
 describe("deriveAvatarSpec", () => {
-  it("is deterministic for the same id", () => {
-    const a = deriveAvatarSpec("cloud", "dev-assistant");
-    const b = deriveAvatarSpec("cloud", "dev-assistant");
-    expect(a).toEqual(b);
+  it("is deterministic for the same name and role", () => {
+    expect(deriveAvatarSpec("cloud", "dev-assistant"))
+      .toEqual(deriveAvatarSpec("cloud", "dev-assistant"));
   });
 
-  it("produces different specs for different ids", () => {
+  it("keys the field and monogram on the name, not on any id", () => {
     const a = deriveAvatarSpec("cloud", "dev-assistant");
     const b = deriveAvatarSpec("cortex", "dev-assistant");
-    // At least the variants must differ; palette pick may collide.
-    expect(a.hairVariant !== b.hairVariant ||
-           a.eyeVariant !== b.eyeVariant ||
-           a.mouthVariant !== b.mouthVariant ||
-           a.bg !== b.bg).toBe(true);
+    expect(a.initials).toBe("CL");
+    expect(b.initials).toBe("CO");
+    expect(a.field !== b.field || a.rotation !== b.rotation).toBe(true);
   });
 
-  it("maps known role to its kit", () => {
-    const spec = deriveAvatarSpec("any", "security");
-    expect(spec.kit.accessory).toBe("shades");
-    expect(spec.kit.collar).toBe("suit");
-    expect(spec.shirt).toBe("#5a5a6a");
+  it("maps a known role straight to its stripe", () => {
+    expect(deriveAvatarSpec("any", "security").stripe).toBe("#5a6270");
+    expect(deriveAvatarSpec("any", "product-manager").stripe).toBe("#a8823f");
   });
 
-  it("falls back via fuzzy match for unknown roles", () => {
-    const spec = deriveAvatarSpec("any", "code-reviewer");
-    // matches /dev|code|engineer/ → dev-assistant kit
-    expect(spec.kit.accessory).toBe("headset");
-    expect(spec.kit.collar).toBe("hoodie");
+  it("fuzzy-matches an unknown role so existing roles keep their colour", () => {
+    // /dev|code|engineer/ → dev-assistant
+    expect(deriveAvatarSpec("any", "code-reviewer").stripe).toBe("#5f7fb0");
+    // /triage|incident/ → triage-agent
+    expect(deriveAvatarSpec("any", "incident-responder").stripe).toBe("#4f8fa8");
   });
 
-  it("falls back to default kit when role is empty", () => {
-    const spec = deriveAvatarSpec("any", "");
-    expect(spec.kit.accessory).toBe("cap");
-    expect(spec.kit.collar).toBe("shirt");
+  it("falls back to the neutral stripe for an empty or unmatched role", () => {
+    expect(deriveAvatarSpec("any", "").stripe).toBe("#8a8578");
+    expect(deriveAvatarSpec("any", "florist").stripe).toBe("#8a8578");
+    expect(deriveAvatarSpec("any").stripe).toBe("#8a8578");
   });
 
-  it("variants stay in expected ranges", () => {
-    for (const id of ["a", "b", "c", "longer-id-here", "x".repeat(40)]) {
-      const s = deriveAvatarSpec(id);
-      expect(s.hairVariant).toBeGreaterThanOrEqual(0);
-      expect(s.hairVariant).toBeLessThan(8);
-      expect(s.eyeVariant).toBeGreaterThanOrEqual(0);
-      expect(s.eyeVariant).toBeLessThan(4);
-      expect(s.mouthVariant).toBeGreaterThanOrEqual(0);
-      expect(s.mouthVariant).toBeLessThan(4);
+  it("rotates the arc motif to one of four quarter turns", () => {
+    for (const name of ["a", "b", "c", "longer-name-here", "x".repeat(40)]) {
+      expect([0, 90, 180, 270]).toContain(deriveAvatarSpec(name).rotation);
+    }
+  });
+
+  it("never produces an empty field or ink", () => {
+    for (const name of ["", "x", "ops-kai", "y".repeat(64)]) {
+      const s = deriveAvatarSpec(name);
+      expect(s.field).toMatch(/^#[0-9a-f]{6}$/);
+      expect(s.ink).toMatch(/^#[0-9a-f]{6}$/);
     }
   });
 });
 
 describe("renderAvatarSvg", () => {
-  it("returns a valid SVG string", () => {
+  it("returns a valid SVG in the 0-32 coordinate space", () => {
     const svg = renderAvatarSvg("cloud", "dev-assistant");
     expect(svg).toMatch(/^<svg /);
     expect(svg).toContain('viewBox="0 0 32 32"');
     expect(svg).toContain("</svg>");
   });
 
-  it("respects custom size", () => {
+  it("respects a custom size", () => {
     expect(renderAvatarSvg("x", "any", { size: 64 })).toContain('width="64"');
   });
 
-  it("emits clip-path when rounded", () => {
+  it("emits a clip path only when asked to round", () => {
     expect(renderAvatarSvg("x", "any", { rounded: true })).toContain('clip-path="url(#r)"');
+    expect(renderAvatarSvg("x", "any")).not.toContain("clip-path");
   });
 
-  it("renders smooth anime shapes (ellipses, no pixel crispEdges)", () => {
-    const svg = renderAvatarSvg("x");
-    expect(svg).not.toContain('shape-rendering="crispEdges"');
-    expect(svg).toContain("<ellipse ");
+  it("draws the monogram and the role stripe", () => {
+    const svg = renderAvatarSvg("dex-eu", "dev-assistant");
+    expect(svg).toContain(">DE<");
+    expect(svg).toContain('<rect x="0" y="29.33" width="32" height="2.67"');
+  });
+
+  it("carries no portrait geometry from the previous generator", () => {
+    const svg = renderAvatarSvg("x", "dev-assistant");
+    expect(svg).not.toContain("<ellipse");
+    expect(svg).not.toContain("shape-rendering");
   });
 
   it("is byte-identical for the same input", () => {
-    expect(renderAvatarSvg("crtx-local", "cortex-local"))
-      .toBe(renderAvatarSvg("crtx-local", "cortex-local"));
+    expect(renderAvatarSvg("cortex-local", "cortex-local"))
+      .toBe(renderAvatarSvg("cortex-local", "cortex-local"));
   });
 });
 
 describe("renderAvatarSvgInner", () => {
-  it("returns rect markup with no <svg> wrapper (embeddable)", () => {
+  it("returns embeddable markup with no <svg> wrapper", () => {
     const inner = renderAvatarSvgInner("cloud", "dev-assistant");
     expect(inner).toContain("<rect ");
     expect(inner).not.toContain("<svg");
@@ -88,13 +125,7 @@ describe("renderAvatarSvgInner", () => {
   });
 
   it("matches the inner content of renderAvatarSvg", () => {
-    const full = renderAvatarSvg("cloud", "dev-assistant");
-    const inner = renderAvatarSvgInner("cloud", "dev-assistant");
-    expect(full).toContain(inner);
-  });
-
-  it("is deterministic", () => {
-    expect(renderAvatarSvgInner("crtx-local", "cortex-local"))
-      .toBe(renderAvatarSvgInner("crtx-local", "cortex-local"));
+    expect(renderAvatarSvg("cloud", "dev-assistant"))
+      .toContain(renderAvatarSvgInner("cloud", "dev-assistant"));
   });
 });

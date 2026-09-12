@@ -1,202 +1,238 @@
-// V2 primitives — Hono JSX components for the SENTINEL Dark dashboard.
-// Pair with src/views/v2/tokens.ts (CSS) and src/views/v2/avatar.ts (SVG generator).
+// V2 primitives — Hono JSX components for the "Daylight" dashboard.
+// Pair with src/views/v2/tokens.ts (colours, CSS) and src/views/v2/avatar.ts
+// (the deterministic emblem generator).
+//
+// Pages style themselves with inline `style="…"` attributes. The only CSS
+// that lives here is what an inline style cannot express: hover, focus
+// rings and row highlights. It is injected once by layout.tsx.
 
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
-import { V2_TOKENS, greenGlow } from "./tokens.js";
-import { renderAvatarSvg, type AvatarRenderOptions } from "./avatar.js";
+import { V2_TOKENS } from "./tokens.js";
+import { renderAvatarSvg } from "./avatar.js";
+
+const T = V2_TOKENS;
 
 // ── Presence ────────────────────────────────────────────────────
 export type Presence = "live" | "stale" | "offline" | "never";
 
 export const PRESENCE_COLOR: Record<Presence, string> = {
-  live: V2_TOKENS.accent,
-  stale: V2_TOKENS.warn,
-  offline: "#4a4a4a",
-  never: "#4a4a4a",
+  live: T.presenceLive,
+  stale: T.presenceStale,
+  offline: T.presenceOffline,
+  never: T.presenceOffline,
 };
 
-export const V2Dot: FC<{ presence: Presence; size?: number }> = ({ presence, size = 6 }) => {
-  const c = PRESENCE_COLOR[presence];
-  const glow = presence === "live" ? `box-shadow: 0 0 8px ${greenGlow(0.6)};` : "";
-  return (
-    <span
-      class="v2-dot"
-      style={`width:${size}px;height:${size}px;background:${c};${glow}`}
-    />
-  );
+/** The single word shown under an agent's name. Plain language, not state names. */
+export const PRESENCE_WORD: Record<Presence, string> = {
+  live: "online",
+  stale: "quiet",
+  offline: "asleep",
+  never: "never seen",
 };
+
+/** The dot. No glow: on white a shadow only blurs the edge. */
+export const V2Dot: FC<{ presence: Presence; size?: number; pulse?: boolean }> = ({
+  presence, size = 7, pulse,
+}) => (
+  <span
+    class={pulse && presence === "live" ? "m-pulse" : undefined}
+    style={`display:inline-block;flex-shrink:0;width:${size}px;height:${size}px;border-radius:999px;background:${PRESENCE_COLOR[presence]}`}
+  />
+);
 
 // ── Avatar ──────────────────────────────────────────────────────
-// The deterministic anime portrait, framed dark: 4px radius + #333 hairline.
+/** Corner radius scales with the emblem, per README §Shape. */
+export function avatarRadius(size: number): number {
+  if (size <= 26) return T.radiusAvatar; // 8
+  if (size <= 34) return 10;
+  if (size <= 40) return 11;
+  if (size <= 46) return 13;
+  return 15;
+}
+
+/**
+ * The emblem. Keyed on the agent NAME, not its id — the monogram is
+ * derived from the name, so no id plumbing is needed anywhere.
+ */
 export const V2Avatar: FC<{
-  agentId: string;
-  role?: string;
+  name: string;
+  role?: string | null;
   size?: number;
-  rounded?: boolean;
-  ringColor?: string;
   bordered?: boolean;
-}> = ({ agentId, role, size = 24, rounded, ringColor, bordered }) => {
-  const opts: AvatarRenderOptions = { size, rounded, ringColor };
-  const border = bordered ? `border:1px solid ${V2_TOKENS.line2};` : "";
+}> = ({ name, role, size = 24, bordered }) => {
+  const border = bordered ? `border:1px solid ${T.line};` : "";
   return (
+    // The monogram is decoration: the agent's name is always next to it in the
+    // markup, so announcing "D E" before it would just be noise.
     <span
-      class="v2-avatar"
-      style={`display:inline-flex;width:${size}px;height:${size}px;flex-shrink:0;vertical-align:middle;border-radius:4px;overflow:hidden;${border}`}
+      aria-hidden="true"
+      style={`display:inline-flex;width:${size}px;height:${size}px;flex-shrink:0;vertical-align:middle;border-radius:${avatarRadius(size)}px;overflow:hidden;${border}`}
     >
-      {raw(renderAvatarSvg(agentId, role, opts))}
+      {raw(renderAvatarSvg(name, role ?? undefined, { size }))}
     </span>
   );
 };
 
 // ── Card ────────────────────────────────────────────────────────
+export const CARD_SHADOW = "0 1px 2px rgba(36,33,29,.04)";
+export const RAISED_SHADOW =
+  "0 1px 2px rgba(36,33,29,.04), 0 16px 40px -28px rgba(36,33,29,.3)";
+
+export const CARD_STYLE =
+  `background:${T.card};border:1px solid ${T.line};border-radius:${T.radiusCard}px;box-shadow:${CARD_SHADOW}`;
+
 export const V2Card: FC<{
   title?: string;
-  sub?: string;
+  sub?: any;
   right?: any;
+  /** Footer row, rendered on `sunk` under a hairline. */
+  foot?: any;
+  bodyStyle?: string;
+  style?: string;
   children?: any;
-}> = ({ title, sub, right, children }) => {
-  return (
-    <div class="v2-card">
-      {(title || right) && (
-        <div class="v2-card-head">
-          <div style="flex:1">
-            {title && <div class="v2-card-title">{title}</div>}
-            {sub && <div class="v2-card-sub">{sub}</div>}
-          </div>
-          {right}
+}> = ({ title, sub, right, foot, bodyStyle, style, children }) => (
+  <div style={`${CARD_STYLE};display:flex;flex-direction:column;overflow:hidden;${style ?? ""}`}>
+    {(title || right) && (
+      <div
+        style={`display:flex;align-items:flex-start;gap:14px;padding:18px 20px 14px;border-bottom:1px solid ${T.lineSoft}`}
+      >
+        <div style="flex:1;min-width:0">
+          {title && <div style={`font-size:16px;font-weight:600;color:${T.ink}`}>{title}</div>}
+          {sub && <div style={`margin-top:3px;font-size:13px;color:${T.dim}`}>{sub}</div>}
         </div>
-      )}
-      <div>{children}</div>
-    </div>
-  );
-};
+        {right}
+      </div>
+    )}
+    <div style={bodyStyle ?? ""}>{children}</div>
+    {foot && (
+      <div
+        style={`margin-top:auto;display:flex;align-items:center;gap:10px;padding:12px 20px;background:${T.sunk};border-top:1px solid ${T.lineSoft};font-size:13px;color:${T.dim}`}
+      >
+        {foot}
+      </div>
+    )}
+  </div>
+);
 
 // ── Button ──────────────────────────────────────────────────────
 export type V2BtnKind =
-  | "primary"
-  | "secondary"
-  | "tertiary"
-  | "ghost"
-  | "danger"
-  | "danger-outline";
+  | "primary"    // solid green, white label
+  | "secondary"  // white fill, lineStrong border
+  | "ghost"      // transparent until hover
+  | "white"      // white fill on a coloured band
+  | "danger"     // red-outlined, destructive
+  | "muted";     // the gated look: line fill, dim label
+
+const BTN_BASE =
+  "display:inline-flex;align-items:center;justify-content:center;gap:8px;" +
+  `border-radius:${T.radiusControl}px;font-family:inherit;font-size:14px;font-weight:600;` +
+  "line-height:1;padding:11px 18px;cursor:pointer;text-decoration:none;white-space:nowrap";
+
+const BTN_KIND: Record<V2BtnKind, string> = {
+  primary:   `background:${T.green};color:#ffffff;border:1px solid ${T.green}`,
+  secondary: `background:${T.card};color:${T.ink};border:1px solid ${T.lineStrong}`,
+  ghost:     `background:transparent;color:${T.body};border:1px solid transparent`,
+  white:     `background:${T.card};color:${T.ink};border:1px solid ${T.amberLine}`,
+  danger:    `background:${T.card};color:${T.red};border:1px solid ${T.redLine}`,
+  muted:     `background:${T.line};color:${T.dim};border:1px solid ${T.line};cursor:default`,
+};
+
+/** Solid fills darken on hover; ghost buttons grow a fill. Nothing moves. */
+const BTN_HOVER_CLASS: Record<V2BtnKind, string> = {
+  primary: "d-solid", secondary: "d-solid", white: "d-solid",
+  danger: "d-solid", ghost: "d-ghost", muted: "",
+};
 
 export const V2Btn: FC<{
   kind?: V2BtnKind;
   type?: "button" | "submit";
   href?: string;
   onclick?: string;
+  name?: string;
+  value?: string;
+  disabled?: boolean;
+  title?: string;
+  id?: string;
+  style?: string;
   children?: any;
-}> = ({ kind = "tertiary", type = "button", href, onclick, children }) => {
-  const cls = `v2-btn${kind !== "tertiary" ? ` v2-btn--${kind}` : ""}`;
-  if (href) return <a class={cls} href={href}>{children}</a>;
-  return <button class={cls} type={type} onclick={onclick}>{children}</button>;
-};
-
-// ── Outlined mono tag (message types, routing, entities) ────────
-export const V2Tag: FC<{ color?: string; children?: any }> = ({ color, children }) => {
-  const c = color ?? V2_TOKENS.textDim;
+}> = ({ kind = "secondary", type = "button", href, onclick, name, value, disabled, title, id, style, children }) => {
+  const css = `${BTN_BASE};${BTN_KIND[kind]};${style ?? ""}`;
+  const cls = BTN_HOVER_CLASS[kind] || undefined;
+  if (href) {
+    return <a id={id} class={cls} href={href} title={title} style={css}>{children}</a>;
+  }
   return (
-    <span class="v2-tag" style={`color:${c}`}>
+    <button
+      id={id} class={cls} type={type} onclick={onclick} name={name} value={value}
+      disabled={disabled} title={title} style={css}
+    >
       {children}
-    </span>
+    </button>
   );
 };
 
-// ── Sparkline (sharp, no curves) ────────────────────────────────
-export const V2Spark: FC<{
-  data: number[];
-  w?: number;
-  h?: number;
-  stroke?: string;
-  fillAlpha?: number;
-}> = ({ data, w = 70, h = 18, stroke = V2_TOKENS.accent, fillAlpha = 0 }) => {
-  if (data.length === 0) return <svg width={w} height={h} />;
-  const max = Math.max(1, ...data);
-  const pts = data.map((v, i) => {
-    const x = (i / Math.max(1, data.length - 1)) * w;
-    const y = h - (v / max) * (h - 1) - 0.5;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-  return (
-    <svg width={w} height={h} style="display:block">
-      {fillAlpha > 0 && (
-        <polygon points={`0,${h} ${pts} ${w},${h}`} fill={stroke} opacity={String(fillAlpha)} />
-      )}
-      <polyline points={pts} fill="none" stroke={stroke} stroke-width="1.25" stroke-linejoin="miter" />
-    </svg>
-  );
+// ── Filled kind pill (message types, audit entities) ────────────
+export const V2Pill: FC<{ ink: string; ground: string; mono?: boolean; children?: any }> = ({
+  ink, ground, mono, children,
+}) => (
+  <span
+    style={`display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:${T.radiusPill}px;` +
+      `background:${ground};color:${ink};font-size:12px;font-weight:600;line-height:1.4;white-space:nowrap;` +
+      (mono ? "font-family:var(--font-mono);font-weight:500" : "")}
+  >
+    {children}
+  </span>
+);
+
+// ── Message-kind display labels (COPY.md §7) ────────────────────
+// The raw `type` stays on the wire; only what a reader sees changes.
+const KIND_LABELS: Record<string, string> = {
+  task_update: "progress",
+  deploy_request: "deploy ask",
+  deploy_status: "deploy done",
+  review_request: "review ask",
+  review_result: "review done",
 };
 
-// ── Heatmap row (24h activity) ──────────────────────────────────
-export const V2Heat: FC<{
-  data: number[];
-  cell?: number;
-  gap?: number;
-  max?: number;
-}> = ({ data, cell = 10, gap = 2, max }) => {
-  const m = max ?? Math.max(1, ...data);
-  return (
-    <div style={`display:flex;gap:${gap}px`}>
-      {data.map((v) => {
-        const bg = v === 0
-          ? "rgba(255,255,255,0.05)"
-          : greenGlow(0.18 + (v / m) * 0.82);
-        return (
-          <span style={`width:${cell}px;height:${cell}px;border-radius:1px;background:${bg}`} />
-        );
-      })}
-    </div>
-  );
-};
-
-// ── Shared color maps ───────────────────────────────────────────
-// Message-type marker colors, used by Home / Conversations / Messages.
-const TYPE_COLORS: Record<string, string> = {
-  incident: V2_TOKENS.danger,
-  alert: V2_TOKENS.danger,
-  incident_response: V2_TOKENS.danger,
-  incident_acknowledged: V2_TOKENS.warn,
-  deploy_status: V2_TOKENS.info,
-  deploy_request: V2_TOKENS.info,
-  question: V2_TOKENS.info,
-  answer: V2_TOKENS.accent,
-  review_result: V2_TOKENS.accent,
-  review_request: V2_TOKENS.warn,
-  script: V2_TOKENS.script,
-};
-
-export function typeColor(type: string): string {
-  return TYPE_COLORS[type] ?? V2_TOKENS.textDim;
+export function kindLabel(type: string): string {
+  return KIND_LABELS[type] ?? type;
 }
 
-// Activity entity marker colors (message/session/agent).
-export const ENTITY_COLOR: Record<string, string> = {
-  message: V2_TOKENS.accent,
-  session: V2_TOKENS.info,
-  agent: V2_TOKENS.warn,
-};
+// ── Interaction CSS ─────────────────────────────────────────────
+// Injected once by layout.tsx. Everything here is a state an inline
+// style cannot reach: hover, focus-visible, and the row highlights.
+export const V2_INTERACTION_CSS = `
+.d-solid:hover { filter: brightness(0.94); }
 
-export function entityColor(entity: string): string {
-  return ENTITY_COLOR[entity] ?? V2_TOKENS.textMute;
-}
+/* !important is load-bearing, not laziness. Pages style themselves with
+   inline style attributes, and an inline declaration outranks any selector —
+   so a plain \`.d-row:hover{background:…}\` silently does nothing on the rows,
+   tabs and ghost buttons that set their own background inline, which is all
+   of them. \`filter\` needs no escape hatch because nobody sets it inline. */
+.d-ghost:hover { background: ${T.subtle} !important; }
+.d-row:hover { background: ${T.sunk} !important; }
+.d-tab:hover { color: ${T.ink} !important; }
 
-// ── Helpers ─────────────────────────────────────────────────────
-export function withAlpha(input: string, a: number): string {
-  // Accept #rrggbb, #rgb, or already-rgba — pass-through for rgba/oklch/etc.
-  if (input.startsWith("#")) {
-    const h = input.slice(1);
-    const f = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
-    const r = parseInt(f.slice(0, 2), 16);
-    const g = parseInt(f.slice(2, 4), 16);
-    const b = parseInt(f.slice(4, 6), 16);
-    return `rgba(${r},${g},${b},${a})`;
-  }
-  if (input.startsWith("rgba(")) {
-    return input.replace(/,[^,]+\)$/, `,${a})`);
-  }
-  if (input.startsWith("rgb(")) {
-    return input.replace("rgb(", "rgba(").replace(")", `,${a})`);
-  }
-  return input;
+/* The current design has no visible focus style at all. This is it. */
+a:focus-visible, button:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid ${T.green};
+  outline-offset: 2px;
+  border-radius: 4px;
 }
+.d-input:focus {
+  outline: none;
+  border-color: ${T.greenLine};
+  box-shadow: 0 0 0 3px rgba(14,138,62,.12);
+}
+`;
+
+// ── Shared input style ──────────────────────────────────────────
+export const INPUT_STYLE =
+  `width:100%;background:${T.paper};border:1px solid ${T.lineStrong};border-radius:${T.radiusControl}px;` +
+  `padding:11px 14px;font-family:var(--font-sans);font-size:14px;color:${T.ink}`;
+
+export const MONO_INPUT_STYLE =
+  `width:100%;background:${T.paper};border:1px solid ${T.lineStrong};border-radius:${T.radiusControl}px;` +
+  `padding:13px 15px;font-family:var(--font-mono);font-size:14px;color:${T.ink}`;

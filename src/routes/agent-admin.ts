@@ -30,12 +30,12 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     const csrf = body["csrf"] as string;
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
-      const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
+      const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
     if (!name) {
-      const flashKey = setFlash({ error: "Name ist erforderlich." });
+      const flashKey = setFlash({ error: "Give the agent a name." });
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
@@ -44,7 +44,9 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
       const flashKey = setFlash({ newToken: plaintextToken });
       return c.redirect(`/agents?flash=${flashKey}`);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Unbekannter Fehler";
+      const msg = err instanceof Error
+        ? err.message
+        : "Something went wrong creating the agent. Check the server log.";
       const flashKey = setFlash({ error: msg });
       return c.redirect(`/agents?flash=${flashKey}`);
     }
@@ -60,7 +62,7 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     const csrf = body["csrf"] as string;
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
-      const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
+      const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
@@ -78,7 +80,7 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     const csrf = body["csrf"] as string;
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
-      const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
+      const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
@@ -101,19 +103,21 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     const csrf = body["csrf"] as string;
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
-      const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
+      const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
     if (!name) {
-      const flashKey = setFlash({ error: "Name ist erforderlich." });
+      const flashKey = setFlash({ error: "Give the agent a name." });
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
     try {
       agents.rename(id, name, agent.name);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Unbekannter Fehler";
+      const msg = err instanceof Error
+        ? err.message
+        : "Something went wrong renaming the agent. Check the server log.";
       const flashKey = setFlash({ error: msg });
       return c.redirect(`/agents?flash=${flashKey}`);
     }
@@ -131,7 +135,7 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     const csrf = body["csrf"] as string;
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
-      const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
+      const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
@@ -153,7 +157,7 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     const csrf = body["csrf"] as string;
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
-      const flashKey = setFlash({ error: "Ungültiger CSRF-Token." });
+      const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 

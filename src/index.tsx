@@ -22,6 +22,7 @@ import { createMcpServer } from "./mcp/server.js";
 import { createOAuthRoutes, cleanupExpiredOAuthTokens } from "./oauth.js";
 import { registerCliRoutes, requestOrigin } from "./services/cli-dist.js";
 import { createAgentAdminRoutes } from "./routes/agent-admin.js";
+import { createAgentConnectRoutes } from "./routes/agent-connect.js";
 import { RATE_LIMIT_PER_MINUTE, VERSION, LIMITS, MESSAGE_RETENTION_DAYS, ACTIVITY_RETENTION_DAYS } from "./types.js";
 import type { Env, AppVariables } from "./types.js";
 import { loadConfig, isConfigError } from "./config.js";
@@ -33,14 +34,19 @@ import { PresenceService } from "./services/presence.js";
 import { loadV2HomeData } from "./services/v2-home-data.js";
 import { loadV2AgentsData } from "./services/v2-agents-data.js";
 import { subscribeMessageEvents } from "./services/message-events.js";
+import { parseActivityRange, startOfDayIso } from "./services/activity.js";
 import { streamSSE } from "hono/streaming";
 
 // --- Views ---
 import { LoginPage } from "./views/login.js";
 import { V2HomePage } from "./views/v2/home.js";
 import { V2AgentsPage } from "./views/v2/agents.js";
-import { V2MessagesPage } from "./views/v2/messages.js";
-import { V2ActivityPage } from "./views/v2/activity.js";
+import {
+  V2LogPage,
+  messageRoutingOf,
+  parseLogRouting,
+  parseLogTab,
+} from "./views/v2/log.js";
 import { V2ConversationsPage } from "./views/v2/conversations.js";
 
 // --- Load and validate configuration (fail-fast on missing/invalid secrets) ---
@@ -159,13 +165,27 @@ app.get("/health", async (c) => {
 });
 
 // --- Login page (no auth) ---
-app.get("/login", (c) => {
+app.get("/login", async (c) => {
   const cookieSecret = getCookieSecret(c.env as unknown as Record<string, string | undefined>);
   const csrfToken = generateCsrfToken(cookieSecret);
   const error = c.req.query("error") === "1";
   const next = safeNextPath(c.req.query("next"));
+  // The footer states what is actually up. Best-effort: a health check that
+  // throws must not keep an operator off the sign-in page.
+  let health = null;
+  try {
+    health = await checkHealth(db, nats);
+  } catch {
+    health = null;
+  }
   return c.html(
-    <LoginPage error={error} csrfToken={csrfToken} next={next === "/" ? undefined : next} />,
+    <LoginPage
+      error={error}
+      csrfToken={csrfToken}
+      next={next === "/" ? undefined : next}
+      health={health}
+      host={new URL(requestOrigin(c)).host}
+    />,
   );
 });
 
@@ -308,9 +328,14 @@ function cookieSecretFor(env: Env): string {
 app.get("/", async (c) => {
   const agent = c.get("agent");
   const csrfToken = generateCsrfToken(cookieSecretFor(c.env));
-  const data = await loadV2HomeData({ db, presence, activity, nats });
+  const data = await loadV2HomeData({ db, presence, nats });
   return c.html(
-    <V2HomePage {...data} userRole={agent?.role ?? undefined} csrfToken={csrfToken} />,
+    <V2HomePage
+      {...data}
+      userRole={agent?.role ?? undefined}
+      userName={agent?.name ?? undefined}
+      csrfToken={csrfToken}
+    />,
   );
 });
 
@@ -345,6 +370,10 @@ app.get("/agents", async (c) => {
   const agent = c.get("agent");
   if (agent?.role !== "admin") return c.redirect("/");
 
+  // Creating an agent is the connect flow's job now. The old deep link
+  // still works so bookmarks and the palette entry land somewhere useful.
+  if (c.req.query("new") === "1") return c.redirect("/agents/connect");
+
   const csrfToken = generateCsrfToken(cookieSecretFor(c.env));
   const flash = getFlash(c.req.query("flash"));
   const agentsData = await loadV2AgentsData(db, presence);
@@ -353,70 +382,90 @@ app.get("/agents", async (c) => {
     <V2AgentsPage
       agents={agentsData}
       csrfToken={csrfToken}
-      origin={requestOrigin(c)}
       newToken={flash?.newToken}
       error={flash?.error}
       inspectId={c.req.query("inspect")}
-      showNewForm={c.req.query("new") === "1"}
       presenceFilter={c.req.query("presence")}
       userRole={agent.role}
+      userName={agent.name}
     />,
   );
 });
+
+// --- The guided connect flow (/agents/connect, admin only) ---
+// Mounted before the admin actions so its own POST target is unambiguous.
+app.route("/agents", createAgentConnectRoutes({ agents, presence, cookieSecretFor }));
 
 // --- Agent admin actions (create/revoke/reactivate/rename/reset-token/delete) ---
 app.route("/agents", createAgentAdminRoutes({ agents, cookieSecretFor }));
 
-// --- Dashboard: Messages ---
-app.get("/messages", (c) => {
+// --- Dashboard: Log (Messages + Audit trail) ---
+// One route, two tabs. Both tabs filter in SQL, so the counts on screen and
+// the `total` behind the pager describe the same set.
+app.get("/log", (c) => {
   const agent = c.get("agent");
-  const filterAgent = c.req.query("agent") || undefined;
   const offsetParam = parseInt(c.req.query("offset") ?? "0", 10);
   const offset = isNaN(offsetParam) || offsetParam < 0 ? 0 : offsetParam;
-  const routingParam = c.req.query("routing");
-  const routing = routingParam === "direct" || routingParam === "broadcast" ? routingParam : undefined;
   const query = c.req.query("q")?.trim() || undefined;
-  const result = listMessages(db, {
-    limit: LIMITS.PAGINATION_DEFAULT,
-    offset,
-    agent: filterAgent,
-    q: query,
-    routing,
-  });
+  const filterAgent = c.req.query("agent")?.trim() || undefined;
+  const tab = parseLogTab(c.req.query("tab"));
+  const routing = parseLogRouting(c.req.query("routing"));
+  const filterEntity = c.req.query("entity")?.trim() || undefined;
+  const range = parseActivityRange(c.req.query("range"));
+
   const allAgents = agents.list();
+  const shared = {
+    tab,
+    query,
+    routing,
+    filterAgent,
+    filterEntity,
+    filterRange: range,
+    agentRoles: Object.fromEntries(allAgents.map((a) => [a.name, a.role])),
+    userRole: agent?.role ?? undefined,
+    userName: agent?.name ?? undefined,
+    csrfToken: generateCsrfToken(cookieSecretFor(c.env)),
+  };
+
+  if (tab === "audit") {
+    const filter = { agent_name: filterAgent, entity_type: filterEntity, q: query, range };
+    return c.html(
+      <V2LogPage
+        {...shared}
+        events={activity.list({ ...filter, limit: LIMITS.PAGINATION_DEFAULT, offset })}
+        // "Busiest today" means today, not "the 50 rows we happened to fetch".
+        topActors={activity.topActors({ ...filter, since: startOfDayIso(), limit: 5 })}
+      />,
+    );
+  }
+
   return c.html(
-    <V2MessagesPage
-      result={result}
-      filterAgent={filterAgent}
-      filterRouting={routing}
-      query={query}
-      agentIds={Object.fromEntries(allAgents.map((a) => [a.name, a.id]))}
-      agentRoles={Object.fromEntries(allAgents.map((a) => [a.name, a.role]))}
-      userRole={agent?.role ?? undefined}
-      csrfToken={generateCsrfToken(cookieSecretFor(c.env))}
+    <V2LogPage
+      {...shared}
+      messages={listMessages(db, {
+        limit: LIMITS.PAGINATION_DEFAULT,
+        offset,
+        agent: filterAgent,
+        q: query,
+        routing: messageRoutingOf(routing),
+      })}
     />,
   );
 });
 
-// --- Dashboard: Activity Log ---
-app.get("/activity", (c) => {
-  const agent = c.get("agent");
-  const offsetParam = parseInt(c.req.query("offset") ?? "0", 10);
-  const offset = isNaN(offsetParam) || offsetParam < 0 ? 0 : offsetParam;
-  const result = activity.list({ limit: LIMITS.PAGINATION_DEFAULT, offset });
-  const allAgents = agents.list();
-  return c.html(
-    <V2ActivityPage
-      result={result}
-      filterEntity={c.req.query("entity")}
-      filterRange={c.req.query("range")}
-      agentIds={Object.fromEntries(allAgents.map((a) => [a.name, a.id]))}
-      agentRoles={Object.fromEntries(allAgents.map((a) => [a.name, a.role]))}
-      userRole={agent?.role ?? undefined}
-      csrfToken={generateCsrfToken(cookieSecretFor(c.env))}
-    />,
-  );
-});
+// --- Permanent redirects for the two routes Log replaced ---
+// The query string has to survive: ?agent= ?q= ?routing= ?offset= ?entity=
+// ?range= are all in use, and /conversations and the palette link to them.
+function logRedirect(c: { req: { url: string } }, extra?: Record<string, string>): string {
+  const incoming = new URL(c.req.url).searchParams;
+  const params = new URLSearchParams(extra);
+  for (const [key, value] of incoming) params.set(key, value);
+  const qs = params.toString();
+  return qs ? `/log?${qs}` : "/log";
+}
+
+app.get("/messages", (c) => c.redirect(logRedirect(c), 301));
+app.get("/activity", (c) => c.redirect(logRedirect(c, { tab: "audit" }), 301));
 
 // --- Dashboard: Conversations ---
 app.get("/conversations", (c) => {
@@ -440,9 +489,9 @@ app.get("/conversations", (c) => {
       selectedId={c.req.query("id")}
       query={query}
       filterAgent={filterAgent}
-      agentIds={Object.fromEntries(allAgents.map((a) => [a.name, a.id]))}
       agentRoles={Object.fromEntries(allAgents.map((a) => [a.name, a.role]))}
       userRole={agent?.role ?? undefined}
+      userName={agent?.name ?? undefined}
       csrfToken={csrfToken}
     />,
   );

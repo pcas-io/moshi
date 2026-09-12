@@ -1,18 +1,50 @@
-// V2 Overview ("Home") — SENTINEL Dark mission-control landing page.
-// Hero with grid pattern + green glow, KPI band, dark mesh topology,
-// SSE live thread, agent cards with working_on, recent activity.
-// Live-thread card hydrates via SSE (see /sse/threads/:correlation_id).
+// V2 Home — the "Daylight" landing page.
+//
+// The screen reads as a sentence before it reads as a dashboard: how many
+// agents are awake, what moved through the mesh today, and whether anything
+// wants the operator. Then the two things people actually read — the latest
+// conversation and what every agent is working on — and a standing offer to
+// connect one more.
+//
+// Gone from the SENTINEL version: the dark hero, the four-cell KPI band, the
+// force-directed mesh topology (and `layout-engine.ts` with it), the recent
+// activity list and the hidden avatar pool the SSE script used to clone from.
+// The live thread stays: it is the one place on the dashboard where waiting
+// for a reload would be wrong.
 
 import type { FC } from "hono/jsx";
-import { raw } from "hono/html";
-import type { Activity } from "../../types.js";
+import { PRESENCE_TTL_SECONDS } from "../../types.js";
 import type { Presence } from "../../services/presence.js";
-import type { MeshEdge, HourlyHeat } from "../../services/dashboard-stats.js";
+import type { AttentionItem } from "../../services/attention.js";
 import { V2Layout } from "./layout.js";
-import { V2Card, V2Btn, V2Avatar, V2Spark } from "./components.js";
-import { V2_TOKENS, greenGlow } from "./tokens.js";
-import { layoutMesh, type LayoutNode, type LayoutEdge } from "./layout-engine.js";
-import { renderAvatarSvgInner, renderAvatarSvg } from "./avatar.js";
+import { V2_TOKENS } from "./tokens.js";
+import {
+  CARD_STYLE,
+  PRESENCE_COLOR,
+  PRESENCE_WORD,
+  V2Avatar,
+  V2Btn,
+} from "./components.js";
+import { renderAvatarSvg } from "./avatar.js";
+import {
+  bubbleStyle,
+  colStyle,
+  headStyle,
+  PREVIEW_MAX,
+  rowStyle,
+  THREAD_BOX_ID,
+  threadScript,
+  TIME_STYLE,
+} from "./home-thread.js";
+
+const T = V2_TOKENS;
+
+/** The README is the product's documentation; there is no /docs route. */
+const DOCS_URL = "https://github.com/pcas-io/moshi#readme";
+
+// ── Props ───────────────────────────────────────────────────────
+// `loadV2HomeData` in services/v2-home-data.ts fills everything below
+// except `now` (tests pin it) and the two auth props the route adds.
 
 export interface V2HomeAgent {
   id: string;
@@ -20,14 +52,18 @@ export interface V2HomeAgent {
   role: string | null;
   presence: Presence;
   msg24: number;
-  heat: HourlyHeat;
   working_on: string | null;
   last_seen_at: string | null;
 }
 
 export interface V2HomeThread {
   correlation_id: string;
-  participants: string[]; // agent ids
+  /** The sender's own context line, shown after the participants. */
+  context: string | null;
+  /** Everyone in the thread, senders and recipients — may include "broadcast". */
+  participants: string[];
+  /** Full thread length; the card renders only the last few messages. */
+  messageCount: number;
   messages: Array<{
     id: string;
     from: string;
@@ -37,51 +73,53 @@ export interface V2HomeThread {
   }>;
 }
 
+/** The most recent incident of the last 24h, and who answered it. */
+export interface V2HomeIncident {
+  openedAt: string;
+  closedBy: string | null;
+  minutesToClose: number | null;
+}
+
 export interface V2HomeProps {
   stats: {
     agentsTotal: number;
     agentsLive: number;
     agentsStale: number;
-    agentsActive: number;
     msg24h: number;
     threads: number;
     incidents24h: number;
-    stream: { bytes: number; messages: number; maxAgeSeconds: number; maxBytes: number } | null;
   };
   agents: V2HomeAgent[];
-  edges: MeshEdge[];
+  attention: AttentionItem[];
+  latestIncident: V2HomeIncident | null;
   liveThread: V2HomeThread | null;
-  activities: Activity[];
+  /** Injectable clock — the date line, the incident wording and the live
+   *  window all read it, and a test needs them to stand still. */
+  now?: Date;
   userRole?: string;
+  userName?: string;
   csrfToken?: string;
 }
 
-const MONO = "var(--v2-font-mono)";
+// ── Formatting ──────────────────────────────────────────────────
 
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(0)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+/** `Friday, 12 September · 14:16` — composed by hand because no locale
+ *  puts the comma after the weekday AND the day before the month. */
+function fmtDateLine(d: Date): string {
+  const weekday = d.toLocaleDateString("en-GB", { weekday: "long" });
+  const month = d.toLocaleDateString("en-GB", { month: "long" });
+  return `${weekday}, ${d.getDate()} ${month} · ${fmtClock(d)}`;
 }
 
-function fmtSeconds(s: number): string {
-  if (s < 3600) return `${Math.round(s / 60)}m`;
-  if (s < 86400) return `${Math.round(s / 3600)}h`;
-  return `${Math.round(s / 86400)}d`;
+function fmtClock(d: Date): string {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-function fmtDate(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
+export function fmtTime(iso: string): string {
+  return fmtClock(new Date(iso));
 }
 
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toTimeString().slice(0, 5);
-}
-
-function fmtRel(iso: string | null, now: number = Date.now()): string {
+export function fmtRel(iso: string | null, now: number = Date.now()): string {
   if (!iso) return "—";
   const m = Math.round((now - new Date(iso).getTime()) / 60_000);
   if (m < 1) return "just now";
@@ -91,164 +129,11 @@ function fmtRel(iso: string | null, now: number = Date.now()): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function fmtUptime(seconds: number): string {
-  if (seconds < 3600) return `${Math.max(1, Math.floor(seconds / 60))}M`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}H`;
-  return `${Math.floor(seconds / 86400)}D`;
-}
-
-// Stable hue per agent name for thread-bubble tinting.
-function hueFor(name: string): number {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < name.length; i++) {
-    h ^= name.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return h % 360;
-}
-
-// ── Mesh-topology SVG (dark) ───────────────────────────────────────
-const MESH_W = 680;
-const MESH_H = 360;
-const RECENT_MS = 2 * 60 * 60 * 1000; // 2h
-const PULSE_MS = 5 * 60 * 1000;       // 5min
-
-const MeshGraph: FC<{ agents: V2HomeAgent[]; edges: MeshEdge[] }> = ({ agents, edges }) => {
-  if (agents.length === 0) {
-    return (
-      <div style={`width:100%;height:${MESH_H}px;display:flex;align-items:center;justify-content:center;color:${V2_TOKENS.textMute};font-family:${MONO};font-size:11px`}>
-        まだ · NO AGENTS YET
-      </div>
-    );
-  }
-
-  const nodes: LayoutNode[] = agents.map((a) => ({ id: a.name }));
-  const layoutEdges: LayoutEdge[] = edges.map((e) => ({ from: e.from, to: e.to, weight: e.count }));
-  // Aggressive spread for 12+ agents on the 680x360 canvas: weak gravity
-  // so nodes don't snap back to centre, strong repulsion + long edges to
-  // push them apart, generous initial radius so they start near the rim.
-  const positions = layoutMesh(nodes, layoutEdges, {
-    width: MESH_W,
-    height: MESH_H,
-    linkDistance: 150,
-    charge: 3500,
-    gravity: 0.012,
-    padding: 36,
-    initialRadiusFactor: 0.45,
-    iterations: 320,
-  });
-  const now = Date.now();
-  const maxCount = Math.max(1, ...edges.map((e) => e.count));
-  const presenceById = new Map(agents.map((a) => [a.name, a.presence]));
-
-  return (
-    <svg viewBox={`0 0 ${MESH_W} ${MESH_H}`} style="display:block;width:100%;max-width:820px;margin:0 auto;height:auto;overflow:visible">
-      {edges.map((e, i) => {
-        const a = positions.get(e.from);
-        const b = positions.get(e.to);
-        if (!a || !b) return null;
-        const recent = now - new Date(e.last).getTime() < RECENT_MS;
-        const sw = (0.5 + (e.count / maxCount) * 2).toFixed(2);
-        return (
-          <line key={i}
-            x1={a.x.toFixed(1)} y1={a.y.toFixed(1)}
-            x2={b.x.toFixed(1)} y2={b.y.toFixed(1)}
-            stroke={recent ? greenGlow(0.55) : "#333333"} stroke-width={sw} />
-        );
-      })}
-      {edges.filter((e) => now - new Date(e.last).getTime() < PULSE_MS).map((e, i) => {
-        const a = positions.get(e.from);
-        const b = positions.get(e.to);
-        if (!a || !b) return null;
-        return (
-          <circle key={`p${i}`} r="2.5" fill={V2_TOKENS.accent}>
-            <animateMotion dur="2.2s" repeatCount="indefinite"
-              path={`M${a.x.toFixed(1)},${a.y.toFixed(1)} L${b.x.toFixed(1)},${b.y.toFixed(1)}`} />
-          </circle>
-        );
-      })}
-      {agents.map((ag) => {
-        const p = positions.get(ag.name)!;
-        const presence = presenceById.get(ag.name);
-        const live = presence === "live";
-        const stroke = live ? V2_TOKENS.accent : presence === "stale" ? V2_TOKENS.warn : "#333333";
-        const N = 36;             // displayed avatar size in topology px-units
-        const half = N / 2;
-        const ringR = half + 5;   // pulse ring radius
-        const inner = renderAvatarSvgInner(ag.id, ag.role ?? undefined);
-        return (
-          <g key={ag.id} transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}>
-            {live && (
-              <circle r={ringR} fill={greenGlow(0.14)}>
-                <animate attributeName="r" values={`${ringR - 3};${ringR + 3};${ringR - 3}`} dur="2s" repeatCount="indefinite" />
-                <animate attributeName="opacity" values="0.9;0.15;0.9" dur="2s" repeatCount="indefinite" />
-              </circle>
-            )}
-            {/* Dark backdrop square with presence-colored stroke keeps the
-                silhouette readable on the charcoal canvas. */}
-            <rect x={-half - 1} y={-half - 1} width={N + 2} height={N + 2}
-              rx="5" ry="5"
-              fill="#1b1b1b"
-              stroke={stroke}
-              stroke-width={live ? "1.5" : "1"} />
-            {/* Avatar embedded as nested SVG shapes, scaled from 32→N */}
-            <g transform={`translate(${-half},${-half}) scale(${N / 32})`}
-               shape-rendering="crispEdges">
-              {raw(inner)}
-            </g>
-            <text y={half + 15} text-anchor="middle" font-size="11"
-              style={`font-family:var(--v2-font-sans);fill:${live ? "#d9d9d9" : "#777777"};font-weight:${live ? 600 : 400}`}>
-              {ag.name}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-};
-
-// ── KPI cell (hero band) ───────────────────────────────────────────
-const KpiCell: FC<{ bar: string; value: string; label: string }> = ({ bar, value, label }) => (
-  <div style={`background:${V2_TOKENS.bg};padding:18px clamp(16px,3vw,36px)`}>
-    <div style="display:flex;align-items:center;gap:8px">
-      <span style={`width:3px;height:26px;background:${bar}`} />
-      <span style="font-size:26px;font-weight:700;letter-spacing:-0.04em">{value}</span>
-    </div>
-    <div style={`font-size:10px;letter-spacing:0.18em;color:${V2_TOKENS.textMute};text-transform:uppercase;margin-top:6px`}>{label}</div>
-  </div>
-);
-
-// ── Thread bubble (dark oklch tint) ────────────────────────────────
-const ThreadBubble: FC<{
-  msg: V2HomeThread["messages"][0];
-  isLeft: boolean;
-  agentId: string;
-  agentRole?: string;
-}> = ({ msg, isLeft, agentId, agentRole }) => {
-  const dir = isLeft ? "row" : "row-reverse";
-  const align = isLeft ? "flex-start" : "flex-end";
-  const hue = hueFor(msg.from);
-  const corner = isLeft
-    ? "border-bottom-left-radius:2px;"
-    : "border-bottom-right-radius:2px;";
-  return (
-    <div data-msg-id={msg.id} style={`display:flex;gap:10px;margin-bottom:12px;align-items:flex-end;flex-direction:${dir}`}>
-      <V2Avatar agentId={agentId} role={agentRole} size={20} bordered />
-      <div style={`max-width:82%;display:flex;flex-direction:column;align-items:${align}`}>
-        <div style={`display:flex;align-items:baseline;gap:8px;margin-bottom:3px;flex-direction:${dir}`}>
-          <span style="font-size:11.5px;font-weight:600">{msg.from}</span>
-          <span style={`font-family:${MONO};font-size:9.5px;color:${V2_TOKENS.textMute}`}>{fmtTime(msg.created_at)}</span>
-        </div>
-        <div style={`background:oklch(0.23 0.035 ${hue});border:1px solid oklch(0.34 0.06 ${hue});border-radius:8px;${corner}padding:8px 12px;font-size:12px;line-height:1.5;color:#e8e8e8;white-space:pre-wrap`}>{previewPayload(msg.payload)}</div>
-      </div>
-    </div>
-  );
-};
-
-function previewPayload(rawStr: string, max: number = 240): string {
-  // Try JSON first — show .text or first stringy field. Fall back to raw.
+/** Show the message, not its envelope: a JSON payload's text field reads
+ *  better in a bubble than the JSON does. */
+export function previewPayload(rawStr: string, max: number = PREVIEW_MAX): string {
   try {
-    const obj = JSON.parse(rawStr);
+    const obj: unknown = JSON.parse(rawStr);
     if (typeof obj === "string") return obj.slice(0, max);
     if (obj && typeof obj === "object") {
       for (const key of ["text", "message", "summary", "payload"]) {
@@ -256,288 +141,468 @@ function previewPayload(rawStr: string, max: number = 240): string {
         if (typeof v === "string") return v.slice(0, max);
       }
     }
-  } catch { /* fall through */ }
+  } catch { /* not JSON — show it raw */ }
   return rawStr.slice(0, max);
 }
 
-// ── SSE hydration script ───────────────────────────────────────────
-// Subscribes to /sse/threads/:id and appends a bubble matching the
-// server-rendered ThreadBubble: avatar cloned from the hidden pool,
-// name + timestamp header, dark hue-tinted bubble with corner cut on
-// the sender side. Sender vs. receiver decided via `data-thread-a`.
-const SSE_SCRIPT = (correlationId: string) => raw(`<script>
-(function(){
-  if (typeof EventSource === 'undefined') return;
-  var box  = document.querySelector('[data-sse-thread="' + ${JSON.stringify(correlationId)} + '"]');
-  if (!box) return;
-  var pool = document.getElementById('v2-avatar-pool');
-  var threadA = (box.dataset.threadA || '').toLowerCase();
+// A sentence says "four agents", not "4 agents". Past twelve the word is
+// longer than the number is useful, so the digits come back.
+const NUMBER_WORDS = [
+  "zero", "one", "two", "three", "four", "five", "six",
+  "seven", "eight", "nine", "ten", "eleven", "twelve",
+] as const;
 
-  function getAvatar(name) {
-    if (!pool) return null;
-    var el = pool.querySelector('[data-name="' + CSS.escape(name.toLowerCase()) + '"]');
-    return el ? el.firstElementChild : null;
-  }
-  function fmtTime(iso) {
-    var d = new Date(iso);
-    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  }
-  function hueFor(name) {
-    var h = 2166136261;
-    for (var i = 0; i < name.length; i++) {
-      h ^= name.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    return ((h >>> 0) % 360);
-  }
-  function previewPayload(s) {
-    if (!s) return '';
-    try {
-      var o = JSON.parse(s);
-      if (typeof o === 'string') return o;
-      if (o && typeof o === 'object') {
-        var ks = ['text', 'message', 'summary', 'payload'];
-        for (var i = 0; i < ks.length; i++) if (typeof o[ks[i]] === 'string') return o[ks[i]];
-      }
-    } catch (e) { /* fall through */ }
-    return s;
-  }
-
-  function buildBubble(msg) {
-    var isLeft = !threadA || msg.from.toLowerCase() === threadA;
-    var hue = hueFor(msg.from);
-    var corner = isLeft ? 'border-bottom-left-radius:2px' : 'border-bottom-right-radius:2px';
-
-    var wrapper = document.createElement('div');
-    wrapper.setAttribute('data-msg-id', msg.id);
-    wrapper.style.cssText = 'display:flex;flex-direction:' + (isLeft ? 'row' : 'row-reverse') + ';gap:10px;margin-bottom:12px;align-items:flex-end;animation:v2-bubble-in 0.25s ease-out';
-
-    var avBox = document.createElement('span');
-    avBox.style.cssText = 'display:inline-flex;width:20px;height:20px;flex-shrink:0;border-radius:4px;overflow:hidden;border:1px solid #333333';
-    var av = getAvatar(msg.from);
-    if (av) avBox.appendChild(av.cloneNode(true));
-
-    var col = document.createElement('div');
-    col.style.cssText = 'max-width:82%;display:flex;flex-direction:column;align-items:' + (isLeft ? 'flex-start' : 'flex-end');
-
-    var head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:baseline;gap:8px;margin-bottom:3px;flex-direction:' + (isLeft ? 'row' : 'row-reverse');
-    var name = document.createElement('span');
-    name.style.cssText = 'font-size:11.5px;font-weight:600';
-    name.textContent = msg.from;
-    var time = document.createElement('span');
-    time.style.cssText = 'color:#666666;font-size:9.5px;font-family:"JetBrains Mono",monospace';
-    time.textContent = fmtTime(msg.created_at);
-    head.appendChild(name); head.appendChild(time);
-
-    var bub = document.createElement('div');
-    bub.style.cssText = 'background:oklch(0.23 0.035 ' + hue + ');border:1px solid oklch(0.34 0.06 ' + hue + ');border-radius:8px;' + corner + ';padding:8px 12px;font-size:12px;line-height:1.5;color:#e8e8e8;white-space:pre-wrap';
-    bub.textContent = previewPayload(msg.payload);
-
-    col.appendChild(head); col.appendChild(bub);
-    wrapper.appendChild(avBox); wrapper.appendChild(col);
-    return wrapper;
-  }
-
-  var es = new EventSource('/sse/threads/' + ${JSON.stringify(correlationId)});
-  es.addEventListener('message', function(ev) {
-    try {
-      var msg = JSON.parse(ev.data);
-      if (box.querySelector('[data-msg-id="' + msg.id + '"]')) return;
-      box.appendChild(buildBubble(msg));
-      box.scrollTop = box.scrollHeight;
-    } catch (e) { /* ignore malformed events */ }
-  });
-  window.addEventListener('beforeunload', function(){ es.close(); });
-})();
-</script>
-<style>
-@keyframes v2-bubble-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
+function spell(n: number): string {
+  return Number.isInteger(n) && n >= 0 && n < NUMBER_WORDS.length
+    ? NUMBER_WORDS[n]!
+    : String(n);
 }
-</style>`);
 
-// ── Page ───────────────────────────────────────────────────────────
-export const V2HomePage: FC<V2HomeProps> = ({
-  stats, agents, edges, liveThread, activities, userRole, csrfToken,
-}) => {
-  const off = stats.agentsTotal - stats.agentsLive - stats.agentsStale;
-  const uptime = fmtUptime(process.uptime());
-  const perMin = (stats.msg24h / 60 / 24).toFixed(1);
+function sentenceCase(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
-  const hero = (
-    <div class="v2-wrap v2-pad" style="position:relative;flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding-top:26px;padding-bottom:26px;z-index:2;min-height:280px">
-      <div class="v2-eyebrow v2-fade" style="letter-spacing:0.22em;animation-delay:0.2s">
-        MESH STATUS — {fmtDate(new Date().toISOString())}
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * COPY.md §4 — the headline variants, in this order.
+ *
+ * The copy ships four, and every one of them assumes at least two agents:
+ * at `total === 1` they read "One of your one agents is awake." and
+ * "All one of your agents are awake and talking." That is the first-run
+ * screen, so it gets its own sentence rather than broken grammar. The
+ * deviation is deliberate and wants a COPY.md entry.
+ */
+export function homeHeadline(live: number, total: number): string {
+  if (live === 0) return "Nobody is online right now.";
+  if (total === 1) return "Your one agent is awake and talking.";
+  if (live === 1) return `One of your ${spell(total)} agents is awake.`;
+  if (live === total) return `All ${spell(total)} of your agents are awake and talking.`;
+  return `${sentenceCase(spell(live))} of your ${spell(total)} agents are awake and talking.`;
+}
+
+function partOfDay(d: Date): string {
+  const h = d.getHours();
+  if (h < 12) return "morning";
+  if (h < 18) return "afternoon";
+  return "evening";
+}
+
+// ── Headline block ──────────────────────────────────────────────
+
+const COUNTER_BOX =
+  `background:${T.card};border:1px solid ${T.line};border-radius:${T.radiusInner}px;padding:14px 18px;min-width:120px`;
+
+const Counter: FC<{ dot: string; value: number; label: string }> = ({ dot, value, label }) => (
+  <div style={COUNTER_BOX}>
+    <div style="display:flex;align-items:center;gap:7px">
+      <span style={`width:8px;height:8px;border-radius:50%;background:${dot}`} />
+      <span style="font-size:22px;font-weight:600;letter-spacing:-0.02em">{value}</span>
+    </div>
+    <div style={`font-size:13px;color:${T.dim};margin-top:2px`}>{label}</div>
+  </div>
+);
+
+const Headline: FC<{
+  stats: V2HomeProps["stats"];
+  incident: V2HomeIncident | null;
+  now: Date;
+}> = ({ stats, incident, now }) => {
+  const asleep = Math.max(0, stats.agentsTotal - stats.agentsLive - stats.agentsStale);
+  return (
+    <div class="m-rise" style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;margin-bottom:26px">
+      <div style="flex:1 1 420px;min-width:0">
+        {/* `dim` is rated against `card`; this line sits on `paper`, where it
+            measures 4.20:1. `faint` is the contract's fallback at 5.13:1. */}
+        <div style={`font-size:13px;color:${T.faint};margin-bottom:6px`}>{fmtDateLine(now)}</div>
+        <h1 style="margin:0 0 10px;font-size:clamp(26px,3.2vw,34px);font-weight:600;letter-spacing:-0.025em;line-height:1.2">
+          {homeHeadline(stats.agentsLive, stats.agentsTotal)}
+        </h1>
+        <p style={`margin:0;font-size:16px;color:${T.body};max-width:62ch`}>
+          {`${plural(stats.msg24h, "message", "messages")} moved through the mesh today ` +
+            `across ${plural(stats.threads, "thread", "threads")}.`}
+          <IncidentClause count={stats.incidents24h} incident={incident} />
+        </p>
       </div>
-      <h1 class="v2-fade" style="margin:8px 0 10px;font-size:clamp(34px,4.6vw,62px);font-weight:700;line-height:1.02;letter-spacing:-0.05em;text-transform:uppercase;animation-delay:0.35s">
-        {stats.agentsLive}/{stats.agentsTotal} Agents <span style={`color:${V2_TOKENS.accent}`}>Online</span>
-      </h1>
-      <p class="v2-fade" style="margin:0 0 6px;font-weight:300;font-size:clamp(15px,1.6vw,19px);color:rgba(245,245,245,0.8);animation-delay:0.5s">
-        Async agent-to-agent messaging, done right.
-      </p>
-      <p class="v2-fade" style={`margin:0;font-weight:300;font-size:13px;color:${V2_TOKENS.textDim};animation-delay:0.6s`}>
-        {stats.msg24h} messages routed in the last 24 hours · {stats.threads} threads · {stats.incidents24h} incident{stats.incidents24h === 1 ? "" : "s"}/24h.
-      </p>
-      <div class="v2-fade" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;animation-delay:0.7s">
-        {userRole === "admin" && (
-          <V2Btn href="/agents?new=1" kind="primary">+ Register Agent</V2Btn>
-        )}
-        <V2Btn href="/conversations" kind="secondary">Open Conversations</V2Btn>
-      </div>
-      <div class="v2-fade" style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute};margin-top:16px;letter-spacing:0.06em;animation-delay:0.85s`}>
-        moshi.enki.run · NATS JETSTREAM · SINGLE-NODE · UPTIME {uptime}
+      {/* `flex:0 0 auto` alone pins the strip at its one-line max-content
+          (3 × 120px + gaps = 380px), which scrolls a 360px phone sideways
+          before the counters ever get to wrap. `max-width` clamps the
+          hypothetical size instead, so they wrap as §5 intends. */}
+      <div style="flex:0 0 auto;max-width:100%;display:flex;gap:10px;flex-wrap:wrap">
+        <Counter dot={PRESENCE_COLOR.live} value={stats.agentsLive} label="online now" />
+        <Counter dot={PRESENCE_COLOR.stale} value={stats.agentsStale} label="quiet a while" />
+        <Counter dot={PRESENCE_COLOR.offline} value={asleep} label="asleep" />
       </div>
     </div>
   );
+};
+
+/**
+ * COPY.md §4 sentence two. The copy names the agent who closed the incident
+ * and how long it took, so both come from the database — saying "closed it
+ * 12 minutes later" without knowing that would be an invention, and saying
+ * "this afternoon" at nine in the morning would be another.
+ */
+const IncidentClause: FC<{ count: number; incident: V2HomeIncident | null }> = ({ count, incident }) => {
+  if (count <= 0) return null;
+  const when = incident ? `this ${partOfDay(new Date(incident.openedAt))}` : "today";
+  const closer = incident?.closedBy;
+  const later = incident?.minutesToClose
+    ? plural(incident.minutesToClose, "minute", "minutes")
+    : null;
+
+  if (count === 1) {
+    return closer && later
+      ? (
+        <>
+          {` One incident came in ${when} and `}
+          <strong style="font-weight:600">{closer}</strong>
+          {` closed it ${later} later.`}
+        </>
+      )
+      : <>{` One incident came in ${when} and nobody has answered it yet.`}</>;
+  }
+  const head = `${sentenceCase(spell(count))} incidents came in today`;
+  return closer && later
+    ? (
+      <>
+        {` ${head} — `}
+        <strong style="font-weight:600">{closer}</strong>
+        {` closed the latest one ${later} later.`}
+      </>
+    )
+    : <>{` ${head}, and the latest one is still unanswered.`}</>;
+};
+
+// ── Needs-attention band ────────────────────────────────────────
+
+/** Two named items at most; a third and beyond live in the count. */
+const ATTENTION_SHOWN = 2;
+
+const BAND_TITLE: Record<number, string> = {
+  1: "One thing wants your attention",
+  2: "Two things want your attention",
+};
+
+const AttentionBand: FC<{ items: AttentionItem[] }> = ({ items }) => {
+  const n = items.length;
+  if (n === 0) return null;
+  const title = BAND_TITLE[n] ?? `${n} things want your attention`;
+  const label = n === 1 ? "Review it" : n === 2 ? "Review both" : `Review all ${n}`;
+  // buildAttentionItems returns the list in priority order, so the first item
+  // is the one to act on first — and there is no page that shows all three
+  // sources at once to send the button to instead.
+  const href = items[0]!.href;
+  const shown = items.slice(0, ATTENTION_SHOWN);
 
   return (
-    <V2Layout title="Overview" active="HOME" userRole={userRole} csrfToken={csrfToken} hero={hero}>
-      {/* KPI band */}
-      <div style={`margin:0 calc(-1 * clamp(16px,3vw,36px));border-top:1px solid ${V2_TOKENS.line};border-bottom:1px solid ${V2_TOKENS.line}`}>
-        <div style={`background:${V2_TOKENS.line};display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1px`}>
-          <KpiCell bar={V2_TOKENS.accent} value={`${stats.agentsLive}/${stats.agentsTotal}`} label={`Agents Live · ${stats.agentsStale} stale`} />
-          <KpiCell bar={V2_TOKENS.accent} value={String(stats.msg24h)} label={`MSG / 24h · ${perMin}/min · cap 60/min`} />
-          <KpiCell bar="#3a3a3a" value={String(stats.threads)} label="Threads · correlation_id" />
-          <KpiCell
-            bar={V2_TOKENS.info}
-            value={stats.stream ? fmtBytes(stats.stream.bytes) : "—"}
-            label={stats.stream
-              ? `NATS Stream · ${fmtSeconds(stats.stream.maxAgeSeconds)} · ${fmtBytes(stats.stream.maxBytes)}`
-              : "NATS Stream · unreachable"}
-          />
-        </div>
-      </div>
-
-      <div class="v2-pad">
-        {/* Mesh + Live thread row */}
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(440px,100%),1fr));gap:14px;padding-top:24px">
-          <V2Card title="Mesh Topology" sub="last 7 days"
-            right={<span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.accent};letter-spacing:0.1em`}>● LIVE</span>}>
-            <div style="padding:10px;background-image:radial-gradient(circle,#1f1f1f 1px,transparent 1px);background-size:22px 22px">
-              <MeshGraph agents={agents} edges={edges} />
-            </div>
-          </V2Card>
-
-          <V2Card title="Live Thread"
-            sub={liveThread ? liveThread.correlation_id : "no active thread"}
-            right={<span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.accent};border:1px solid ${greenGlow(0.4)};padding:2px 8px;border-radius:2px;letter-spacing:0.1em`}>SSE</span>}>
-            <div
-              data-sse-thread={liveThread?.correlation_id ?? ""}
-              data-thread-a={liveThread?.participants[0] ?? ""}
-              style="padding:16px 18px;max-height:360px;overflow-y:auto">
-              {liveThread && liveThread.messages.length > 0 ? (
-                liveThread.messages.map((m) => {
-                  const isLeft = liveThread.participants[0]?.toLowerCase() === m.from.toLowerCase();
-                  const fromAgent = agents.find((a) => a.name.toLowerCase() === m.from.toLowerCase());
-                  return (
-                    <ThreadBubble
-                      msg={m}
-                      isLeft={isLeft}
-                      agentId={fromAgent?.id ?? m.from}
-                      agentRole={fromAgent?.role ?? undefined}
-                    />
-                  );
-                })
-              ) : (
-                <div style={`padding:24px;text-align:center;color:${V2_TOKENS.textMute};font-family:${MONO};font-size:11px`}>
-                  しずか · ALL QUIET
-                </div>
-              )}
-              {liveThread && (
-                <a href={`/conversations?id=${encodeURIComponent(liveThread.correlation_id)}`}
-                  style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.accent};letter-spacing:0.08em`}>
-                  OPEN THREAD →
-                </a>
-              )}
-            </div>
-          </V2Card>
-        </div>
-
-        {/* Agents section */}
-        <div style="padding-top:24px">
-          <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px;flex-wrap:wrap">
-            <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase">
-              Agents <span style={`color:${V2_TOKENS.textMute};font-weight:400`}>— {stats.agentsTotal} registered</span>
-            </div>
-            <div style={`flex:1;height:1px;background:${V2_TOKENS.line};min-width:40px`} />
-            <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.accent}`}>● {stats.agentsLive} LIVE</span>
-            <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.warn}`}>● {stats.agentsStale} STALE</span>
-            <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.textFaint}`}>● {off} OFF</span>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px">
-            {agents.map((a) => {
-              const live = a.presence === "live";
-              const cardBd = live ? greenGlow(0.35) : "#2a2a2a";
-              const nameColor = a.presence === "offline" || a.presence === "never" ? "#8a8a8a" : V2_TOKENS.text;
-              const dotColor = live ? V2_TOKENS.accent : a.presence === "stale" ? V2_TOKENS.warn : "#4a4a4a";
-              const dotShadow = live ? `box-shadow:0 0 8px ${greenGlow(0.6)}` : "";
-              return (
-                <div style={`background:${V2_TOKENS.surface};border:1px solid ${cardBd};border-radius:6px;padding:13px 14px`}>
-                  <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px">
-                    <V2Avatar agentId={a.id} role={a.role ?? undefined} size={26} />
-                    <div style="flex:1;overflow:hidden">
-                      <div style={`font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:${nameColor}`}>{a.name}</div>
-                      <div style={`font-family:${MONO};font-size:9.5px;color:${V2_TOKENS.textMute};white-space:nowrap;overflow:hidden;text-overflow:ellipsis`}>{a.role ?? "—"}</div>
-                    </div>
-                    <span style={`width:6px;height:6px;border-radius:50%;flex-shrink:0;background:${dotColor};${dotShadow}`} />
-                  </div>
-                  <div style={`font-size:11px;color:${a.working_on ? V2_TOKENS.textDim : "#4a4a4a"};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:10px`}>
-                    <span style={`color:${V2_TOKENS.accent}`}>▸</span> {a.working_on ?? "—"}
-                  </div>
-                  <div style="display:flex;align-items:flex-end;justify-content:space-between">
-                    <div>
-                      <div style={`font-size:15px;font-weight:700;letter-spacing:-0.02em;color:${a.msg24 > 0 ? V2_TOKENS.text : V2_TOKENS.textFaint}`}>{a.msg24}</div>
-                      <div style={`font-size:8.5px;color:${V2_TOKENS.textMute};letter-spacing:0.15em`}>24H</div>
-                    </div>
-                    <V2Spark data={a.heat} w={64} h={18}
-                      stroke={a.msg24 > 0 ? V2_TOKENS.accent : "#3a3a3a"} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Recent activity */}
-        <div style="padding-top:24px;padding-bottom:26px">
-          <V2Card title="Recent Activity" sub="last 6 events"
-            right={<a href="/activity" style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.accent};letter-spacing:0.08em`}>VIEW ALL →</a>}>
-            {activities.length === 0 ? (
-              <div style={`padding:24px;text-align:center;color:${V2_TOKENS.textMute};font-family:${MONO};font-size:11px`}>
-                まだ · NOTHING YET
-              </div>
-            ) : (
-              activities.slice(0, 6).map((ev) => {
-                const ag = agents.find((a) => a.name === ev.agent_name);
-                return (
-                  <div style={`display:grid;grid-template-columns:56px 24px minmax(160px,1fr) minmax(110px,150px);align-items:center;gap:14px;padding:9px 18px;border-top:1px solid ${V2_TOKENS.lineRow}`}>
-                    <span style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute}`}>{fmtRel(ev.created_at)}</span>
-                    {ag ? <V2Avatar agentId={ag.id} role={ag.role ?? undefined} size={18} /> : <div />}
-                    <span style={`font-size:12.5px;color:${V2_TOKENS.textBody};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>{ev.summary ?? ev.action}</span>
-                    <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.textMute};text-align:right;letter-spacing:0.06em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>{ev.action}</span>
-                  </div>
-                );
-              })
-            )}
-          </V2Card>
-        </div>
-      </div>
-
-      {/* Hidden avatar pool — the SSE script clones from here to avoid
-          re-running the avatar generator client-side. One entry per agent
-          known at page render. Unknown senders fall back to no avatar. */}
-      {liveThread && (
-        <div id="v2-avatar-pool" hidden>
-          {agents.map((a) => (
-            <div data-name={a.name.toLowerCase()}>
-              {raw(renderAvatarSvg(a.id, a.role ?? undefined, { size: 20 }))}
-            </div>
+    <div
+      style={`background:${T.amberSoft};border:1px solid ${T.amberLine};border-radius:${T.radiusBox}px;` +
+        "padding:18px 20px;display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-bottom:26px"}
+    >
+      <span
+        aria-hidden="true"
+        style={`width:26px;height:26px;border-radius:9px;background:${T.amber};color:${T.card};` +
+          "display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0"}
+      >
+        !
+      </span>
+      <div style="flex:1 1 320px;min-width:0">
+        <div style="font-size:15px;font-weight:600;margin-bottom:3px">{title}</div>
+        {/* amberInk is too saturated for a full line of body text; this is
+            the band's reading colour, 6.3:1 on amberSoft. */}
+        <div style="font-size:14px;color:#63594a">
+          {shown.map((item, i) => (
+            <span key={item.href + String(i)}>
+              {i > 0 ? " · " : ""}
+              {item.agent ? <strong style="font-weight:600">{item.agent}</strong> : null}
+              {`${item.agent ? " " : ""}${item.text}${i === shown.length - 1 ? "." : ""}`}
+            </span>
           ))}
         </div>
+      </div>
+      <V2Btn
+        kind="white"
+        href={href}
+        style={`border-color:#e0cfa8;color:${T.amberInk};padding:9px 15px;border-radius:9px`}
+      >
+        {label}
+      </V2Btn>
+    </div>
+  );
+};
+
+// ── Card A — Latest conversation ────────────────────────────────
+
+const CARD_SHELL = `${CARD_STYLE};overflow:hidden`;
+const CARD_HEAD = `padding:18px 22px 14px;border-bottom:1px solid ${T.lineSoft}`;
+const CARD_H2 = "margin:0;font-size:16px;font-weight:600";
+const CARD_SUB = `font-size:13px;color:${T.dim}`;
+
+/** Messages shown in the card; the footer still counts the whole thread. */
+const BUBBLES_SHOWN = 4;
+
+/** `to_agent` sentinel for a message sent to everyone (message-queries.ts). */
+const BROADCAST = "broadcast";
+
+/** `participants` carries recipients too, so it can hold the wire sentinel.
+ *  It is a destination, not a party to the conversation. */
+function namedParticipants(thread: V2HomeThread | null): string[] {
+  return (thread?.participants ?? []).filter((p) => p !== BROADCAST);
+}
+
+/** COPY.md §7 — the same title the Conversations screen gives this thread. */
+function threadTitle(thread: V2HomeThread | null): string {
+  const [a, b] = namedParticipants(thread);
+  if (!a) return "";
+  if (thread?.participants.includes(BROADCAST)) return `${a} and everyone`;
+  return b ? `${a} and ${b}` : a;
+}
+
+/** One side of the conversation sits right for the whole card — the second
+ *  named participant, the way the Conversations screen orders them. The
+ *  server render and the SSE script must agree on it, so both ask here. */
+function rightSide(thread: V2HomeThread | null): string {
+  return (namedParticipants(thread)[1] ?? "").toLowerCase();
+}
+
+const LatestConversation: FC<{
+  thread: V2HomeThread | null;
+  agents: V2HomeAgent[];
+  now: Date;
+}> = ({ thread, agents, now }) => {
+  const roleOf = (name: string): string | undefined =>
+    agents.find((a) => a.name.toLowerCase() === name.toLowerCase())?.role ?? undefined;
+  const presenceOf = (name: string): Presence | undefined =>
+    agents.find((a) => a.name.toLowerCase() === name.toLowerCase())?.presence;
+
+  const messages = thread?.messages ?? [];
+  const sub = [threadTitle(thread), thread?.context].filter(Boolean).join(" · ");
+  const mine = rightSide(thread);
+  const last = messages[messages.length - 1];
+  const isLive = Boolean(
+    last &&
+    now.getTime() - new Date(last.created_at).getTime() < PRESENCE_TTL_SECONDS * 1000 &&
+    namedParticipants(thread).some((p) => presenceOf(p) === "live"),
+  );
+
+  return (
+    <section style={CARD_SHELL}>
+      <div style={`${CARD_HEAD};display:flex;align-items:center;gap:12px`}>
+        <div style="flex:1;min-width:0">
+          <h2 style={CARD_H2}>Latest conversation</h2>
+          {sub ? <div style={CARD_SUB}>{sub}</div> : null}
+        </div>
+        {isLive && (
+          <span
+            style={`display:inline-flex;align-items:center;gap:6px;font-size:12px;color:${T.greenDeep};` +
+              `background:${T.greenSoft};padding:4px 10px;border-radius:${T.radiusPill}px`}
+          >
+            <span class="m-pulse" style={`width:6px;height:6px;border-radius:50%;background:${T.live}`} />
+            live
+          </span>
+        )}
+      </div>
+
+      <div
+        id={THREAD_BOX_ID}
+        style="padding:18px 22px;display:flex;flex-direction:column;gap:14px;max-height:340px;overflow-y:auto"
+      >
+        {messages.length === 0 ? (
+          <div data-empty="1" style={`font-size:14px;color:${T.faint};padding:26px 0;text-align:center`}>
+            Nothing here yet · しずか — no conversations so far.
+          </div>
+        ) : (
+          messages.slice(-BUBBLES_SHOWN).map((m) => {
+            const isMine = m.from.toLowerCase() === mine;
+            return (
+              <div key={m.id} data-msg-id={m.id} style={rowStyle(isMine)}>
+                <V2Avatar name={m.from} role={roleOf(m.from)} size={28} bordered />
+                <div style={colStyle(isMine)}>
+                  <div style={headStyle(isMine)}>
+                    <span style="font-size:13px;font-weight:600">{m.from}</span>
+                    <span style={TIME_STYLE} title={fmtRel(m.created_at, now.getTime())}>
+                      {fmtTime(m.created_at)}
+                    </span>
+                  </div>
+                  <div style={bubbleStyle(isMine)}>{previewPayload(m.payload)}</div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {thread && (
+        <div
+          style={`padding:14px 22px;border-top:1px solid ${T.lineSoft};display:flex;gap:12px;align-items:center;flex-wrap:wrap`}
+        >
+          <a
+            href={`/conversations?id=${encodeURIComponent(thread.correlation_id)}`}
+            style="font-size:14px;font-weight:600"
+          >
+            Read the whole thread →
+          </a>
+          <span style="flex:1" />
+          <span style={`font-size:13px;color:${T.faint}`}>
+            {plural(thread.messageCount, "message", "messages")}
+          </span>
+        </div>
       )}
-      {liveThread && SSE_SCRIPT(liveThread.correlation_id)}
+    </section>
+  );
+};
+
+// ── Card B — What everyone is working on ────────────────────────
+
+/** COPY.md §6 words, with `never seen` folded into `asleep` — Home has no
+ *  room for the distinction, the Agents table makes it. */
+function presenceWord(p: Presence): string {
+  return PRESENCE_WORD[p === "never" ? "offline" : p];
+}
+
+/** `dim` fails 4.5:1 on these grounds at 12px, so the pills read in `faint`. */
+const PRESENCE_PILL: Record<Presence, readonly [string, string]> = {
+  live: [T.greenDeep, T.greenSoft],
+  stale: [T.amberInk, T.amberSoft],
+  offline: [T.faint, T.subtle],
+  never: [T.faint, T.subtle],
+};
+
+/** Rows shown before the footer link takes over. */
+const AGENT_ROWS_SHOWN = 5;
+
+const WorkingOn: FC<{ agents: V2HomeAgent[]; total: number }> = ({ agents, total }) => (
+  <section style={CARD_SHELL}>
+    <div style={CARD_HEAD}>
+      <h2 style={CARD_H2}>What everyone is working on</h2>
+      <div style={CARD_SUB}>From each agent's last mesh_register call</div>
+    </div>
+    <div>
+      {agents.slice(0, AGENT_ROWS_SHOWN).map((a) => {
+        const [ink, ground] = PRESENCE_PILL[a.presence];
+        return (
+          <div
+            key={a.id}
+            class="d-row"
+            style={`display:flex;gap:12px;align-items:center;padding:13px 22px;border-bottom:1px solid ${T.lineRow}`}
+          >
+            <V2Avatar name={a.name} role={a.role} size={34} bordered />
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:7px">
+                <span style="font-size:14px;font-weight:600">{a.name}</span>
+                <span
+                  style={`font-size:12px;color:${ink};background:${ground};padding:1px 9px;border-radius:${T.radiusPill}px`}
+                >
+                  {presenceWord(a.presence)}
+                </span>
+              </div>
+              <div
+                style={`font-size:13.5px;color:${a.working_on ? T.body : T.faint};` +
+                  "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"}
+              >
+                {a.working_on || "Nothing announced"}
+              </div>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-size:14px;font-weight:600">{a.msg24}</div>
+              <div style={`font-size:11.5px;color:${T.faint}`}>msgs today</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+    <div style="padding:14px 22px">
+      <a href="/agents" style="font-size:14px;font-weight:600">All {total} agents →</a>
+    </div>
+  </section>
+);
+
+// ── Connect prompt ──────────────────────────────────────────────
+
+const CONNECT_HEADING = "Adding an agent takes about a minute";
+const CONNECT_BODY =
+  "Name it, copy the token, paste one command into your client. " +
+  "We'll wait for its first handshake and tell you when it's in.";
+const BIG_BTN = "font-size:15px;padding:12px 20px";
+
+const ConnectButtons: FC<{ justify?: string }> = ({ justify }) => (
+  <div style={`display:flex;gap:10px;flex-wrap:wrap;${justify ? `justify-content:${justify}` : ""}`}>
+    <V2Btn kind="primary" href="/agents/connect" style={BIG_BTN}>Connect an agent</V2Btn>
+    <V2Btn kind="secondary" href={DOCS_URL} style={BIG_BTN}>Read the docs</V2Btn>
+  </div>
+);
+
+const ConnectPrompt: FC = () => (
+  <section
+    style={`${CARD_STYLE};padding:24px;display:grid;` +
+      "grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:22px;align-items:center"}
+  >
+    <div>
+      <h2 style="margin:0 0 6px;font-size:17px;font-weight:600">{CONNECT_HEADING}</h2>
+      <p style={`margin:0;font-size:14.5px;color:${T.body}`}>{CONNECT_BODY}</p>
+    </div>
+    <ConnectButtons justify="flex-end" />
+  </section>
+);
+
+/** Zero agents: the invitation is the page, not a footnote under an empty one. */
+const ConnectHero: FC = () => (
+  <section
+    class="m-rise"
+    style={`${CARD_STYLE};padding:56px clamp(24px,5vw,56px);margin:26px auto 0;max-width:720px`}
+  >
+    <div style={`font-size:13px;color:${T.dim};margin-bottom:6px`}>
+      No agents yet · まだ — connect your first one.
+    </div>
+    <h1 style="margin:0 0 10px;font-size:clamp(26px,3.2vw,34px);font-weight:600;letter-spacing:-0.025em;line-height:1.2">
+      {CONNECT_HEADING}
+    </h1>
+    <p style={`margin:0 0 22px;font-size:16px;color:${T.body};max-width:62ch`}>{CONNECT_BODY}</p>
+    <ConnectButtons />
+  </section>
+);
+
+// ── Page ────────────────────────────────────────────────────────
+
+export const V2HomePage: FC<V2HomeProps> = ({
+  stats, agents, attention, latestIncident, liveThread, now, userRole, userName, csrfToken,
+}) => {
+  const clock = now ?? new Date();
+  const empty = stats.agentsTotal === 0;
+  const mine = rightSide(liveThread);
+  // Only the thread's own parties. The whole roster would inline up to
+  // MAX_AGENTS emblems at ~850 bytes each into a script that draws two or
+  // three; an unknown sender falls back to the plain bordered box.
+  const emblems: Record<string, string> = {};
+  if (liveThread) {
+    const parties = new Set(namedParticipants(liveThread).map((p) => p.toLowerCase()));
+    for (const a of agents) {
+      const key = a.name.toLowerCase();
+      if (parties.has(key)) emblems[key] = renderAvatarSvg(a.name, a.role ?? undefined, { size: 28 });
+    }
+  }
+
+  return (
+    <V2Layout title="Home" active="HOME" userRole={userRole} userName={userName} csrfToken={csrfToken}>
+      {empty ? (
+        <ConnectHero />
+      ) : (
+        <>
+          <Headline stats={stats} incident={latestIncident} now={clock} />
+          <AttentionBand items={attention} />
+          <div
+            style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(460px,100%),1fr));gap:18px;margin-bottom:26px"
+          >
+            <LatestConversation thread={liveThread} agents={agents} now={clock} />
+            <WorkingOn agents={agents} total={stats.agentsTotal} />
+          </div>
+          <ConnectPrompt />
+          {liveThread && threadScript(liveThread.correlation_id, mine, emblems)}
+        </>
+      )}
     </V2Layout>
   );
 };
