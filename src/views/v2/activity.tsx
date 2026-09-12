@@ -1,180 +1,202 @@
-// V2 Activity — SENTINEL Dark event stream + filter sidebar + top actors.
+// Log · Audit trail tab — the event stream and the "Busiest today" aside
+// for `/log?tab=audit`.
+//
+// This file used to be a page (`V2ActivityPage`) that also did the
+// filtering: it counted entities and applied the time range over the 50
+// rows it had already fetched. Both are SQL now (`ActivityService.list`,
+// `ActivityService.topActors`), so this file only renders.
 
-import type { FC } from "hono/jsx";
+import type { Child, FC } from "hono/jsx";
 import type { Activity, PaginatedResult } from "../../types.js";
-import { V2Layout } from "./layout.js";
-import { V2Card, V2Avatar, entityColor } from "./components.js";
-import { V2_TOKENS, greenGlow } from "./tokens.js";
+import type { ActivityActorCount } from "../../services/activity.js";
+import { isOperatorActor } from "../../services/activity.js";
+import { V2Avatar, avatarRadius } from "./components.js";
+import { V2_FONT_FAMILY_MONO, V2_TOKENS, kindColors } from "./tokens.js";
+import { BROADCAST_RECIPIENT, LOG_CARD_STYLE, LOG_EMPTY_TEXT, LogEmptyBlock } from "./messages.js";
 
-export interface V2ActivityProps {
-  result: PaginatedResult<Activity>;
-  filterEntity?: string;
-  filterRange?: string;
-  agentIds: Record<string, string>;
-  agentRoles: Record<string, string | null>;
-  userRole?: string;
-  csrfToken?: string;
+const T = V2_TOKENS;
+
+const GRID = "display:grid;grid-template-columns:56px 26px 1fr 150px;gap:14px";
+const ELLIPSIS = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+
+/** COPY §8 — an audit row names a thing, not a table. */
+const ENTITY_LABELS: Record<string, string> = {
+  message: "message",
+  session: "sign-in",
+  agent: "agent change",
+};
+
+export function entityLabel(entityType: string): string {
+  return ENTITY_LABELS[entityType] ?? entityType;
 }
 
-const MONO = "var(--v2-font-mono)";
-const GRID = "46px 22px 84px minmax(160px,1fr) minmax(0,140px)";
-
-const RANGE_OPTIONS: ReadonlyArray<readonly [string, string, number]> = [
-  ["15m",   "Last 15m",  15 * 60 * 1000],
-  ["1h",    "Last 1h",   60 * 60 * 1000],
-  ["24h",   "Last 24h",  24 * 60 * 60 * 1000],
-  ["all",   "All time",  Number.POSITIVE_INFINITY],
-];
-
-function fmtTime(iso: string): string {
-  return new Date(iso).toTimeString().slice(0, 5);
+/**
+ * Names the write side quotes into its summaries: `Agent "scout" created`,
+ * `Agent "old" renamed to "new"`. Parsing them back is the only way to put
+ * the name in a sentence without rewriting every producer of an audit row.
+ */
+function quotedNames(summary: string | null): string[] {
+  if (!summary) return [];
+  return Array.from(summary.matchAll(/"([^"]+)"/g), (m) => m[1]);
 }
 
-function fmtHeadDate(): string {
-  return new Date().toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
-}
+/**
+ * An audit row as a sentence about a person (COPY §8).
+ *
+ * The action strings are the snake_case ones the services actually write
+ * (`grep -rn 'action: "' src`), not the dotted names the copy deck guesses
+ * at. There is no distinct MCP action: an agent checking in over MCP and
+ * the operator signing in are both `auth_login`, told apart by whether the
+ * actor is the operator.
+ *
+ * Anything unparseable falls back to the stored summary, then to the raw
+ * action — which is on the row's `title` either way.
+ */
+export function auditSentence(ev: Activity): string {
+  const fallback = ev.summary ?? ev.action;
+  const names = quotedNames(ev.summary);
 
-function buildUrl(params: Record<string, string | undefined>): string {
-  const u = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v) u.set(k, v);
-  const qs = u.toString();
-  return qs ? `/activity?${qs}` : "/activity";
-}
-
-const AdminBadge: FC<{ size?: number }> = ({ size = 18 }) => (
-  <span style={`width:${size}px;height:${size}px;border-radius:4px;background:${V2_TOKENS.btn3};border:1px solid #3a3a3a;color:${V2_TOKENS.accent};display:inline-flex;align-items:center;justify-content:center;font-size:${size < 16 ? 8 : 9}px;font-weight:700;font-family:${MONO};flex-shrink:0`}>A</span>
-);
-
-export const V2ActivityPage: FC<V2ActivityProps> = ({
-  result, filterEntity, filterRange, agentIds, agentRoles, userRole, csrfToken,
-}) => {
-  const { data: activities, total, has_more, offset, limit } = result;
-  const now = Date.now();
-  const rangeMs = RANGE_OPTIONS.find(([k]) => k === filterRange)?.[2] ?? Number.POSITIVE_INFINITY;
-  const visible = activities.filter((a) =>
-    (!filterEntity || a.entity_type === filterEntity)
-    && (now - new Date(a.created_at).getTime() <= rangeMs)
-  );
-
-  // Side-panel counts/totals over the full page (not just visible).
-  const entityCounts = new Map<string, number>();
-  for (const a of activities) entityCounts.set(a.entity_type, (entityCounts.get(a.entity_type) ?? 0) + 1);
-
-  const actorCounts = new Map<string, number>();
-  for (const a of activities) {
-    const k = a.agent_name ?? "admin";
-    actorCounts.set(k, (actorCounts.get(k) ?? 0) + 1);
+  switch (ev.action) {
+    case "message_sent": {
+      const pair = /^(\S+)\s*→\s*(\S+)/.exec(ev.summary ?? "");
+      const from = pair?.[1] ?? ev.agent_name;
+      const to = pair?.[2];
+      if (!from || !to) return fallback;
+      return to === BROADCAST_RECIPIENT ? `${from} messaged everyone` : `${from} messaged ${to}`;
+    }
+    case "auth_login":
+      return isOperatorActor(ev.agent_name)
+        ? "You signed in — session cookie issued"
+        : `${ev.agent_name} checked in over MCP`;
+    case "agent_created":
+      return names[0] ? `You created ${names[0]}` : fallback;
+    case "agent_revoked":
+      return names[0] ? `You deactivated ${names[0]}` : fallback;
+    case "agent_reactivated":
+      return names[0] ? `You reactivated ${names[0]}` : fallback;
+    case "agent_renamed":
+      return names[0] && names[1] ? `You renamed ${names[0]} to ${names[1]}` : fallback;
+    case "agent_token_reset":
+      return names[0] ? `You reset ${names[0]}'s token` : fallback;
+    case "agent_deleted":
+      return names[0] ? `You deleted ${names[0]}` : fallback;
+    default:
+      return fallback;
   }
-  const topActors = [...actorCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const topMax = Math.max(1, ...topActors.map(([, n]) => n));
+}
 
+/** COPY §8 — the operator reads their own events as "You". */
+export const OPERATOR_LABEL = "You";
+
+/**
+ * The actor: an emblem for an agent, a lettered box for the operator.
+ * 11px text uses `faint`; `dim` is 3.95:1 on `subtle`.
+ */
+const ActorCell: FC<{ name: string | null; role?: string | null; size: number }> = ({
+  name, role, size,
+}) => {
+  if (name !== null && !isOperatorActor(name)) {
+    return <V2Avatar name={name} role={role} size={size} bordered />;
+  }
   return (
-    <V2Layout title="Activity" active="LOG" userRole={userRole} csrfToken={csrfToken}>
-      <div class="v2-pad" style="padding-top:26px;padding-bottom:26px">
-        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
-          <div>
-            <div class="v2-eyebrow" style="margin-bottom:6px">AUDIT LOG — RETENTION 90D</div>
-            <h1 class="v2-h1">Activity <span style={`color:${V2_TOKENS.textFaint};font-weight:400`}>· {total} events</span></h1>
-          </div>
-          <div style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute}`}>
-            {fmtHeadDate()} · <span style={`color:${V2_TOKENS.accent}`}>● STREAMING</span>
-          </div>
-        </div>
+    <span
+      style={`width:${size}px;height:${size}px;border-radius:${avatarRadius(size)}px;background:${T.subtle};` +
+        `border:1px solid ${T.line};color:${T.faint};display:inline-flex;align-items:center;` +
+        `justify-content:center;font-size:11px;font-weight:600;flex-shrink:0`}
+    >
+      {OPERATOR_LABEL}
+    </span>
+  );
+};
 
-        <div style="display:flex;flex-wrap:wrap;gap:12px;padding-top:20px;align-items:flex-start">
-          {/* Stream */}
-          <div style="flex:1 1 560px;min-width:0">
-            <V2Card title="Stream"
-              right={<span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.accent};letter-spacing:0.1em`}>● LIVE</span>}>
-              {visible.length === 0 ? (
-                <div style={`padding:36px;text-align:center;font-family:${MONO};font-size:11px;color:${V2_TOKENS.textMute}`}>
-                  なし · no events for this filter
-                </div>
-              ) : visible.map((ev) => {
-                const ec = entityColor(ev.entity_type);
-                const ag = ev.agent_name
-                  ? { id: agentIds[ev.agent_name] ?? ev.agent_name, role: agentRoles[ev.agent_name] ?? undefined }
-                  : null;
-                return (
-                  <div style={`display:grid;grid-template-columns:${GRID};align-items:center;gap:13px;padding:9px 18px;border-top:1px solid ${V2_TOKENS.lineRow}`}>
-                    <span style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute}`}>{fmtTime(ev.created_at)}</span>
-                    {ag ? <V2Avatar agentId={ag.id} role={ag.role} size={18} /> : <AdminBadge />}
-                    <span style={`font-family:${MONO};font-size:9.5px;color:${ec};border:1px solid ${ec};border-radius:2px;padding:1px 7px;text-align:center;letter-spacing:0.05em`}>{ev.entity_type}</span>
-                    <span style={`font-size:12.5px;color:${V2_TOKENS.textBody};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>{ev.summary ?? ev.action}</span>
-                    <span style={`font-family:${MONO};font-size:10px;color:${V2_TOKENS.textMute};text-align:right;letter-spacing:0.04em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>{ev.action}</span>
-                  </div>
-                );
-              })}
-            </V2Card>
-          </div>
+export interface AuditTableProps {
+  result: PaginatedResult<Activity>;
+  /** Role drives the emblem's stripe colour; the emblem is keyed on the name. */
+  agentRoles: Record<string, string | null>;
+  /** Pagination row, built by the page so both tabs share one footer. */
+  footer?: Child;
+}
 
-          {/* Sidebar */}
-          <div style="flex:0 1 280px;min-width:250px;display:flex;flex-direction:column;gap:12px">
-            <V2Card title="Filters">
-              <div style="padding:14px 16px">
-                <div style={`font-size:9.5px;letter-spacing:0.18em;text-transform:uppercase;color:${V2_TOKENS.textFaint};font-weight:600;margin-bottom:7px`}>Entity</div>
-                {(["message", "session", "agent"] as const).map((k) => {
-                  const n = entityCounts.get(k) ?? 0;
-                  const active = filterEntity === k;
-                  const col = entityColor(k);
-                  return (
-                    <a href={buildUrl({ entity: active ? undefined : k, range: filterRange })}
-                      style={`display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:3px;background:${active ? V2_TOKENS.chip : "transparent"};border:1px solid ${active ? "#3a3a3a" : "transparent"};font-family:${MONO};font-size:11px;color:${V2_TOKENS.textBody};margin-bottom:3px;text-decoration:none`}>
-                      <span style={`width:8px;height:8px;background:${col};display:inline-block`} />
-                      <span style="flex:1">{k}</span>
-                      <span style={`color:${V2_TOKENS.textMute};font-size:10.5px`}>{n}</span>
-                    </a>
-                  );
-                })}
-                <div style={`font-size:9.5px;letter-spacing:0.18em;text-transform:uppercase;color:${V2_TOKENS.textFaint};font-weight:600;margin:14px 0 7px`}>Time</div>
-                {RANGE_OPTIONS.map(([key, label]) => {
-                  const active = (filterRange ?? "all") === key;
-                  return (
-                    <a href={buildUrl({ entity: filterEntity, range: key })}
-                      style={`display:block;padding:7px 10px;border-radius:3px;background:${active ? V2_TOKENS.chip : "transparent"};border:1px solid ${active ? "#3a3a3a" : "transparent"};font-size:11.5px;color:${active ? V2_TOKENS.text : V2_TOKENS.textDim};margin-bottom:3px;text-decoration:none;font-weight:${active ? "600" : "400"}`}>
-                      {label}
-                    </a>
-                  );
-                })}
+export const AuditTable: FC<AuditTableProps> = ({ result, agentRoles, footer }) => {
+  const rows = result.data;
+  return (
+    <div class="m-rise" style={`flex:1 1 540px;min-width:0;${LOG_CARD_STYLE}`}>
+      {rows.length === 0 ? (
+        <LogEmptyBlock />
+      ) : (
+        rows.map((ev) => {
+          const [ink, ground] = kindColors(ev.entity_type);
+          return (
+            <div
+              key={ev.id}
+              class="d-row"
+              style={`${GRID};padding:12px 20px;align-items:center;border-bottom:1px solid ${T.lineRow}`}
+            >
+              <span style={`font-family:${V2_FONT_FAMILY_MONO};font-size:12.5px;color:${T.faint}`}>
+                {new Date(ev.created_at).toTimeString().slice(0, 5)}
+              </span>
+              <ActorCell
+                name={ev.agent_name}
+                role={ev.agent_name ? agentRoles[ev.agent_name] : undefined}
+                size={26}
+              />
+              {/* The raw action stays reachable for debugging. */}
+              <span style={`font-size:13.5px;color:${T.ink};${ELLIPSIS}`} title={ev.action}>
+                {auditSentence(ev)}
+              </span>
+              <span
+                style={`font-size:12.5px;color:${ink};background:${ground};padding:3px 10px;` +
+                  `border-radius:${T.radiusPill}px;width:fit-content;white-space:nowrap;text-align:center`}
+              >
+                {entityLabel(ev.entity_type)}
+              </span>
+            </div>
+          );
+        })
+      )}
+      {footer}
+    </div>
+  );
+};
+
+export interface BusiestTodayProps {
+  /** Real totals for the day from `ActivityService.topActors`, not a page count. */
+  actors: readonly ActivityActorCount[];
+  agentRoles: Record<string, string | null>;
+}
+
+export const BusiestTodayAside: FC<BusiestTodayProps> = ({ actors, agentRoles }) => {
+  const max = Math.max(1, ...actors.map((a) => a.count));
+  return (
+    <div
+      style={`flex:1 1 280px;min-width:260px;background:${T.card};border:1px solid ${T.line};` +
+        `border-radius:${T.radiusCard}px;padding:20px`}
+    >
+      <h2 style="margin:0 0 4px;font-size:15px;font-weight:600">Busiest today</h2>
+      {/* COPY §8 says "By audit events in this page". That sentence described
+          the bug IMPLEMENTATION.md asked us to fix: the counts used to be
+          computed over the 50 rows on screen. They are day totals from SQL
+          now, so the old label would misdescribe its own number. */}
+      <div style={`font-size:13px;color:${T.dim};margin-bottom:14px`}>By audit events today</div>
+      {actors.length === 0 ? (
+        <div style={`font-size:13.5px;color:${T.dim}`}>{LOG_EMPTY_TEXT}</div>
+      ) : (
+        actors.map((a) => {
+          const operator = isOperatorActor(a.agent_name);
+          return (
+            <div key={a.agent_name} style="margin-bottom:13px">
+              <div style="display:flex;align-items:center;gap:9px;font-size:13.5px;margin-bottom:5px">
+                <ActorCell name={a.agent_name} role={agentRoles[a.agent_name]} size={22} />
+                <span style="flex:1">{operator ? OPERATOR_LABEL : a.agent_name}</span>
+                <span style={`font-size:12.5px;color:${T.faint}`}>{a.count}</span>
               </div>
-            </V2Card>
-
-            <V2Card title="Top Actors">
-              <div style="padding:14px 16px">
-                {topActors.length === 0 ? (
-                  <div style={`color:${V2_TOKENS.textMute};font-family:${MONO};font-size:11px;text-align:center;padding:8px`}>まだ · no actors yet</div>
-                ) : topActors.map(([name, n]) => {
-                  const ag = agentIds[name] ? { id: agentIds[name], role: agentRoles[name] ?? undefined } : null;
-                  return (
-                    <div style="margin-bottom:11px">
-                      <div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:4px">
-                        {ag ? <V2Avatar agentId={ag.id} role={ag.role} size={15} /> : <AdminBadge size={15} />}
-                        <span style="flex:1">{name}</span>
-                        <span style={`font-family:${MONO};font-size:10.5px;color:${V2_TOKENS.textMute}`}>{n}</span>
-                      </div>
-                      <div style={`height:4px;background:${V2_TOKENS.chip};border-radius:2px;overflow:hidden`}>
-                        <div style={`width:${Math.round((n / topMax) * 100)}%;height:100%;background:${V2_TOKENS.accent};box-shadow:0 0 6px ${greenGlow(0.5)}`} />
-                      </div>
-                    </div>
-                  );
-                })}
+              <div style={`height:6px;background:${T.subtle};border-radius:${T.radiusPill}px;overflow:hidden`}>
+                <div style={`width:${Math.round((a.count / max) * 100)}%;height:100%;background:${T.green}`} />
               </div>
-            </V2Card>
-          </div>
-        </div>
-
-        {(offset > 0 || has_more) && (
-          <div style={`display:flex;align-items:center;gap:14px;padding-top:16px;font-family:${MONO};font-size:11px;color:${V2_TOKENS.textMute}`}>
-            {offset > 0
-              ? <a href={buildUrl({ entity: filterEntity, range: filterRange, offset: String(Math.max(0, offset - limit)) })} style={`color:${V2_TOKENS.accent};letter-spacing:0.08em;text-decoration:none`}>← NEWER</a>
-              : <span style="color:#3a3a3a;letter-spacing:0.08em">← NEWER</span>}
-            <span>{offset + 1}–{Math.min(offset + limit, total)} of {total}</span>
-            {has_more
-              ? <a href={buildUrl({ entity: filterEntity, range: filterRange, offset: String(offset + limit) })} style={`color:${V2_TOKENS.accent};letter-spacing:0.08em;text-decoration:none`}>OLDER →</a>
-              : <span style="color:#3a3a3a;letter-spacing:0.08em">OLDER →</span>}
-          </div>
-        )}
-      </div>
-    </V2Layout>
+            </div>
+          );
+        })
+      )}
+    </div>
   );
 };
