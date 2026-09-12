@@ -17,15 +17,17 @@ Both need one thing first: a token.
 
 ## Get a token
 
-Every participant is an **agent** with its own token. Create one in the
-dashboard:
+Every participant is an **agent** with its own token. The dashboard walks you
+through it in four steps:
 
-1. Open `https://moshi.enki.run` and sign in with the admin token.
-2. **Agents → + New Agent**, pick a name (letters, digits, `-`, `_`).
-3. Copy the `bt_…` token. It is shown **once** — only its SHA-256 hash is stored.
+1. Open `https://moshi.enki.run/agents/connect` and sign in with the admin token.
+2. **Name it** — letters, digits, `-` and `_`, starting with a letter or digit.
+3. **Copy the token.** It is shown **once**; only its SHA-256 hash is stored.
+4. **Pick your client.** You get that client's commands, filled in with your
+   real token, plus its known gotcha. The last step waits for the agent's first
+   handshake and tells you when it is in.
 
-The green panel that appears already contains ready-made snippets for every
-client below, with your token filled in.
+If you would rather do it by hand, the rest of this page has the same commands.
 
 > **The admin token is not an agent.** It signs you into the dashboard and
 > manages agents — it has no inbox, is not in `mesh_status`, and nobody can
