@@ -5,6 +5,11 @@ import type Database from "better-sqlite3";
 import { hashToken, timingSafeEqual, getCookieSecret } from "./auth.js";
 import type { AgentService } from "./services/agent.js";
 import type { Env, AppVariables } from "./types.js";
+import { V2_TOKENS } from "./views/v2/tokens.js";
+
+/** The consent screen is the one page a Claude Desktop user sees during the
+ *  connect flow, so it wears the same Daylight surfaces as the dashboard. */
+const T = V2_TOKENS;
 
 // OAuth 2.1 for MCP server
 // Uses OAUTH_SECRET (fallback: MESH_ADMIN_TOKEN) for code signing
@@ -138,95 +143,95 @@ function authorizePageHTML(params: {
   const { redirectUri, state, codeChallenge, codeChallengeMethod, error } =
     params;
   const errorBlock = error
-    ? '<div class="error"><span class="dot"></span>Invalid token — check your bearer token.</div>'
+    ? '<div class="error"><span class="dot"></span>Invalid token — check the agent&rsquo;s bearer token.</div>'
     : "";
   return `<!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>moshi — Authorize</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2305e901'/%3E%3Ctext x='16' y='23' text-anchor='middle' fill='%230a0a0a' font-family='sans-serif' font-size='19' font-weight='800'%3Em%3C/text%3E%3C/svg%3E">
+  <meta name="color-scheme" content="light">
+  <title>Authorize — moshi.moshi</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e8a3e'/%3E%3Ctext x='16' y='23' text-anchor='middle' fill='%23ffffff' font-family='sans-serif' font-size='19' font-weight='800'%3Em%3C/text%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: 'Sora', system-ui, sans-serif; color: #f5f5f5;
-      background:
-        radial-gradient(720px 420px at 50% 118%, rgba(5,233,1,0.13), transparent 62%),
-        radial-gradient(900px 500px at 85% -30%, rgba(5,233,1,0.05), transparent 60%),
-        #0f0f0f;
+      font-family: 'Sora', system-ui, sans-serif; color: ${T.ink};
+      background: radial-gradient(900px 520px at 50% 110%, #eef7ef, transparent 70%), ${T.paper};
       display: flex; align-items: center; justify-content: center; min-height: 100vh;
+      padding: 24px; font-size: 15px; line-height: 1.6;
       -webkit-font-smoothing: antialiased;
     }
-    .grid-bg {
-      position: fixed; inset: 0; pointer-events: none;
-      background-image:
-        linear-gradient(rgba(255,255,255,0.024) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.024) 1px, transparent 1px);
-      background-size: 56px 56px;
-    }
     .box {
-      position: relative; background: #161616; border: 1px solid #262626;
-      padding: 26px; border-radius: 8px; width: 380px; max-width: calc(100vw - 32px);
+      background: ${T.card}; border: 1px solid ${T.line}; padding: 28px;
+      border-radius: ${T.radiusPanel}px; width: 400px; max-width: 100%;
+      box-shadow: 0 1px 2px rgba(36,33,29,.04), 0 16px 40px -28px rgba(36,33,29,.3);
     }
-    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
     .mark {
-      width: 30px; height: 30px; border-radius: 7px; background: hsl(119 99% 46%);
-      color: #0a0a0a; display: flex; align-items: center; justify-content: center;
-      font-weight: 800; font-size: 17px;
+      width: 30px; height: 30px; border-radius: 9px; background: ${T.green};
+      color: #ffffff; display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 16px;
     }
-    .name { font-size: 16px; font-weight: 700; letter-spacing: -0.02em; }
-    .name .dot { color: hsl(119 99% 46%); }
-    h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.03em; text-transform: uppercase; margin-bottom: 4px; }
-    h1 .accent { color: hsl(119 99% 46%); }
-    p { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #999999; margin-bottom: 18px; }
-    .label { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: #666666; font-weight: 600; margin-bottom: 8px; }
+    .name { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+    .name .dot { color: ${T.green}; }
+    h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
+    p { font-size: 14px; color: ${T.dim}; margin-bottom: 20px; }
+    .label { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
     input[type=password] {
-      width: 100%; padding: 12px 14px; background: #0f0f0f;
-      border: 1px solid #333333; border-radius: 4px; color: #f5f5f5;
-      font-family: 'JetBrains Mono', monospace; font-size: 13px; margin-bottom: 14px;
+      width: 100%; padding: 13px 15px; background: ${T.paper};
+      border: 1px solid ${T.lineStrong}; border-radius: ${T.radiusControl}px; color: ${T.ink};
+      font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px; margin-bottom: 16px;
     }
-    input[type=password]:focus { outline: none; border-color: rgba(5,233,1,0.55); }
-    input[type=password]::placeholder { color: #555555; }
+    input[type=password]:focus {
+      outline: none; border-color: ${T.greenLine};
+      box-shadow: 0 0 0 3px rgba(14,138,62,.12);
+    }
+    input[type=password]::placeholder { color: ${T.faint}; }
     button {
-      width: 100%; padding: 13px; background: hsl(119 99% 46%); color: #0a0a0a;
-      border: none; border-radius: 2px; font-family: 'Sora', sans-serif;
-      font-weight: 700; font-size: 12px; letter-spacing: 0.08em;
-      text-transform: uppercase; cursor: pointer;
+      width: 100%; padding: 13px; background: ${T.green}; color: #ffffff;
+      border: none; border-radius: ${T.radiusControl}px; font-family: 'Sora', sans-serif;
+      font-weight: 600; font-size: 15px; cursor: pointer;
     }
-    button:hover { filter: brightness(1.12); }
+    button:hover { filter: brightness(0.94); }
+    button:focus-visible, input:focus-visible { outline: 2px solid ${T.green}; outline-offset: 2px; }
     .error {
-      display: flex; align-items: center; gap: 7px; color: #ef4444;
-      font-size: 12px; font-weight: 600; margin-bottom: 12px;
+      display: flex; align-items: center; gap: 7px; color: ${T.red};
+      font-size: 13px; font-weight: 600; margin-bottom: 12px;
     }
-    .error .dot { width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
-    .hint { margin-top: 12px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #555555; line-height: 1.7; }
+    .error .dot { width: 6px; height: 6px; border-radius: 50%; background: ${T.red}; }
+    .hint {
+      margin-top: 16px; padding-top: 14px; border-top: 1px solid ${T.lineSoft};
+      font-size: 13px; color: ${T.dim};
+    }
+    .hint code {
+      font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px;
+      background: ${T.subtle}; padding: 1px 6px; border-radius: 5px; color: ${T.body};
+    }
   </style>
 </head>
 <body>
-  <div class="grid-bg"></div>
   <div class="box">
     <div class="brand">
       <div class="mark">m</div>
       <div class="name">moshi<span class="dot">.</span>moshi</div>
     </div>
-    <h1>Authorize <span class="accent">MCP</span></h1>
-    <p>OAUTH 2.1 · PKCE S256 — paste your bearer token</p>
+    <h1>Let this client into the mesh</h1>
+    <p>Paste the agent's bearer token once. moshi hands the client a short-lived code, never the token.</p>
     ${errorBlock}
     <form method="POST" action="/oauth/authorize">
       <input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}">
       <input type="hidden" name="state" value="${escapeHtml(state)}">
       <input type="hidden" name="code_challenge" value="${escapeHtml(codeChallenge)}">
       <input type="hidden" name="code_challenge_method" value="${escapeHtml(codeChallengeMethod)}">
-      <div class="label">Bearer Token</div>
-      <input name="token" type="password" placeholder="bt_••••••••••••••••" autofocus autocomplete="current-password">
+      <div class="label">Bearer token</div>
+      <input name="token" type="password" placeholder="bt_&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autofocus autocomplete="current-password">
       <button type="submit">Authorize</button>
     </form>
-    <div class="hint">Token is exchanged server-side · never appears in URLs · code expires in 5 min</div>
+    <div class="hint">The token is exchanged server-side and never appears in a URL. The code expires in five minutes. An agent token starts with <code>bt_</code> — the admin token will not work here.</div>
   </div>
 </body>
 </html>`;
