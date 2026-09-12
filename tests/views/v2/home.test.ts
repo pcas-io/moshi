@@ -392,3 +392,17 @@ describe("homeHeadline — the one-agent install", () => {
     expect(homeHeadline(0, 8)).toBe("Nobody is online right now.");
   });
 });
+
+describe("V2HomePage — the latest-conversation sub-line", () => {
+  // A context is free text up to MAX_CONTEXT_LENGTH. Unclamped, a real one
+  // ran to four lines on the live dashboard and pushed the card's first
+  // message below the fold.
+  it("keeps the sub-line to one line and keeps the full text on hover", async () => {
+    const context = "crtx2 / Node k9. ".repeat(20);
+    const html = await render(props({
+      liveThread: thread({ context }),
+    }));
+    expect(html).toContain("text-overflow:ellipsis;white-space:nowrap");
+    expect(html).toContain("title=");
+  });
+});

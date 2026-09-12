@@ -339,7 +339,11 @@ const AttentionBand: FC<{ items: AttentionItem[] }> = ({ items }) => {
 const CARD_SHELL = `${CARD_STYLE};overflow:hidden`;
 const CARD_HEAD = `padding:18px 22px 14px;border-bottom:1px solid ${T.lineSoft}`;
 const CARD_H2 = "margin:0;font-size:16px;font-weight:600";
-const CARD_SUB = `font-size:13px;color:${T.dim}`;
+// One line, always. A context is free text up to MAX_CONTEXT_LENGTH, and a
+// long one pushed this sub-line to four lines and shoved the card's first
+// message out of view. The full string stays reachable as a title.
+const CARD_SUB =
+  `font-size:13px;color:${T.dim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`;
 
 /** Messages shown in the card; the footer still counts the whole thread. */
 const BUBBLES_SHOWN = 4;
@@ -393,7 +397,7 @@ const LatestConversation: FC<{
       <div style={`${CARD_HEAD};display:flex;align-items:center;gap:12px`}>
         <div style="flex:1;min-width:0">
           <h2 style={CARD_H2}>Latest conversation</h2>
-          {sub ? <div style={CARD_SUB}>{sub}</div> : null}
+          {sub ? <div style={CARD_SUB} title={sub}>{sub}</div> : null}
         </div>
         {isLive && (
           <span
