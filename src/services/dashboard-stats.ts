@@ -1,7 +1,7 @@
-// Read-side aggregations powering the v2 dashboard cards (mesh-topology,
-// per-agent activity heatmaps, incident counter). Kept separate from
-// home-stats.ts because these are wider per-pair / per-hour rollups that
-// only the v2 screens consume.
+// Read-side aggregations powering the dashboard (per-agent activity
+// histograms, incident counter, thread and per-agent message totals). Kept
+// separate from home-stats.ts because these are wider per-hour rollups that
+// only the dashboard screens consume.
 
 import type Database from "better-sqlite3";
 
@@ -37,36 +37,18 @@ export function getAgentHeat(
   return buckets;
 }
 
-/** Aggregated edge in the mesh-topology graph: total messages between a
- *  given (from, to) pair plus the timestamp of the latest one. */
-export interface MeshEdge {
-  from: string;
-  to: string;
-  count: number;
-  last: string; // ISO timestamp
+/** SQL predicate for the incident family: the plain `incident` type that
+ *  `RECOMMENDED_MESSAGE_TYPES` publishes, plus `alert` and the older
+ *  `incident_acknowledged` / `incident_response` variants.
+ *  `alias` is the table alias to qualify the column with, e.g. `"m"`. */
+export function incidentTypeSql(alias = ""): string {
+  const col = alias ? `${alias}.type` : "type";
+  return `(${col} = 'incident' OR ${col} = 'alert' OR ${col} LIKE 'incident\\_%' ESCAPE '\\')`;
 }
 
-export function getMeshEdges(
-  db: Database.Database,
-  windowMs: number = 7 * MS_PER_DAY,
-  now: Date = new Date(),
-): MeshEdge[] {
-  const since = new Date(now.getTime() - windowMs).toISOString();
-  const rows = db
-    .prepare(
-      `SELECT from_agent AS \"from\", to_agent AS \"to\",
-              COUNT(*) AS count, MAX(created_at) AS last
-       FROM messages
-       WHERE created_at > ?
-       GROUP BY from_agent, to_agent
-       ORDER BY count DESC`,
-    )
-    .all(since) as MeshEdge[];
-  return rows;
-}
+export const INCIDENT_TYPE_SQL = incidentTypeSql();
 
-/** Incident-flavoured messages in the trailing 24h window. Matches the
- *  design's INCIDENTS KPI on Home. */
+/** Incident-flavoured messages in the trailing 24h window. */
 export function getIncidents24h(
   db: Database.Database,
   now: Date = new Date(),
@@ -75,8 +57,7 @@ export function getIncidents24h(
   const row = db
     .prepare(
       `SELECT COUNT(*) AS count FROM messages
-       WHERE created_at > ?
-         AND (type = 'alert' OR type LIKE 'incident_%')`,
+       WHERE created_at > ? AND ${INCIDENT_TYPE_SQL}`,
     )
     .get(since) as { count: number };
   return row.count;

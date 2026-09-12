@@ -4,7 +4,6 @@ import { readFileSync, readdirSync } from "fs";
 import { ulid } from "ulidx";
 import {
   getAgentHeat,
-  getMeshEdges,
   getIncidents24h,
 } from "../../src/services/dashboard-stats";
 
@@ -76,51 +75,6 @@ describe("getAgentHeat", () => {
   });
 });
 
-describe("getMeshEdges", () => {
-  let db: Database.Database;
-  const NOW = new Date("2026-04-27T20:00:00Z");
-
-  beforeEach(() => { db = createTestDb(); });
-
-  it("returns empty when no messages exist", () => {
-    expect(getMeshEdges(db, undefined, NOW)).toEqual([]);
-  });
-
-  it("groups by from/to pair with counts and last-seen", () => {
-    const t0 = new Date(NOW.getTime() - 60_000);
-    const t1 = new Date(NOW.getTime() - 30_000);
-    insertMessage(db, { from: "alice", to: "bob", type: "info", createdAt: t0 });
-    insertMessage(db, { from: "alice", to: "bob", type: "info", createdAt: t1 });
-    insertMessage(db, { from: "alice", to: "carol", type: "info", createdAt: t0 });
-
-    const edges = getMeshEdges(db, undefined, NOW);
-    const ab = edges.find((e) => e.from === "alice" && e.to === "bob");
-    const ac = edges.find((e) => e.from === "alice" && e.to === "carol");
-
-    expect(ab?.count).toBe(2);
-    expect(ab?.last).toBe(t1.toISOString());
-    expect(ac?.count).toBe(1);
-  });
-
-  it("respects the time window", () => {
-    insertMessage(db, { from: "alice", to: "bob", type: "info",
-      createdAt: new Date(NOW.getTime() - 8 * 24 * 60 * 60 * 1000) });
-    expect(getMeshEdges(db, 7 * 24 * 60 * 60 * 1000, NOW)).toEqual([]);
-  });
-
-  it("orders by count descending", () => {
-    insertMessage(db, { from: "a", to: "b", type: "info",
-      createdAt: new Date(NOW.getTime() - 1000) });
-    for (let i = 0; i < 3; i++) {
-      insertMessage(db, { from: "c", to: "d", type: "info",
-        createdAt: new Date(NOW.getTime() - 1000) });
-    }
-    const edges = getMeshEdges(db, undefined, NOW);
-    expect(edges[0]?.count).toBe(3);
-    expect(edges[1]?.count).toBe(1);
-  });
-});
-
 describe("getIncidents24h", () => {
   let db: Database.Database;
   const NOW = new Date("2026-04-27T20:00:00Z");
@@ -138,6 +92,15 @@ describe("getIncidents24h", () => {
     insertMessage(db, { from: "cortex", to: "ww0", type: "incident_response", createdAt: recent });
     insertMessage(db, { from: "alice", to: "bob", type: "info", createdAt: recent });
     expect(getIncidents24h(db, NOW)).toBe(3);
+  });
+
+  // `incident` is the type in RECOMMENDED_MESSAGE_TYPES and the one agents
+  // actually send. The original query only matched `alert` and `incident_%`,
+  // so the plain type was invisible and the Home incident line never fired.
+  it("counts the plain `incident` type", () => {
+    const recent = new Date(NOW.getTime() - 60_000);
+    insertMessage(db, { from: "lk", to: "cortex", type: "incident", createdAt: recent });
+    expect(getIncidents24h(db, NOW)).toBe(1);
   });
 
   it("excludes incidents older than 24h", () => {
