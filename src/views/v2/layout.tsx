@@ -1,40 +1,47 @@
-// V2 page layout — SENTINEL Dark app shell with brand, top-nav, ⌘K palette.
-// Used by the v2 dashboard pages (Home, Agents, Conversations, Messages, Activity).
-// Pages with a hero (Overview) pass `hero` — the top-nav then renders inside
-// the hero surface (transparent, no rule); all other pages get a ruled topbar.
+// V2 page layout — the "Daylight" app shell: brand lockup, four nav items,
+// the ⌘K palette, the Connect-an-agent call to action, and the footer.
+// Used by every dashboard page (Home, Agents, Conversations, Log, Connect).
+//
+// There is no hero variant. Home uses the same ruled header as every other
+// page; the dark hero surface and its grid overlay are gone.
 
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
-import { V2_CSS, V2_TOKENS, V2_HERO_BG, V2_GRID_BG } from "./tokens.js";
+import { V2_CSS, V2_TOKENS } from "./tokens.js";
+import { V2_INTERACTION_CSS } from "./components.js";
+import { COPY_SCRIPT } from "./copy-script.js";
 import { MCP_TOOL_CATALOG } from "../../mcp/catalog.js";
 
-export type V2NavKey = "HOME" | "AGENTS" | "CONVOS" | "MESSAGES" | "LOG";
+const T = V2_TOKENS;
+
+export type V2NavKey = "HOME" | "AGENTS" | "CONVOS" | "LOG";
 
 interface V2LayoutProps {
   title?: string;
   active?: V2NavKey;
   userRole?: string;
+  /** Name shown in the operator badge; first letter is the monogram. */
+  userName?: string;
   csrfToken?: string;
-  /** Hero content rendered below the nav inside the hero surface (Overview). */
-  hero?: any;
-  /** Skip the .v2-wrap/.v2-pad content wrapper (full-bleed pages like Conversations). */
+  /** Skip the padded container (full-bleed pages like Conversations). */
   fullBleed?: boolean;
+  /** Narrower container for Connect (1000px instead of 1400px). */
+  narrow?: boolean;
   children?: any;
 }
 
 const V2_NAV: ReadonlyArray<readonly [V2NavKey, string, string, boolean]> = [
-  ["HOME",     "Overview",      "/",              false],
+  ["HOME",     "Home",          "/",              false],
   ["AGENTS",   "Agents",        "/agents",        true ],
   ["CONVOS",   "Conversations", "/conversations", false],
-  ["MESSAGES", "Messages",      "/messages",      false],
-  ["LOG",      "Activity",      "/activity",      false],
+  ["LOG",      "Log",           "/log",           false],
 ];
 
 const FAVICON = raw(
   '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,' +
   '%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 32 32\'%3E' +
-  '%3Crect width=\'32\' height=\'32\' rx=\'7\' fill=\'%2305e901\'/%3E' +
-  '%3Ctext x=\'16\' y=\'23\' text-anchor=\'middle\' fill=\'%230a0a0a\' ' +
+  '%3Crect width=\'32\' height=\'32\' rx=\'7\' fill=\'%230e8a3e\'/%3E' +
+  '%3Ctext x=\'16\' y=\'23\' text-anchor=\'middle\' fill=\'%23ffffff\' ' +
   "font-family='sans-serif' font-size='19' font-weight='800'%3Em%3C/text%3E" +
   "%3C/svg%3E\">"
 );
@@ -59,14 +66,14 @@ function paletteMarkup(items: PaletteItem[], csrfToken?: string): string {
       it.kind === "destructive" ? "✕" :
       it.kind === "mcp" ? "⌘" : "+";
     const iconColor =
-      it.kind === "mcp" ? V2_TOKENS.accent :
-      it.kind === "destructive" ? V2_TOKENS.danger : "#888888";
+      it.kind === "mcp" ? T.greenDeep :
+      it.kind === "destructive" ? T.red : T.dim;
     const labelColor =
-      it.kind === "mcp" ? V2_TOKENS.accent :
-      it.kind === "destructive" ? V2_TOKENS.danger : V2_TOKENS.text;
-    const labelFamily = it.kind === "mcp" ? "var(--v2-font-mono)" : "var(--v2-font-sans)";
+      it.kind === "mcp" ? T.greenDeep :
+      it.kind === "destructive" ? T.red : T.ink;
+    const labelFamily = it.kind === "mcp" ? "var(--font-mono)" : "var(--font-sans)";
     const labelWeight = it.kind === "mcp" ? "500" : "600";
-    const hintC = it.kind === "destructive" ? V2_TOKENS.danger : V2_TOKENS.textMute;
+    const hintC = it.kind === "destructive" ? T.red : T.faint;
     const labelHtml =
       `<span class="v2-pal-label" style="font-family:${labelFamily};font-weight:${labelWeight};color:${labelColor}">${escapeHtml(it.label)}</span>` +
       (it.desc ? `<div class="v2-pal-desc">${escapeHtml(it.desc)}</div>` : "");
@@ -92,9 +99,9 @@ function paletteMarkup(items: PaletteItem[], csrfToken?: string): string {
       </div>
       <div class="v2-palette-list" id="v2-palette-list">${rows}</div>
       <div class="v2-palette-foot">
-        <span>↵ OPEN</span><span>ESC CLOSE</span>
+        <span>↵ open</span><span>esc close</span>
         <span class="v2-palette-foot-spacer"></span>
-        <span style="color:${V2_TOKENS.accent}">MESH · ⌘K</span>
+        <span style="color:${T.greenText}">moshi · ⌘K</span>
       </div>
     </div>
   </div>`;
@@ -170,21 +177,22 @@ const PALETTE_SCRIPT = raw(`<script>
 
 const PALETTE_CSS = `
 .v2-palette { position: fixed; inset: 0; z-index: 100; align-items: flex-start; justify-content: center; padding-top: 90px; }
-.v2-palette-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(3px); }
-.v2-palette-modal { position: relative; width: 560px; max-width: calc(100vw - 32px); background: var(--v2-modal); border: 1px solid var(--v2-line-2); border-radius: 8px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,0.7); }
-.v2-palette-input-wrap { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--v2-line-card); }
-.v2-palette-prompt { color: var(--v2-accent); font-family: var(--v2-font-mono); }
-#v2-palette-input { flex: 1; background: transparent; border: none; outline: none; color: var(--v2-text); font-size: 13.5px; font-family: var(--v2-font-sans); }
+.v2-palette-overlay { position: absolute; inset: 0; background: rgba(36,33,29,0.32); backdrop-filter: blur(3px); }
+.v2-palette-modal { position: relative; width: 560px; max-width: calc(100vw - 32px); background: ${T.card}; border: 1px solid ${T.line}; border-radius: ${T.radiusCard}px; overflow: hidden; box-shadow: 0 24px 60px -20px rgba(36,33,29,0.35); }
+.v2-palette-input-wrap { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid ${T.lineSoft}; }
+.v2-palette-prompt { color: ${T.greenText}; font-family: var(--font-mono); }
+#v2-palette-input { flex: 1; background: transparent; border: none; outline: none; color: ${T.ink}; font-size: 14px; font-family: var(--font-sans); }
+.v2-kbd { font-family: var(--font-mono); font-size: 11px; color: ${T.dim}; background: ${T.paper}; border: 1px solid ${T.line}; border-radius: 5px; padding: 1px 5px; }
 .v2-palette-list { max-height: 340px; overflow-y: auto; }
-.v2-pal-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; font-size: 12.5px; cursor: pointer; border-left: 2px solid transparent; text-decoration: none; color: inherit; background: none; border-top: none; border-right: none; border-bottom: none; width: 100%; font-family: inherit; }
+.v2-pal-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; font-size: 13.5px; cursor: pointer; border-left: 2px solid transparent; text-decoration: none; color: inherit; background: none; border-top: none; border-right: none; border-bottom: none; width: 100%; font-family: inherit; }
 .v2-pal-btn { display: flex; align-items: center; gap: 12px; width: 100%; background: transparent; border: none; color: inherit; font: inherit; cursor: pointer; padding: 0; text-align: left; }
-.v2-pal-row.v2-pal-active { background: #1f1f1f; border-left-color: var(--v2-accent); }
-.v2-pal-icon { width: 22px; height: 22px; border-radius: 4px; background: var(--v2-chip); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-family: var(--v2-font-mono); flex-shrink: 0; }
+.v2-pal-row.v2-pal-active { background: ${T.sunk}; border-left-color: ${T.green}; }
+.v2-pal-icon { width: 22px; height: 22px; border-radius: 6px; background: ${T.subtle}; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-family: var(--font-mono); flex-shrink: 0; }
 .v2-pal-text { flex: 1; min-width: 0; }
-.v2-pal-label { display: block; font-size: 12.5px; }
-.v2-pal-desc { font-size: 10.5px; color: var(--v2-text-mute); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-pal-hint { font-size: 10px; font-family: var(--v2-font-mono); flex-shrink: 0; }
-.v2-palette-foot { display: flex; gap: 16px; padding: 9px 16px; border-top: 1px solid var(--v2-line-card); font-family: var(--v2-font-mono); font-size: 9.5px; color: var(--v2-text-faint); letter-spacing: 0.08em; }
+.v2-pal-label { display: block; font-size: 13.5px; }
+.v2-pal-desc { font-size: 12px; color: ${T.faint}; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-pal-hint { font-size: 11.5px; font-family: var(--font-mono); flex-shrink: 0; }
+.v2-palette-foot { display: flex; gap: 16px; padding: 9px 16px; border-top: 1px solid ${T.lineSoft}; font-family: var(--font-mono); font-size: 11px; color: ${T.faint}; }
 .v2-palette-foot-spacer { flex: 1; }
 form.v2-pal-row { display: block; padding: 0; }
 form.v2-pal-row > .v2-pal-btn { padding: 10px 16px; }
@@ -198,68 +206,101 @@ const MCP_DOC_URL = "https://github.com/pcas-io/moshi#mcp-tools";
 
 function defaultPaletteItems(userRole?: string): PaletteItem[] {
   const items: PaletteItem[] = [
-    { kind: "nav", label: "Go to Overview",      href: "/",              hint: "G O" },
+    { kind: "nav", label: "Go to Home",          href: "/",              hint: "G H" },
     { kind: "nav", label: "Go to Conversations", href: "/conversations", hint: "G C" },
-    { kind: "nav", label: "Go to Messages",      href: "/messages",      hint: "G M" },
-    { kind: "nav", label: "Go to Activity",      href: "/activity",      hint: "G L" },
+    { kind: "nav", label: "Go to Log",           href: "/log",           hint: "G L" },
   ];
   if (userRole === "admin") {
-    items.push({ kind: "nav",    label: "Go to Agents",     href: "/agents",         hint: "G A" });
-    items.push({ kind: "action", label: "Register new agent…", href: "/agents?new=1", hint: "N A" });
+    items.push({ kind: "nav",    label: "Go to Agents",       href: "/agents",          hint: "G A" });
+    items.push({ kind: "action", label: "Connect an agent…",  href: "/agents/connect",  hint: "N A" });
   }
   for (const tool of MCP_TOOL_CATALOG) {
     items.push({ kind: "mcp", label: tool.name, desc: tool.desc, hint: tool.signature, href: MCP_DOC_URL });
   }
-  items.push({ kind: "destructive", label: "Log out", formAction: "/logout", formMethod: "post", hint: "destructive" });
+  items.push({ kind: "destructive", label: "Sign out", formAction: "/logout", formMethod: "post", hint: "destructive" });
   return items;
 }
 
-const FOOTER_LINKS = [
-  "Hono · TypeScript",
-  "NATS JetStream",
-  "SQLite",
-  "Coolify @ kai (Hetzner)",
-  "Apache 2.0",
-] as const;
+export const CONTAINER_APP =
+  `max-width:${T.maxWidthApp}px;margin:0 auto;padding-left:clamp(${T.gutterMin}px,3vw,${T.gutterMax}px);padding-right:clamp(${T.gutterMin}px,3vw,${T.gutterMax}px)`;
+export const CONTAINER_DOC =
+  `max-width:${T.maxWidthDoc}px;margin:0 auto;padding-left:clamp(${T.gutterMin}px,3vw,${T.gutterMax}px);padding-right:clamp(${T.gutterMin}px,3vw,${T.gutterMax}px)`;
 
-const Topbar: FC<{ active?: V2NavKey; userRole?: string; csrfToken?: string }> = ({
-  active, userRole, csrfToken,
+const NAV_LINK = (active: boolean): string =>
+  `font-size:14px;font-weight:${active ? 600 : 400};padding:8px 10px;border-radius:9px;white-space:nowrap;` +
+  `color:${active ? T.ink : T.dim};background:${active ? T.subtle : "transparent"}`;
+
+const Topbar: FC<{ active?: V2NavKey; userRole?: string; userName?: string; csrfToken?: string }> = ({
+  active, userRole, userName, csrfToken,
 }) => (
-  <div class="v2-wrap v2-pad v2-topbar" style="position:relative;z-index:2">
-    <a href="/" class="v2-brand">
-      <span class="v2-brand-mark">m</span>
-      <span class="v2-brand-name">moshi<span class="dot">.</span>moshi</span>
-    </a>
-    <nav class="v2-nav">
-      {V2_NAV.map(([key, label, href, requiresAdmin]) => {
-        if (requiresAdmin && userRole !== "admin") return null;
-        return (
-          <a key={key} href={href} class={active === key ? "active" : ""}>{label}</a>
-        );
-      })}
-    </nav>
-    <button
-      data-v2-search
-      type="button"
-      style={`display:flex;align-items:center;gap:10px;background:${V2_TOKENS.btn3};border:none;color:${V2_TOKENS.text};font-family:var(--v2-font-sans);font-size:10.5px;letter-spacing:0.15em;text-transform:uppercase;padding:9px 15px;border-radius:8px;cursor:pointer`}
+  <header style={`background:${T.card};border-bottom:1px solid ${T.line}`}>
+    <div
+      style={`${CONTAINER_APP};display:flex;align-items:center;gap:12px;min-height:64px;padding-top:10px;padding-bottom:10px;flex-wrap:wrap`}
     >
-      <span style="color:#777777">⌕</span>
-      <span>Search</span>
-      <span style={`font-family:var(--v2-font-mono);color:${V2_TOKENS.textMute};letter-spacing:0.05em;text-transform:none`}>⌘K</span>
-    </button>
-    <form method="post" action="/logout" style="margin:0">
-      {csrfToken && <input type="hidden" name="csrf" value={csrfToken} />}
-      <button type="submit" class="v2-logout">Logout</button>
-    </form>
-  </div>
+      <a href="/" style={`display:flex;align-items:center;gap:10px;color:${T.ink}`}>
+        <span style={`width:30px;height:30px;border-radius:9px;background:${T.green};color:#ffffff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px`}>m</span>
+        <span style="font-size:16px;font-weight:600;letter-spacing:-0.01em">
+          moshi<span style={`color:${T.green}`}>.</span>moshi
+        </span>
+      </a>
+      {/* The basis is the nav's natural width. Below it the whole nav wraps to
+          its own row instead of being squeezed into a narrow three-line column
+          beside the buttons — which is what `flex:1` did at around 700px, and
+          it grew the header to 143px. On a phone the nav wraps internally. */}
+      <nav style="display:flex;align-items:center;gap:4px;flex:1 1 360px;flex-wrap:wrap">
+        {V2_NAV.map(([key, label, href, requiresAdmin]) => {
+          if (requiresAdmin && userRole !== "admin") return null;
+          return <a key={key} href={href} style={NAV_LINK(active === key)}>{label}</a>;
+        })}
+      </nav>
+      <button
+        data-v2-search
+        type="button"
+        style={`display:flex;align-items:center;gap:9px;background:${T.paper};border:1px solid ${T.line};color:${T.dim};font-size:13px;padding:8px 12px;border-radius:9px;cursor:pointer`}
+      >
+        <span>Search</span>
+        <span class="v2-kbd">⌘K</span>
+      </button>
+      {userRole === "admin" && (
+        <a
+          class="d-solid"
+          href="/agents/connect"
+          style={`background:${T.green};color:#ffffff;font-size:14px;font-weight:600;padding:9px 16px;border-radius:9px`}
+        >
+          Connect an agent
+        </a>
+      )}
+      <form method="post" action="/logout" style="margin:0">
+        {csrfToken && <input type="hidden" name="csrf" value={csrfToken} />}
+        <button
+          class="d-solid"
+          type="submit"
+          title="Sign out"
+          aria-label="Sign out"
+          style={`width:32px;height:32px;border-radius:9px;background:${T.subtle};border:1px solid ${T.line};display:flex;align-items:center;justify-content:center;font-family:inherit;font-size:12px;font-weight:600;color:${T.dim};cursor:pointer`}
+        >
+          {(userName ?? userRole ?? "?").slice(0, 1).toUpperCase()}
+        </button>
+      </form>
+    </div>
+  </header>
 );
 
+const FOOTER_FACTS = ["NATS JetStream · single node", "SQLite"] as const;
+
+// Sora stops at 600 for body and headings, as the handoff narrowed it. 700 is
+// loaded for one glyph only: the brand mark, which README §Sign in pins at
+// 22px/700. JetBrains Mono keeps 400/500/600.
+const FONT_HREF =
+  "https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700" +
+  "&family=JetBrains+Mono:wght@400;500;600&display=swap";
+
 export const V2Layout: FC<V2LayoutProps> = ({
-  title, active, userRole, csrfToken, hero, fullBleed, children,
+  title, active, userRole, userName, csrfToken, fullBleed, narrow, children,
 }) => {
   const palette = defaultPaletteItems(userRole);
   return (
-    <html lang="de">
+    <html lang="en">
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -268,51 +309,41 @@ export const V2Layout: FC<V2LayoutProps> = ({
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+          href={FONT_HREF}
           rel="stylesheet"
         />
-        {raw(`<style>${V2_CSS}${PALETTE_CSS}</style>`)}
-        <meta name="color-scheme" content="dark" />
+        {raw(`<style>${V2_CSS}${V2_INTERACTION_CSS}${PALETTE_CSS}</style>`)}
+        <meta name="color-scheme" content="light" />
       </head>
       <body>
         <div style="min-height:100vh;display:flex;flex-direction:column">
-          {hero ? (
-            <div style={`position:relative;overflow:hidden;background:${V2_HERO_BG};display:flex;flex-direction:column`}>
-              <div style={`position:absolute;inset:0;background-image:${V2_GRID_BG};background-size:56px 56px;pointer-events:none`} />
-              <Topbar active={active} userRole={userRole} csrfToken={csrfToken} />
-              {hero}
-            </div>
-          ) : (
-            <div class="v2-topbar-rule">
-              <Topbar active={active} userRole={userRole} csrfToken={csrfToken} />
-            </div>
-          )}
+          <Topbar active={active} userRole={userRole} userName={userName} csrfToken={csrfToken} />
           {fullBleed ? (
             <main style="flex:1;display:flex;flex-direction:column">{children}</main>
           ) : (
             <main style="flex:1">
-              <div class="v2-wrap">{children}</div>
+              <div style={`${narrow ? CONTAINER_DOC : CONTAINER_APP};padding-top:32px;padding-bottom:56px`}>
+                {children}
+              </div>
             </main>
           )}
-          <footer class="v2-footer-rule">
-            <div class="v2-wrap v2-pad v2-footer">
-              <span class="v2-footer-domain">
-                <span class="v2-footer-dot" />
+          <footer style={`border-top:1px solid ${T.line};background:${T.card}`}>
+            <div
+              style={`${CONTAINER_APP};padding-top:18px;padding-bottom:18px;display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:${T.dim};align-items:center`}
+            >
+              <span style={`display:inline-flex;align-items:center;gap:8px;color:${T.ink};font-weight:600`}>
+                <span style={`width:8px;height:8px;border-radius:999px;background:${T.live}`} />
                 moshi.enki.run
               </span>
-              {FOOTER_LINKS.map((label) => (
-                <>
-                  <span class="v2-footer-sep">·</span>
-                  <span>{label}</span>
-                </>
-              ))}
-              <span class="v2-footer-spacer" />
-              <span class="v2-footer-warn">NATS · SINGLE-NODE</span>
+              {FOOTER_FACTS.map((label) => <span key={label}>{label}</span>)}
+              <span style="flex:1" />
+              <span>Apache 2.0</span>
             </div>
           </footer>
         </div>
         {raw(paletteMarkup(palette, csrfToken))}
         {PALETTE_SCRIPT}
+        {COPY_SCRIPT}
       </body>
     </html>
   );

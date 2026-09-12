@@ -25,19 +25,22 @@ describe("V2Layout palette", () => {
 
   it("includes default palette items for non-admins", async () => {
     const html = await renderLayout({ active: "HOME", children: "x", userRole: "agent" });
-    expect(html).toContain("Go to Overview");
+    expect(html).toContain("Go to Home");
     expect(html).toContain("Go to Conversations");
-    expect(html).toContain("Go to Messages");
-    expect(html).toContain("Go to Activity");
-    expect(html).toContain("Log out");
+    expect(html).toContain("Go to Log");
+    expect(html).toContain("Sign out");
     expect(html).not.toContain("Go to Agents");
-    expect(html).not.toContain("Register new agent");
+    expect(html).not.toContain("Connect an agent");
+    expect(html).not.toContain("Go to Overview");
+    expect(html).not.toContain("Go to Messages");
+    expect(html).not.toContain("Go to Activity");
   });
 
   it("adds admin-only items when userRole is admin", async () => {
     const html = await renderLayout({ active: "HOME", children: "x", userRole: "admin" });
     expect(html).toContain("Go to Agents");
-    expect(html).toContain("Register new agent");
+    expect(html).toContain("Connect an agent…");
+    expect(html).toContain('href="/agents/connect"');
   });
 
   it("wires the keyboard handler script", async () => {
