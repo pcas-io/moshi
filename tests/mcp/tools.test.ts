@@ -311,7 +311,9 @@ describe("MCP tools — field bounds", () => {
     const row = h.agents.getByName("alpha")!;
     expect(row.role).toHaveLength(64);
     expect(row.working_on).toHaveLength(512);
-    expect(JSON.parse(row.capabilities!)).toHaveLength(32);
+    const stored = JSON.parse(row.capabilities!) as string[];
+    expect(stored).toHaveLength(32);
+    expect(stored[0]).toHaveLength(64); // not FIELD_LIMITS.CAPABILITY: that would shrink with the constant
   });
 
   it("accepts a ttl of one second and of exactly seven days", async () => {
@@ -351,6 +353,9 @@ describe("MCP tools — field bounds", () => {
     const beta = await h.connect("beta");
     const reply = await callTool(beta, "mesh_reply", { message_id: id, payload: "y", context: CTX });
     expect(reply.isError, reply.text).toBe(false);
+
+    // An id of exactly 64 characters is still a legal thread reference.
+    expect((await send({ correlation_id: "c".repeat(64) })).isError).toBe(false);
 
     const tooLong = "m".repeat(FIELD_LIMITS.ID + 1);
     expect((await callTool(alpha, "mesh_get", { message_id: tooLong })).isError).toBe(true);
