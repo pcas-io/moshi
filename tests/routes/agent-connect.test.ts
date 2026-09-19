@@ -59,7 +59,7 @@ class FakePresence implements ConnectPresenceService {
   }
 }
 
-function buildApp(who: RequestAgent | null, agents: FakeAgents) {
+function buildApp(who: RequestAgent | null, agents: FakeAgents, now?: () => number) {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
   app.use("*", async (c, next) => {
     c.set("agent", who);
@@ -71,6 +71,7 @@ function buildApp(who: RequestAgent | null, agents: FakeAgents) {
       agents,
       presence: new FakePresence(agents),
       cookieSecretFor: () => SECRET,
+      now,
     }),
   );
   return app;
@@ -214,6 +215,12 @@ describe("POST /agents/connect/create", () => {
 });
 
 describe("GET /agents/connect/handshake", () => {
+  // A fixed issue time plus a clock pinned one minute later. The route used
+  // to read the wall clock, so these fixtures expired for real fifteen
+  // minutes after 2026-09-12T10:00Z and the suite went red with the calendar.
+  const T0 = Date.parse("2026-09-12T10:00:00.000Z");
+  const oneMinuteLater = (): number => T0 + 60_000;
+
   function sessionFor(agent: Agent, createdAt = Date.now()) {
     return createConnectSession(
       { agentId: agent.id, agentName: agent.name, token: "bt_x" },
@@ -258,8 +265,8 @@ describe("GET /agents/connect/handshake", () => {
 
   it("separates authenticated-once from actually registered", async () => {
     const { agent } = agents.create("dex-eu");
-    const session = sessionFor(agent, Date.parse("2026-09-12T10:00:00.000Z"));
-    const app = buildApp(ADMIN, agents);
+    const session = sessionFor(agent, T0);
+    const app = buildApp(ADMIN, agents, oneMinuteLater);
 
     agent.last_seen_at = "2026-09-12T10:00:08.000Z";
     const seenOnly = await (await app.request(`/agents/connect/handshake?s=${session.key}`)).json();
@@ -279,9 +286,20 @@ describe("GET /agents/connect/handshake", () => {
     const { agent } = agents.create("dex-eu");
     agent.last_seen_at = "2026-09-12T09:00:00.000Z"; // a previous life
     agent.role = "dev-assistant";
-    const session = sessionFor(agent, Date.parse("2026-09-12T10:00:00.000Z"));
-    const res = await buildApp(ADMIN, agents).request(`/agents/connect/handshake?s=${session.key}`);
+    const session = sessionFor(agent, T0);
+    const res = await buildApp(ADMIN, agents, oneMinuteLater)
+      .request(`/agents/connect/handshake?s=${session.key}`);
     expect(await res.json()).toMatchObject({ seen: false, registered: false });
+  });
+
+  it("expires against the injected clock, not the wall clock", async () => {
+    const { agent } = agents.create("dex-eu");
+    const session = sessionFor(agent, T0);
+    const justInside = (): number => T0 + CONNECT_SESSION_TTL_MS - 1;
+    const justOutside = (): number => T0 + CONNECT_SESSION_TTL_MS;
+    const path = `/agents/connect/handshake?s=${session.key}`;
+    expect((await buildApp(ADMIN, agents, justInside).request(path)).status).toBe(200);
+    expect((await buildApp(ADMIN, agents, justOutside).request(path)).status).toBe(410);
   });
 
   it("survives a malformed capabilities column", async () => {
