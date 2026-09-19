@@ -117,3 +117,50 @@ describe("safeNextPath — control characters", () => {
     expect(safeNextPath("/conversations?id=msg_01ABC")).toBe("/conversations?id=msg_01ABC");
   });
 });
+
+describe("safeNextPath — dot segments", () => {
+  // The URL parser removes "." and ".." segments, also percent-encoded ones.
+  // "/.//evil.example" therefore normalises to "//evil.example", which a
+  // browser reads as another host. The check has to run on the result.
+  const HOSTILE = [
+    "/.//evil.example",
+    "/x/..//evil.example",
+    "/%2e//evil.example",
+    "/%2E%2E//evil.example",
+    "/.//login",
+    "/a/b/../..//evil.example/path?x=1",
+  ];
+
+  it("never hands back a protocol-relative target", () => {
+    for (const next of HOSTILE) {
+      expect(safeNextPath(next), JSON.stringify(next)).toBe("/");
+    }
+  });
+
+  it("still refuses the sign-in pages when a dot segment hides them", () => {
+    for (const next of ["/./login", "/x/../logout", "/%2e/login?next=/x"]) {
+      expect(safeNextPath(next), JSON.stringify(next)).toBe("/");
+    }
+  });
+
+  it("is idempotent and stays on the origin for generated input", () => {
+    // Deterministic generator — no Math.random, so a failure reproduces.
+    const ATOMS = ["/", "/", ".", "..", "%2e", "%2E", "%2f", "evil.example", "x", "login", "logout", "?", "#", "@", ":", "a=b", "&"];
+    let seed = 0x9e3779b9;
+    const rand = () => {
+      seed ^= seed << 13; seed >>>= 0;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5; seed >>>= 0;
+      return seed;
+    };
+    const ORIGIN = "https://moshi.example";
+    for (let i = 0; i < 20_000; i++) {
+      const parts = 1 + (rand() % 7);
+      let next = "/";
+      for (let p = 0; p < parts; p++) next += ATOMS[rand() % ATOMS.length];
+      const out = safeNextPath(next);
+      expect(new URL(out, ORIGIN).origin, JSON.stringify(next)).toBe(ORIGIN);
+      expect(safeNextPath(out), JSON.stringify(next)).toBe(out);
+    }
+  });
+});

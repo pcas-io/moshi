@@ -71,7 +71,7 @@ describe("POST /login", () => {
   });
 
   it("never follows a hostile next", async () => {
-    for (const next of ["//evil.example", "/\t/evil.example/login", "https://evil.example", "/\\evil.example"]) {
+    for (const next of ["//evil.example", "/\t/evil.example/login", "https://evil.example", "/\\evil.example", "/.//evil.example", "/x/..//evil.example", "/%2e//evil.example"]) {
       const res = await build(agents, true).request("/login", form({ csrf: generateCsrfToken(SECRET), token, next }));
       expect(res.headers.get("location"), JSON.stringify(next)).toBe("/");
     }

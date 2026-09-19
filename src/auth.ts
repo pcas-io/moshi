@@ -161,6 +161,11 @@ export function safeNextPath(next: string | undefined): string {
   }
   if (url.origin !== ORIGIN) return "/";
   const target = url.pathname + url.search;
+  // Every check from here on looks at the normalised value, because that is
+  // what goes into the Location header. The parser drops "." and ".."
+  // segments (also as %2e), so "/.//evil.example" arrives here as
+  // "//evil.example" — a protocol-relative URL, i.e. another host.
+  if (target.startsWith("//")) return "/";
   if (target.startsWith("/login") || target.startsWith("/logout")) return "/";
   return target;
 }
