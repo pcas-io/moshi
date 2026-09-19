@@ -12,3 +12,11 @@ export function formString(body: Record<string, unknown>, key: string): string |
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
+
+/** A protocol value exactly as it was sent, or undefined when it is absent,
+ *  repeated, or a file. For values the other side compares byte for byte
+ *  (OAuth `state`): trimming those is a silent change to someone's data. */
+export function formRaw(body: Record<string, unknown>, key: string): string | undefined {
+  const value = body[key];
+  return typeof value === "string" ? value : undefined;
+}

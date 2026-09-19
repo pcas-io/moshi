@@ -63,6 +63,23 @@ describe("POST /oauth/authorize", () => {
     expect(db.prepare("SELECT COUNT(*) AS n FROM oauth_tokens").get()).toEqual({ n: 0 });
   });
 
+  it("echoes state exactly as the client sent it", async () => {
+    // state is an opaque protocol value (RFC 6749 allows spaces). The client
+    // compares it byte for byte, so it is never trimmed like a typed field.
+    const { app, agents } = setup();
+    const { plaintextToken } = agents.create("scout");
+    const res = await app.request("/oauth/authorize", authorize({ token: plaintextToken, state: "  padded state  " }));
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get("location")!).searchParams.get("state")).toBe("  padded state  ");
+  });
+
+  it("still forgives whitespace around a pasted token", async () => {
+    const { app, agents } = setup();
+    const { plaintextToken } = agents.create("scout");
+    const res = await app.request("/oauth/authorize", authorize({ token: `  ${plaintextToken}\n` }));
+    expect(res.status).toBe(302);
+  });
+
   it("still issues a code for an agent token", async () => {
     const { app, agents } = setup();
     const { plaintextToken } = agents.create("scout");
@@ -98,5 +115,31 @@ describe("POST /oauth/token — malformed bodies", () => {
     const res = await app.request("/oauth/token", json(JSON.stringify({ grant_type: "authorization_code", code, code_verifier: VERIFIER })));
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ access_token: plaintextToken, token_type: "Bearer" });
+  });
+
+  // What real connectors send: the MCP SDK posts the exchange form-encoded,
+  // with client_id, redirect_uri and resource next to the three fields read.
+  it("completes the exchange in the shape the MCP SDK sends it", async () => {
+    const { app, agents } = setup();
+    const { plaintextToken } = agents.create("scout");
+    const exchange = async (contentType: string, body: (code: string) => BodyInit) => {
+      const auth = await app.request("/oauth/authorize", authorize({ token: plaintextToken }));
+      const code = new URL(auth.headers.get("location")!).searchParams.get("code")!;
+      return app.request("/oauth/token", { method: "POST", body: body(code), headers: { "Content-Type": contentType } });
+    };
+    const fields = (code: string) => ({
+      grant_type: "authorization_code", code, code_verifier: VERIFIER,
+      client_id: "client-1", redirect_uri: REDIRECT, resource: "https://moshi.example/mcp",
+    });
+
+    for (const [contentType, body] of [
+      ["application/x-www-form-urlencoded", (code: string) => new URLSearchParams(fields(code))],
+      ["application/x-www-form-urlencoded;charset=UTF-8", (code: string) => new URLSearchParams(fields(code))],
+      ["application/json; charset=utf-8", (code: string) => JSON.stringify(fields(code))],
+    ] as const) {
+      const res = await exchange(contentType, body);
+      expect(res.status, contentType).toBe(200);
+      expect(await res.json(), contentType).toMatchObject({ access_token: plaintextToken, token_type: "Bearer" });
+    }
   });
 });

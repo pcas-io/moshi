@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formString } from "../../src/routes/form";
+import { formString, formRaw } from "../../src/routes/form";
 import { validateCsrfToken, generateCsrfToken } from "../../src/auth";
 
 describe("formString", () => {
@@ -11,6 +11,17 @@ describe("formString", () => {
     expect(formString(body, "d")).toBeUndefined();
     expect(formString(body, "e")).toBeUndefined();
     expect(formString(body, "missing")).toBeUndefined();
+  });
+});
+
+describe("formRaw", () => {
+  it("returns a string untouched and nothing else", () => {
+    const body = { a: "  x  ", b: "", c: ["x", "y"], d: new File(["x"], "f.txt") } as Record<string, unknown>;
+    expect(formRaw(body, "a")).toBe("  x  ");
+    expect(formRaw(body, "b")).toBe("");
+    expect(formRaw(body, "c")).toBeUndefined();
+    expect(formRaw(body, "d")).toBeUndefined();
+    expect(formRaw(body, "missing")).toBeUndefined();
   });
 });
 

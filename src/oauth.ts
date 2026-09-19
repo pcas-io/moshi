@@ -6,7 +6,7 @@ import { hashToken, timingSafeEqual, getCookieSecret } from "./auth.js";
 import type { AgentService } from "./services/agent.js";
 import type { Env, AppVariables } from "./types.js";
 import { V2_TOKENS } from "./views/v2/tokens.js";
-import { formString } from "./routes/form.js";
+import { formString, formRaw } from "./routes/form.js";
 
 /** The consent screen is the one page a Claude Desktop user sees during the
  *  connect flow, so it wears the same Daylight surfaces as the dashboard. */
@@ -405,7 +405,8 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
     const body = (await c.req.parseBody()) as Record<string, unknown>;
     const token = formString(body, "token");
     const redirectUri = formString(body, "redirect_uri") ?? "";
-    const state = formString(body, "state") ?? "";
+    // Opaque to us and compared verbatim by the client — never trimmed.
+    const state = formRaw(body, "state") ?? "";
     const codeChallenge = formString(body, "code_challenge") ?? "";
     const codeChallengeMethod = formString(body, "code_challenge_method") ?? "";
 
