@@ -101,3 +101,19 @@ describe("safeNextPath", () => {
     expect(safeNextPath("/logout")).toBe("/");
   });
 });
+
+describe("safeNextPath — control characters", () => {
+  // Browsers strip tab and newline while parsing a Location header, so
+  // "/<TAB>/evil.example" resolves to "//evil.example" — another origin.
+  it("refuses anything a browser would resolve to another origin", () => {
+    for (const next of ["/\t/evil.example/login", "/\n/evil.example", "/\r/evil.example", "/ /evil.example", "/\u0000x"]) {
+      expect(safeNextPath(next), JSON.stringify(next)).toBe("/");
+    }
+  });
+
+  it("keeps ordinary same-origin targets, query string included", () => {
+    expect(safeNextPath("/agents?presence=live")).toBe("/agents?presence=live");
+    expect(safeNextPath("/log?tab=audit&q=a%20b")).toBe("/log?tab=audit&q=a%20b");
+    expect(safeNextPath("/conversations?id=msg_01ABC")).toBe("/conversations?id=msg_01ABC");
+  });
+});

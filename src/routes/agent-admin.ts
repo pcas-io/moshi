@@ -8,6 +8,7 @@ import type { Env, AppVariables } from "../types.js";
 import type { AgentService } from "../services/agent.js";
 import { validateCsrfToken } from "../auth.js";
 import { setFlash } from "../services/flash.js";
+import { formString } from "./form.js";
 
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -24,10 +25,10 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
     const cookieSecret = cookieSecretFor(c.env);
-    const body = await c.req.parseBody();
-    const name = (body["name"] as string)?.trim();
-    const avatar = (body["avatar"] as string)?.trim() || undefined;
-    const csrf = body["csrf"] as string;
+    const body = (await c.req.parseBody()) as Record<string, unknown>;
+    const name = formString(body, "name");
+    const avatar = formString(body, "avatar");
+    const csrf = body["csrf"];
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
       const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
@@ -57,9 +58,9 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
     const cookieSecret = cookieSecretFor(c.env);
-    const body = await c.req.parseBody();
-    const id = body["id"] as string;
-    const csrf = body["csrf"] as string;
+    const body = (await c.req.parseBody()) as Record<string, unknown>;
+    const id = formString(body, "id") ?? "";
+    const csrf = body["csrf"];
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
       const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
@@ -75,9 +76,9 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
     const cookieSecret = cookieSecretFor(c.env);
-    const body = await c.req.parseBody();
-    const id = body["id"] as string;
-    const csrf = body["csrf"] as string;
+    const body = (await c.req.parseBody()) as Record<string, unknown>;
+    const id = formString(body, "id") ?? "";
+    const csrf = body["csrf"];
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
       const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
@@ -97,14 +98,14 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
     const cookieSecret = cookieSecretFor(c.env);
-    const body = await c.req.parseBody();
-    const id = body["id"] as string;
-    const name = (body["name"] as string)?.trim();
-    const csrf = body["csrf"] as string;
+    const body = (await c.req.parseBody()) as Record<string, unknown>;
+    const id = formString(body, "id") ?? "";
+    const name = formString(body, "name");
+    const csrf = body["csrf"];
 
     // Back to the agent that was being renamed, so the operator sees the
     // result (or the reason) next to the form they just used.
-    const detail = `/agents?inspect=${encodeURIComponent(id ?? "")}`;
+    const detail = `/agents?inspect=${encodeURIComponent(id)}`;
     const refuse = (message: string) =>
       c.redirect(`${detail}&flash=${setFlash({ error: message })}`);
 
@@ -141,9 +142,9 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
     const cookieSecret = cookieSecretFor(c.env);
-    const body = await c.req.parseBody();
-    const id = body["id"] as string;
-    const csrf = body["csrf"] as string;
+    const body = (await c.req.parseBody()) as Record<string, unknown>;
+    const id = formString(body, "id") ?? "";
+    const csrf = body["csrf"];
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
       const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
@@ -163,9 +164,9 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     if (agent?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
     const cookieSecret = cookieSecretFor(c.env);
-    const body = await c.req.parseBody();
-    const id = body["id"] as string;
-    const csrf = body["csrf"] as string;
+    const body = (await c.req.parseBody()) as Record<string, unknown>;
+    const id = formString(body, "id") ?? "";
+    const csrf = body["csrf"];
 
     if (!validateCsrfToken(csrf, cookieSecret)) {
       const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });

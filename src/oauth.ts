@@ -6,6 +6,7 @@ import { hashToken, timingSafeEqual, getCookieSecret } from "./auth.js";
 import type { AgentService } from "./services/agent.js";
 import type { Env, AppVariables } from "./types.js";
 import { V2_TOKENS } from "./views/v2/tokens.js";
+import { formString } from "./routes/form.js";
 
 /** The consent screen is the one page a Claude Desktop user sees during the
  *  connect flow, so it wears the same Daylight surfaces as the dashboard. */
@@ -138,12 +139,18 @@ function authorizePageHTML(params: {
   state: string;
   codeChallenge: string;
   codeChallengeMethod: string;
-  error?: boolean;
+  /** `true` for a wrong or missing token, `"admin"` when the operator
+   *  credential was pasted. */
+  error?: boolean | "admin";
 }): string {
   const { redirectUri, state, codeChallenge, codeChallengeMethod, error } =
     params;
+  const errorText =
+    error === "admin"
+      ? 'That is the admin token. It is an operator credential and is never handed to a connector. Create an agent under <a href="/agents/connect">/agents/connect</a> and paste its <code>bt_</code> token.'
+      : "Invalid token — check the agent&rsquo;s bearer token.";
   const errorBlock = error
-    ? '<div class="error"><span class="dot"></span>Invalid token — check the agent&rsquo;s bearer token.</div>'
+    ? `<div class="error"><span class="dot"></span>${errorText}</div>`
     : "";
   return `<!DOCTYPE html>
 <html lang="en">
@@ -237,24 +244,24 @@ function authorizePageHTML(params: {
 </html>`;
 }
 
-// --- Resolve user from token ---
-// Returns true if the token is valid (admin or active agent)
-function resolveUser(
+// --- Resolve the pasted token ---
+// Only an active AGENT token may be handed to an OAuth client. The consent
+// screen has always said the admin token "will not work here"; the code
+// accepted it anyway, stored it in SQLite and returned it to the connector
+// as its access token — the operator credential, exported to a third party.
+type PastedToken = "agent" | "admin" | "invalid";
+
+function classifyToken(
   token: string,
   agents: AgentService,
   adminToken: string,
   adminTokenPrev: string | undefined,
-): boolean {
+): PastedToken {
   const hash = hashToken(token);
-  const adminHash = hashToken(adminToken);
-
-  if (timingSafeEqual(hash, adminHash)) return true;
-  if (adminTokenPrev && timingSafeEqual(hash, hashToken(adminTokenPrev))) {
-    return true;
-  }
-
+  if (adminToken && timingSafeEqual(hash, hashToken(adminToken))) return "admin";
+  if (adminTokenPrev && timingSafeEqual(hash, hashToken(adminTokenPrev))) return "admin";
   const agent = agents.getByTokenHash(hash);
-  return agent !== null && agent.is_active === 1;
+  return agent !== null && agent.is_active === 1 ? "agent" : "invalid";
 }
 
 // --- OAuth sub-app ---
@@ -395,12 +402,12 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
   });
 
   oauth.post("/oauth/authorize", async (c) => {
-    const body = await c.req.parseBody();
-    const token = body["token"] as string;
-    const redirectUri = body["redirect_uri"] as string;
-    const state = body["state"] as string;
-    const codeChallenge = body["code_challenge"] as string;
-    const codeChallengeMethod = body["code_challenge_method"] as string;
+    const body = (await c.req.parseBody()) as Record<string, unknown>;
+    const token = formString(body, "token");
+    const redirectUri = formString(body, "redirect_uri") ?? "";
+    const state = formString(body, "state") ?? "";
+    const codeChallenge = formString(body, "code_challenge") ?? "";
+    const codeChallengeMethod = formString(body, "code_challenge_method") ?? "";
 
     if (!isAllowedRedirectUri(redirectUri)) {
       return c.json(
@@ -427,16 +434,18 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
     const adminToken = process.env.MESH_ADMIN_TOKEN ?? "";
     const adminTokenPrev = process.env.MESH_ADMIN_TOKEN_PREVIOUS;
 
-    const valid = resolveUser(token, agents, adminToken, adminTokenPrev);
+    // A missing field is just a wrong token: this route is public, and it
+    // used to answer an absent `token` with an HTTP 500.
+    const pasted = token ? classifyToken(token, agents, adminToken, adminTokenPrev) : "invalid";
 
-    if (!valid) {
+    if (pasted !== "agent" || !token) {
       return c.html(
         authorizePageHTML({
           redirectUri,
           state,
           codeChallenge,
           codeChallengeMethod,
-          error: true,
+          error: pasted === "admin" ? "admin" : true,
         }),
         401,
       );
@@ -460,22 +469,33 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
 
   // Token endpoint — exchanges code for access token
   oauth.post("/oauth/token", async (c) => {
+    // Public endpoint: every field is checked for being a string before a
+    // string method touches it. Broken JSON, `null` or a numeric `code` used
+    // to be an unauthenticated HTTP 500.
     const contentType = c.req.header("content-type") ?? "";
-    let grantType: string;
-    let code: string;
-    let codeVerifier: string;
-
+    let fields: Record<string, unknown>;
     if (contentType.includes("application/json")) {
-      const body = await c.req.json();
-      grantType = body.grant_type;
-      code = body.code;
-      codeVerifier = body.code_verifier;
+      let parsed: unknown;
+      try {
+        parsed = await c.req.json();
+      } catch {
+        return c.json({ error: "invalid_request", error_description: "Body must be valid JSON" }, 400);
+      }
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return c.json({ error: "invalid_request", error_description: "Body must be a JSON object" }, 400);
+      }
+      fields = parsed as Record<string, unknown>;
     } else {
-      const body = await c.req.parseBody();
-      grantType = body["grant_type"] as string;
-      code = body["code"] as string;
-      codeVerifier = body["code_verifier"] as string;
+      fields = (await c.req.parseBody()) as Record<string, unknown>;
     }
+    for (const key of ["grant_type", "code", "code_verifier"]) {
+      if (fields[key] !== undefined && typeof fields[key] !== "string") {
+        return c.json({ error: "invalid_request", error_description: `${key} must be a string` }, 400);
+      }
+    }
+    const grantType = fields["grant_type"] as string | undefined;
+    const code = fields["code"] as string | undefined;
+    const codeVerifier = fields["code_verifier"] as string | undefined;
 
     if (grantType !== "authorization_code") {
       return c.json({ error: "unsupported_grant_type" }, 400);

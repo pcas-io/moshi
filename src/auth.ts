@@ -57,7 +57,11 @@ export function generateCsrfToken(secret: string): string {
   return `${payload}.${mac}`;
 }
 
-export function validateCsrfToken(token: string, secret: string): boolean {
+export function validateCsrfToken(token: unknown, secret: string): boolean {
+  // Form fields arrive as string | File | array | undefined. Anything but a
+  // non-empty string is simply not a valid token — it used to be a TypeError
+  // and an HTTP 500 on every admin action.
+  if (typeof token !== "string" || token.length === 0) return false;
   const lastDot = token.lastIndexOf(".");
   if (lastDot === -1) return false;
 
@@ -142,8 +146,23 @@ export function isBrowserNavigation(req: {
 export function safeNextPath(next: string | undefined): string {
   if (!next) return "/";
   if (!next.startsWith("/") || next.startsWith("//") || next.includes("\\")) return "/";
-  if (next.startsWith("/login") || next.startsWith("/logout")) return "/";
-  return next;
+  // Browsers strip tab, CR and LF while parsing a Location header, so
+  // "/<TAB>/evil.example" resolves to "//evil.example" — another origin.
+  // No legitimate path contains raw control characters or spaces.
+  if (/[\u0000-\u0020\u007f]/.test(next)) return "/";
+  // Belt and braces: resolve it the way a browser would and keep only what
+  // stays on this origin.
+  const ORIGIN = "http://same-origin.invalid";
+  let url: URL;
+  try {
+    url = new URL(next, ORIGIN);
+  } catch {
+    return "/";
+  }
+  if (url.origin !== ORIGIN) return "/";
+  const target = url.pathname + url.search;
+  if (target.startsWith("/login") || target.startsWith("/logout")) return "/";
+  return target;
 }
 
 // --- Auth middleware ---
