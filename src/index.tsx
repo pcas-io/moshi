@@ -119,7 +119,6 @@ const smallFormLimit = bodyLimit({
 });
 app.use("/login", smallFormLimit);
 app.use("/logout", smallFormLimit);
-app.use("/agents/*", smallFormLimit);
 app.use(
   "/oauth/*",
   bodyLimit({
@@ -196,6 +195,12 @@ app.route("/", createSessionRoutes({ agents, secureCookie: config.cookieSecure }
 
 // --- Auth middleware on all other routes ---
 app.use("*", authMiddleware(agents, presence, activity));
+
+// Limits for authenticated routes come after auth, for the same reason as on
+// /mcp: bodyLimit drains a body of unknown length before it passes on, and
+// nobody anonymous should get to park a connection on an admin action.
+// /login and /oauth/* are public and read their body, so theirs stay up top.
+app.use("/agents/*", smallFormLimit);
 
 // --- MCP endpoint ---
 app.post("/mcp", mcpBodyLimit, async (c) => {
