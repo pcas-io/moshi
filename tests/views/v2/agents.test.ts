@@ -144,8 +144,11 @@ describe("V2AgentsPage — rename", () => {
     expect(html).toMatch(/<input[^>]*name="name"[^>]*value="scout"/);
     expect(html).toContain('maxlength="64"');
     expect(html).toContain('pattern="[A-Za-z0-9][A-Za-z0-9_\\-]{0,63}"');
-    expect(html).toContain("Keeps its token, inbox and history.");
     expect(html).toContain("Other agents reach it under the new name from then on.");
+    // The aside's own rule: the consequence lives inside the control, so it
+    // is part of what a screen reader announces for the button.
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*>Rename<span[^>]*>Keeps its token, inbox and history\./);
+    expect(html).toMatch(/<input[^>]*class="d-input"[^>]*name="name"|<input[^>]*name="name"[^>]*class="d-input"/);
   });
 
   it("offers it for a deactivated agent too: a label is a label", async () => {

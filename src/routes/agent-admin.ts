@@ -114,13 +114,22 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
 
     if (!name) return refuse("Give the agent a name.");
 
+    let found: boolean;
     try {
-      agents.rename(id, name, agent.name);
+      found = agents.rename(id, name, agent.name);
     } catch (err: unknown) {
       return refuse(
         err instanceof Error
           ? err.message
           : "Something went wrong renaming the agent. Check the server log.",
+      );
+    }
+
+    // No `inspect` here: the Agents page falls back to the first agent for
+    // an unknown id, and the operator would land on someone else's form.
+    if (!found) {
+      return c.redirect(
+        `/agents?flash=${setFlash({ error: "That agent no longer exists. Reload the page." })}`,
       );
     }
 

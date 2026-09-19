@@ -79,11 +79,34 @@ describe("POST /agents/rename", () => {
     expect(agents.getByName("scout")).toBeNull();
   });
 
-  it("rejects a stale form without renaming", async () => {
+  it("rejects a stale form without renaming, and stays on the agent", async () => {
     const res = await rename(ADMIN, { csrf: "stale.token", id, name: "scout-eu" });
     expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain(`inspect=${id}`);
     expect(flashOf(res)?.error).toBe("That form expired. Reload the page and try again.");
     expect(agents.getByName("scout")).not.toBeNull();
+  });
+
+  it("says so when the agent is gone, instead of landing on someone else's form", async () => {
+    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET), id: "01NOPE", name: "scout-eu" });
+    const location = res.headers.get("location") ?? "";
+    expect(location).not.toContain("inspect=");
+    expect(flashOf(res)?.error).toBe("That agent no longer exists. Reload the page.");
+  });
+
+  it("treats a missing id the same way", async () => {
+    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET), name: "scout-eu" });
+    expect(res.headers.get("location") ?? "").not.toContain("inspect=");
+    expect(flashOf(res)?.error).toBe("That agent no longer exists. Reload the page.");
+  });
+
+  it("percent-encodes a hostile id on the way into the Location header", async () => {
+    const hostile = "x\r\nSet-Cookie: a=b&flash=zz#//evil.example";
+    const res = await rename(ADMIN, { csrf: "stale.token", id: hostile, name: "scout-eu" });
+    const location = res.headers.get("location") ?? "";
+    expect(location.startsWith("/agents?inspect=")).toBe(true);
+    expect(location).not.toMatch(/[\r\n#]/);
+    expect(location).toContain(encodeURIComponent(hostile));
   });
 
   it("asks for a name when the field is empty", async () => {

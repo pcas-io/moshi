@@ -165,14 +165,13 @@ const ActionForm: FC<{
 
 // A rename is a label change: the token, the inbox key and with it the
 // unread mail stay put. The consequence line says so, because the obvious
-// fear — "will it lose its messages?" — is exactly what used to happen.
+// fear — "will it lose its messages?" — is exactly what used to happen. It
+// sits inside the button like every other action here, so it is part of
+// what a screen reader announces for the control.
 const RENAME_INPUT =
-  `flex:1 1 auto;min-width:0;background:${T.paper};border:1px solid ${T.lineStrong};` +
+  `width:100%;background:${T.paper};border:1px solid ${T.lineStrong};` +
   `border-radius:${T.radiusControl}px;font-family:${V2_FONT_FAMILY_MONO};font-size:14px;` +
-  `padding:10px 12px;color:${T.ink}`;
-
-const RENAME_BUTTON =
-  `${ACTION_BASE};border:1px solid ${T.lineStrong};color:${T.ink};flex-shrink:0`;
+  `padding:10px 12px;outline:none;color:${T.ink}`;
 
 const RenameForm: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({ agent, csrfToken }) => {
   const inputId = `rename-${agent.id}`;
@@ -180,29 +179,30 @@ const RenameForm: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({ agent, cs
     <form
       method="post"
       action="/agents/rename"
-      style={`display:flex;flex-direction:column;gap:6px;padding:4px 0 6px`}
+      style="display:flex;flex-direction:column;gap:7px;padding-top:4px"
     >
       <input type="hidden" name="csrf" value={csrfToken} />
       <input type="hidden" name="id" value={agent.id} />
-      <label for={inputId} style={`font-size:13px;color:${T.dim}`}>Name</label>
-      <div style="display:flex;gap:8px">
-        <input
-          id={inputId}
-          name="name"
-          value={agent.name}
-          required
-          maxlength={64}
-          pattern={AGENT_NAME_PATTERN}
-          title={AGENT_NAME_RULE}
-          autocomplete="off"
-          spellcheck={false}
-          style={RENAME_INPUT}
-        />
-        <button class="d-outline" type="submit" style={RENAME_BUTTON}>Rename</button>
-      </div>
-      <span style={subline(T.faint)}>
-        Keeps its token, inbox and history. Other agents reach it under the new name from then on.
-      </span>
+      <label for={inputId} style={`font-size:13px;color:${T.faint}`}>Name</label>
+      <input
+        id={inputId}
+        class="d-input"
+        name="name"
+        value={agent.name}
+        required
+        maxlength={64}
+        pattern={AGENT_NAME_PATTERN}
+        title={AGENT_NAME_RULE}
+        autocomplete="off"
+        spellcheck={false}
+        style={RENAME_INPUT}
+      />
+      <button class="d-outline" type="submit" style={ACTION_SECONDARY}>
+        Rename
+        <span style={subline(T.faint)}>
+          Keeps its token, inbox and history. Other agents reach it under the new name from then on.
+        </span>
+      </button>
     </form>
   );
 };
