@@ -119,7 +119,9 @@ export function threadScript(
     row.setAttribute('data-msg-id', msg.id);
 
     var avatar = el('span', style.avatar);
-    var emblem = emblems[String(msg.from).toLowerCase()];
+    var who = String(msg.from).toLowerCase();
+    // Own entries only: an agent may be called "constructor".
+    var emblem = Object.prototype.hasOwnProperty.call(emblems, who) ? emblems[who] : null;
     if (emblem) avatar.innerHTML = emblem;
 
     var col = el('div', isMine ? style.colMine : style.colTheirs);

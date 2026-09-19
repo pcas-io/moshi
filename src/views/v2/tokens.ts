@@ -97,7 +97,11 @@ export const KIND_COLORS: Record<string, readonly [string, string]> = {
 };
 
 export function kindColors(key: string): readonly [string, string] {
-  return KIND_COLORS[key] ?? KIND_COLORS["info"]!;
+  // `key` is a message type — free text from any agent. Only OWN entries
+  // count: "constructor" or "__proto__" would otherwise return something
+  // inherited, the callers destructure it, and one such message turned /log
+  // and /conversations into an HTTP 500 for everyone.
+  return Object.hasOwn(KIND_COLORS, key) ? KIND_COLORS[key]! : KIND_COLORS["info"]!;
 }
 
 // Full CSS string injected into pages via <style>. Deliberately thin:
