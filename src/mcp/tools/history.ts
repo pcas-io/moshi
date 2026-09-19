@@ -3,6 +3,7 @@ import { z } from "zod";
 import type Database from "better-sqlite3";
 import { ok, error } from "../shared.js";
 import type { ToolContext } from "../shared.js";
+import { FIELD_LIMITS } from "../../types.js";
 
 interface MessageRow {
   id: string;
@@ -55,8 +56,8 @@ export function registerHistoryTools(server: McpServer, ctx: ToolContext): void 
     "mesh_history",
     "View the full conversation thread a message belongs to. Accepts any message id of the thread (root or reply). Returns messages in chronological order.",
     {
-      correlation_id: z.string().describe("Any message id of the thread — the root id (= correlation_id) or a reply id"),
-      limit: z.number().min(1).max(200).optional().describe("Max messages to return (default: 50)"),
+      correlation_id: z.string().max(FIELD_LIMITS.ID).describe("Any message id of the thread — the root id (= correlation_id) or a reply id"),
+      limit: z.number().int().min(1).max(200).optional().describe("Max messages to return (default: 50)"),
     },
     { readOnlyHint: true },
     async (params) => {
@@ -89,7 +90,7 @@ export function registerHistoryTools(server: McpServer, ctx: ToolContext): void 
     "mesh_get",
     "Fetch one message with its complete payload — use it after mesh_receive returned a truncated preview (payload_truncated=true).",
     {
-      message_id: z.string().describe("The message id (msg_…) from mesh_receive or mesh_history"),
+      message_id: z.string().max(FIELD_LIMITS.ID).describe("The message id (msg_…) from mesh_receive or mesh_history"),
     },
     { readOnlyHint: true },
     async (params) => {

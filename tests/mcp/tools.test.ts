@@ -257,6 +257,47 @@ describe("MCP tools — mesh_reply checks the recipient", () => {
   });
 });
 
+describe("MCP tools — field bounds", () => {
+  // Only the 512 KB body limit capped these. A 500 KB `working_on` is echoed
+  // to every agent in every mesh_status reply and rendered on every page load.
+  let h: Harness;
+  let alpha: Client;
+  beforeEach(async () => {
+    h = createHarness();
+    h.agents.create("alpha");
+    h.agents.create("beta");
+    alpha = await h.connect("alpha");
+  });
+
+  const send = (extra: Record<string, unknown>) =>
+    callTool(alpha, "mesh_send", { to: "beta", payload: "x", context: CTX, ...extra });
+
+  it("rejects an oversized type and an oversized correlation_id", async () => {
+    expect((await send({ type: "t".repeat(65) })).isError).toBe(true);
+    expect((await send({ correlation_id: "c".repeat(65) })).isError).toBe(true);
+    expect((await send({ type: "t".repeat(64) })).isError).toBe(false);
+  });
+
+  it("wants ttl_seconds as a positive whole number within the stream's seven days", async () => {
+    for (const ttl of [-5, 0, 1.5, 604801]) expect((await send({ ttl_seconds: ttl })).isError, String(ttl)).toBe(true);
+    expect((await send({ ttl_seconds: 3600 })).isError).toBe(false);
+  });
+
+  it("wants whole-number limits", async () => {
+    expect((await callTool(alpha, "mesh_receive", { limit: 2.5 })).isError).toBe(true);
+    expect((await callTool(alpha, "mesh_history", { limit: 2.5 })).isError).toBe(true);
+  });
+
+  it("bounds what mesh_register announces", async () => {
+    const reg = (args: Record<string, unknown>) => callTool(alpha, "mesh_register", args);
+    expect((await reg({ working_on: "w".repeat(513) })).isError).toBe(true);
+    expect((await reg({ role: "r".repeat(65) })).isError).toBe(true);
+    expect((await reg({ capabilities: Array.from({ length: 33 }, (_, i) => `c${i}`) })).isError).toBe(true);
+    expect((await reg({ capabilities: ["c".repeat(65)] })).isError).toBe(true);
+    expect((await reg({ role: "dev", working_on: "fine", capabilities: ["ts"] })).isError).toBe(false);
+  });
+});
+
 describe("MCP tools — admin identity (A1)", () => {
   let h: Harness;
   let admin: Client;

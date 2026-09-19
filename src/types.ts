@@ -108,6 +108,21 @@ export interface PaginatedResult<T> {
   offset: number;
 }
 
+/** Upper bounds for free-text tool fields. Only the 512 KB body limit used
+ *  to cap them — a 500 KB `working_on` is echoed to every agent in every
+ *  mesh_status reply and rendered on every dashboard load. */
+export const FIELD_LIMITS = {
+  TYPE: 64,
+  ID: 64,
+  AGENT_NAME: 64,
+  ROLE: 64,
+  WORKING_ON: 512,
+  CAPABILITIES: 32,
+  CAPABILITY: 64,
+  /** JetStream keeps a message for seven days; a longer deadline is a lie. */
+  TTL_SECONDS_MAX: 7 * 24 * 60 * 60,
+} as const;
+
 export const LIMITS = {
   PAGINATION_DEFAULT: 50,
   PAGINATION_MAX: 200,

@@ -9,6 +9,7 @@ import {
   DEFAULT_PREVIEW_CHARS,
   MIN_PREVIEW_CHARS,
   MAX_PAYLOAD_BYTES,
+  FIELD_LIMITS,
 } from "../../types.js";
 import {
   createMessage,
@@ -79,16 +80,23 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "mesh_send",
     "Send a message to another agent or broadcast to all agents. The context field is REQUIRED — describe your current project, task, and status so the recipient understands your situation. The reply carries inbox_pending: how many messages are waiting for YOU.",
     {
-      to: z.string().describe("Target agent name (see mesh_status), or 'broadcast' for all agents"),
+      to: z.string().max(FIELD_LIMITS.AGENT_NAME).describe("Target agent name (see mesh_status), or 'broadcast' for all agents"),
       type: z
         .string()
+        .max(FIELD_LIMITS.TYPE)
         .optional()
         .describe(`Message type, default "${DEFAULT_MESSAGE_TYPE}". Recommended: ${TYPE_LIST}. Other values are accepted.`),
       payload: z.string().max(MAX_PAYLOAD_BYTES).describe("Message content (max 256 KB)"),
       context: z.string().max(2048).describe("Your current project, task, and status (max 2048 chars) — REQUIRED for recipient to understand your situation"),
-      correlation_id: z.string().optional().describe("Thread ID to continue an existing conversation"),
+      correlation_id: z.string().max(FIELD_LIMITS.ID).optional().describe("Thread ID to continue an existing conversation"),
       priority: z.enum(MESSAGE_PRIORITIES).optional().describe("Message priority (low, normal, high)"),
-      ttl_seconds: z.number().optional().describe("Delivery deadline in seconds (default: 86400 = 24h). After expiry, mesh_receive silently drops the message — but it remains in history until the 30-day DB rotation."),
+      ttl_seconds: z
+        .number()
+        .int()
+        .min(1)
+        .max(FIELD_LIMITS.TTL_SECONDS_MAX)
+        .optional()
+        .describe("Delivery deadline in whole seconds, 1 to 604800 (default: 86400 = 24h). After expiry, mesh_receive silently drops the message — but it remains in history until the 30-day DB rotation."),
     },
     async (params) => {
       if (ctx.isAdmin) return adminError();
@@ -157,7 +165,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "mesh_receive",
     "Check for new messages in your inbox. Returns unread messages from other agents and broadcasts — reading acknowledges them. Long payloads are cut to preview_chars (payload_truncated=true); fetch the full text with mesh_get.",
     {
-      limit: z.number().min(1).max(50).optional().describe("Max messages to fetch (default: 10, max: 50)"),
+      limit: z.number().int().min(1).max(50).optional().describe("Max messages to fetch (default: 10, max: 50)"),
       preview_chars: z
         .number()
         .int()
@@ -235,11 +243,12 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "mesh_reply",
     "Reply to a specific message. Threading is automatic — the reply is linked to the original conversation thread.",
     {
-      message_id: z.string().describe("ID of the message to reply to"),
+      message_id: z.string().max(FIELD_LIMITS.ID).describe("ID of the message to reply to"),
       payload: z.string().max(MAX_PAYLOAD_BYTES).describe("Reply content (max 256 KB)"),
       context: z.string().max(2048).describe("Your current project, task, and status (max 2048 chars)"),
       type: z
         .string()
+        .max(FIELD_LIMITS.TYPE)
         .optional()
         .describe(`Message type of the reply, default "${REPLY_MESSAGE_TYPE}" (e.g. review_result answering a review_request)`),
     },
