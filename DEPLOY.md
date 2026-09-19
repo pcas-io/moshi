@@ -34,7 +34,10 @@ TLS-terminating proxy (Coolify, step 3) that is what you want and needs no
 setting. When the dashboard is reached over plain http, a browser drops
 that cookie and sign-in loops back to the login page without an error.
 Chrome and Firefox make an exception for `http://localhost`, Safari does
-not. For any plain-http use set `MESH_COOKIE_SECURE=0`.
+not. For any plain-http use set `MESH_COOKIE_SECURE=0`. On Coolify, set it
+in the environment variables of the resource: Coolify stores the variable
+(empty) on the first deploy, and a stored value wins over a default written
+into `docker-compose.yml` later.
 
 ## 3. Domain + TLS
 
