@@ -20,6 +20,7 @@ TypeScript, Hono, @hono/node-server, @modelcontextprotocol/sdk, nats.js, better-
 - `src/routes/mcp.ts` — `POST /mcp` (stateless transport via `createStatelessTransport()`, body limit on the route)
 - `src/routes/dashboard.tsx` — Home, thread SSE, Agents, Log, Conversations
 - `src/mcp/` — MCP server + 7 tools (mesh_send, mesh_receive, mesh_get, mesh_reply, mesh_status, mesh_register, mesh_history); `catalog.ts` is the tool reference the dashboard palette renders (a test keeps it in sync)
+- `src/services/circuit-breaker.ts` — breaker in front of every broker call (pure, clock injected); `src/services/consumers.ts` — the two durables per agent, ensured once per process
 - `src/services/inbox.ts` — JetStream pull logic (consumer info before fetch, shared limit); unit-tested with fake consumers
 - `src/services/` — Business logic (nats, agent, message, ratelimit, activity)
 - `src/views/` — Dashboard (Hono JSX, server-rendered)
@@ -56,6 +57,9 @@ ULID IDs, SHA-256 token hashing, timing-safe comparison.
 - Presence is refreshed by tool calls only. An idle but connected client decays to `stale` after 10 minutes; the old 1 Hz GET reconnect loop that kept it `live` is gone on purpose.
 - The session cookie is `Secure` when `NODE_ENV=production`; `MESH_COOKIE_SECURE=0` is the opt-out for plain-http hosts.
 - Middleware order is behaviour and is pinned by `tests/app/wiring.test.ts` against the real app. Change `src/app.tsx` and those tests together, never the order alone.
+
+- NATS outages: every broker call goes through `NatsService.guarded()`. JetStream calls time out after 1.5 s, the first outage error opens the breaker for 5 s, a `disconnect` holds it open until `reconnect`. Never add a bare `catch` around a broker call: "not found" is an answer, a timeout is not. `presence.touch` waits at most 300 ms for its KV write.
+- `/livez` is liveness (container healthcheck), `/health` is readiness (reports NATS). The HTTP server starts before the first NATS connect, which retries in the background for as long as it takes.
 
 ## Commits
 Conventional Commits: feat:, fix:, chore:, docs:, refactor:
