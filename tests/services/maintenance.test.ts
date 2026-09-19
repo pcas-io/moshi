@@ -20,7 +20,10 @@ describe("startMaintenance", () => {
     stop();
     vi.advanceTimersByTime(5000);
     expect(a).toHaveBeenCalledTimes(4);
-    // Only work that did something is worth a log line.
+    // Only work that did something is worth a log line: four runs of "b",
+    // each reporting its two rows, and never a line for "a".
+    expect(onResult).toHaveBeenCalledTimes(4);
+    expect(onResult).toHaveBeenCalledWith("b", 2);
     expect(onResult.mock.calls.every(([name]) => name === "b")).toBe(true);
   });
 
