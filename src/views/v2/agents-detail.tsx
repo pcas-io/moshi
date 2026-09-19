@@ -11,6 +11,7 @@ import type { Presence } from "../../services/presence.js";
 import { PRESENCE_THRESHOLDS } from "../../services/presence.js";
 import type { HourlyHeat } from "../../services/dashboard-stats.js";
 import { MESSAGE_RETENTION_DAYS } from "../../types.js";
+import { AGENT_NAME_PATTERN, AGENT_NAME_RULE } from "../../services/agent.js";
 import { V2Avatar, V2Dot } from "./components.js";
 import { V2_FONT_FAMILY_MONO, V2_TOKENS } from "./tokens.js";
 
@@ -19,6 +20,8 @@ const T = V2_TOKENS;
 export interface V2AgentsAgent {
   id: string;
   name: string;
+  /** The immutable NATS address token — what the Inbox row shows. */
+  inbox_key: string;
   role: string | null;
   capabilities: string[];
   is_active: boolean;
@@ -160,6 +163,50 @@ const ActionForm: FC<{
   </form>
 );
 
+// A rename is a label change: the token, the inbox key and with it the
+// unread mail stay put. The consequence line says so, because the obvious
+// fear — "will it lose its messages?" — is exactly what used to happen.
+const RENAME_INPUT =
+  `flex:1 1 auto;min-width:0;background:${T.paper};border:1px solid ${T.lineStrong};` +
+  `border-radius:${T.radiusControl}px;font-family:${V2_FONT_FAMILY_MONO};font-size:14px;` +
+  `padding:10px 12px;color:${T.ink}`;
+
+const RENAME_BUTTON =
+  `${ACTION_BASE};border:1px solid ${T.lineStrong};color:${T.ink};flex-shrink:0`;
+
+const RenameForm: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({ agent, csrfToken }) => {
+  const inputId = `rename-${agent.id}`;
+  return (
+    <form
+      method="post"
+      action="/agents/rename"
+      style={`display:flex;flex-direction:column;gap:6px;padding:4px 0 6px`}
+    >
+      <input type="hidden" name="csrf" value={csrfToken} />
+      <input type="hidden" name="id" value={agent.id} />
+      <label for={inputId} style={`font-size:13px;color:${T.dim}`}>Name</label>
+      <div style="display:flex;gap:8px">
+        <input
+          id={inputId}
+          name="name"
+          value={agent.name}
+          required
+          maxlength={64}
+          pattern={AGENT_NAME_PATTERN}
+          title={AGENT_NAME_RULE}
+          autocomplete="off"
+          spellcheck={false}
+          style={RENAME_INPUT}
+        />
+        <button class="d-outline" type="submit" style={RENAME_BUTTON}>Rename</button>
+      </div>
+      <span style={subline(T.faint)}>
+        Keeps its token, inbox and history. Other agents reach it under the new name from then on.
+      </span>
+    </form>
+  );
+};
+
 // ── Aside body pieces ───────────────────────────────────────────
 
 const FACT_VALUE = `font-size:13.5px;color:${T.body}`;
@@ -240,6 +287,7 @@ const ActionStack: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({ agent, c
     >
       Read its conversations
     </a>
+    <RenameForm agent={agent} csrfToken={csrfToken} />
     {agent.is_active ? (
       <>
         <ActionForm action="/agents/reset-token" csrfToken={csrfToken} agentId={agent.id}>
@@ -333,8 +381,9 @@ export const DetailAside: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({
         label="Inbox"
         valueStyle={`font-family:${V2_FONT_FAMILY_MONO};font-size:12px;color:${T.faint};word-break:break-all`}
       >
-        {/* Lower-cased because that is the subject the server actually binds. */}
-        {`mesh.agents.${agent.name.toLowerCase()}.inbox`}
+        {/* The inbox key, not the name: that is the subject the server binds,
+            and it stays the same when the agent is renamed. */}
+        {`mesh.agents.${agent.inbox_key}.inbox`}
       </Fact>
 
       <div style="margin-top:14px">

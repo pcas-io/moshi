@@ -16,7 +16,7 @@ import { raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { V2Layout } from "./layout.js";
 import { V2Avatar } from "./components.js";
-import { AGENT_NAME_RE } from "../../services/agent.js";
+import { AGENT_NAME_PATTERN, AGENT_NAME_RULE } from "../../services/agent.js";
 import {
   CONNECT_CLIENT_LABELS,
   CONNECT_CLIENT_ORDER,
@@ -59,8 +59,7 @@ export interface V2ConnectProps {
 
 /** COPY.md §1 — also the input's `title`, so the browser's own validation
  *  bubble says what the server would say. */
-export const NAME_RULE_MESSAGE =
-  "1–64 characters: letters, digits, - or _ · must start with a letter or digit · no spaces or dots";
+export const NAME_RULE_MESSAGE = AGENT_NAME_RULE;
 
 // ── Stepper ─────────────────────────────────────────────────────
 const STEP_DEFS: ReadonlyArray<readonly [ConnectStep, string, string]> = [
@@ -120,7 +119,7 @@ const Stepper: FC<{ current: ConnectStep; s?: string; client: ConnectClientKey }
 );
 
 // ── Step 1 — Name it ────────────────────────────────────────────
-const NAME_PATTERN = AGENT_NAME_RE.source.replace(/^\^/, "").replace(/\$$/, "");
+const NAME_PATTERN = AGENT_NAME_PATTERN;
 
 const StepName: FC<{ csrfToken: string; typedName?: string; error?: string }> = ({
   csrfToken, typedName, error,

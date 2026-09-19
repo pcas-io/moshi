@@ -102,27 +102,29 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     const name = (body["name"] as string)?.trim();
     const csrf = body["csrf"] as string;
 
+    // Back to the agent that was being renamed, so the operator sees the
+    // result (or the reason) next to the form they just used.
+    const detail = `/agents?inspect=${encodeURIComponent(id ?? "")}`;
+    const refuse = (message: string) =>
+      c.redirect(`${detail}&flash=${setFlash({ error: message })}`);
+
     if (!validateCsrfToken(csrf, cookieSecret)) {
-      const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
-      return c.redirect(`/agents?flash=${flashKey}`);
+      return refuse("That form expired. Reload the page and try again.");
     }
 
-    if (!name) {
-      const flashKey = setFlash({ error: "Give the agent a name." });
-      return c.redirect(`/agents?flash=${flashKey}`);
-    }
+    if (!name) return refuse("Give the agent a name.");
 
     try {
       agents.rename(id, name, agent.name);
     } catch (err: unknown) {
-      const msg = err instanceof Error
-        ? err.message
-        : "Something went wrong renaming the agent. Check the server log.";
-      const flashKey = setFlash({ error: msg });
-      return c.redirect(`/agents?flash=${flashKey}`);
+      return refuse(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong renaming the agent. Check the server log.",
+      );
     }
 
-    return c.redirect("/agents");
+    return c.redirect(detail);
   });
 
   admin.post("/reset-token", async (c) => {
