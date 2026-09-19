@@ -41,4 +41,6 @@ if [ -z "$PORT" ]; then
 fi
 
 echo "test-integration: $IMAGE on 127.0.0.1:$PORT"
-MOSHI_TEST_NATS_URL="nats://127.0.0.1:$PORT" npx vitest run tests/integration --no-file-parallelism "$@"
+# The container name lets the outage tests freeze and thaw the broker.
+MOSHI_TEST_NATS_URL="nats://127.0.0.1:$PORT" MOSHI_TEST_NATS_CONTAINER="$NAME" \
+  npx vitest run tests/integration --no-file-parallelism "$@"
