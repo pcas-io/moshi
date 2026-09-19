@@ -222,6 +222,38 @@ describe("dashboard behind a session", () => {
   });
 });
 
+describe("/agents/* — the form limit sits behind auth as well", () => {
+  it("turns an anonymous upload to an admin action away before reading it", async () => {
+    const never = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("id=x&name=")); /* and then silence */ },
+    });
+    const req = new Request("http://localhost/agents/rename", {
+      method: "POST", body: never, duplex: "half",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    } as RequestInit & { duplex: "half" });
+    const outcome = await Promise.race([
+      Promise.resolve(t.app.request(req)).then((res) => res.status),
+      new Promise<string>((resolve) => setTimeout(() => resolve("no answer within 1 s"), 1000)),
+    ]);
+    expect(outcome).toBe(401);
+  });
+
+  it("still refuses an oversized form from the signed-in operator", async () => {
+    const login = await t.app.request("/login", {
+      method: "POST",
+      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token: ADMIN_TOKEN }),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0]!;
+    const res = await t.app.request("/agents/create", {
+      method: "POST", body: "name=" + "x".repeat(8 * 1024),
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: cookie },
+    });
+    expect(res.status).toBe(413);
+    expect(t.h.agents.list().map((a) => a.name).sort()).toEqual(["alpha", "beta"]);
+  });
+});
+
 describe("OAuth discovery is mounted and public", () => {
   it("serves the protected-resource metadata without a token", async () => {
     const res = await t.app.request("/.well-known/oauth-protected-resource");
