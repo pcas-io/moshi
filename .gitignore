@@ -20,3 +20,11 @@ cli-dist/
 # OS + editor cruft
 .DS_Store
 .claude/
+
+# SQLite runs in WAL mode; the sidecars hold the most recent pages (payloads,
+# token hashes). `*.db` alone does not cover them, and this repo is public.
+*.db-wal
+*.db-shm
+
+# Written into the repo root by the Playwright MCP server.
+.playwright-mcp/
