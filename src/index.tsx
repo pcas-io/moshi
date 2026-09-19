@@ -1,7 +1,6 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { setCookie, deleteCookie } from "hono/cookie";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { initDatabase } from "./services/db.js";
 import { NatsService } from "./services/nats.js";
@@ -10,15 +9,15 @@ import { ActivityService } from "./services/activity.js";
 import { RateLimiter } from "./services/ratelimit.js";
 import {
   authMiddleware,
-  hashToken,
-  timingSafeEqual,
   generateCsrfToken,
-  validateCsrfToken,
-  generateSessionCookie,
   getCookieSecret,
   safeNextPath,
 } from "./auth.js";
 import { createMcpServer } from "./mcp/server.js";
+import { mcpPostOnly } from "./mcp/http-guard.js";
+import { securityHeaders } from "./middleware/security-headers.js";
+import { createSessionRoutes } from "./routes/session.js";
+import { startMaintenance } from "./services/maintenance.js";
 import { createOAuthRoutes, cleanupExpiredOAuthTokens } from "./oauth.js";
 import { registerCliRoutes, requestOrigin } from "./services/cli-dist.js";
 import { createAgentAdminRoutes } from "./routes/agent-admin.js";
@@ -143,14 +142,13 @@ app.use(
   }),
 );
 
-// --- Security headers ---
-app.use("*", async (c, next) => {
-  await next();
-  c.header("X-Mesh-Version", VERSION);
-  c.header("X-Content-Type-Options", "nosniff");
-  c.header("X-Frame-Options", "DENY");
-  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
-});
+// --- Security headers (incl. no-store for everything dynamic) ---
+app.use("*", securityHeaders(VERSION));
+
+// --- /mcp is POST-only ---
+// In front of the auth middleware on purpose: a GET must not even cost a
+// presence write. See src/mcp/http-guard.ts for the reconnect loop it ends.
+app.use("/mcp", mcpPostOnly);
 
 // --- Health endpoint (no auth) ---
 // CLI distribution: /install.sh, /install.ps1, /cli/version, /cli/:file
@@ -189,81 +187,14 @@ app.get("/login", async (c) => {
   );
 });
 
-app.post("/login", async (c) => {
-  const cookieSecret = getCookieSecret(c.env as unknown as Record<string, string | undefined>);
-  const body = await c.req.parseBody();
-  const token = body["token"] as string;
-  const csrf = body["csrf"] as string;
-  const next = safeNextPath(typeof body["next"] === "string" ? body["next"] : undefined);
-  const loginError = `/login?error=1${next !== "/" ? `&next=${encodeURIComponent(next)}` : ""}`;
-
-  if (!validateCsrfToken(csrf, cookieSecret)) {
-    return c.redirect(loginError);
-  }
-
-  const adminToken = c.env.MESH_ADMIN_TOKEN;
-  const adminTokenPrev = c.env.MESH_ADMIN_TOKEN_PREVIOUS;
-  const hash = hashToken(token);
-
-  let resolvedName: string | null = null;
-
-  if (timingSafeEqual(hash, hashToken(adminToken))) {
-    resolvedName = "admin";
-  } else if (adminTokenPrev && timingSafeEqual(hash, hashToken(adminTokenPrev))) {
-    resolvedName = "admin";
-  } else {
-    const foundAgent = agents.getByTokenHash(hash);
-    if (foundAgent && foundAgent.is_active) {
-      resolvedName = foundAgent.name;
-    }
-  }
-
-  if (!resolvedName) {
-    return c.redirect(loginError);
-  }
-
-  const sessionValue = generateSessionCookie(resolvedName, cookieSecret);
-  setCookie(c, "mesh_session", sessionValue, {
-    httpOnly: true,
-    sameSite: "Lax",
-    path: "/",
-    maxAge: 30 * 24 * 60 * 60, // 30 days
-  });
-
-  return c.redirect(next);
-});
+// --- Sign-in / sign-out (no auth; see src/routes/session.ts) ---
+app.route("/", createSessionRoutes({ agents, isProduction: config.isProduction }));
 
 // --- Auth middleware on all other routes ---
 app.use("*", authMiddleware(agents, presence, activity));
 
-// --- Logout ---
-app.post("/logout", (c) => {
-  deleteCookie(c, "mesh_session", { path: "/" });
-  return c.redirect("/login");
-});
-
-app.get("/logout", (c) => {
-  deleteCookie(c, "mesh_session", { path: "/" });
-  return c.redirect("/login");
-});
-
 // --- MCP endpoint ---
-app.all("/mcp", async (c) => {
-  if (
-    c.req.method !== "POST" &&
-    c.req.method !== "GET" &&
-    c.req.method !== "DELETE"
-  ) {
-    return c.json(
-      {
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "Method not allowed." },
-        id: null,
-      },
-      405,
-    );
-  }
-
+app.post("/mcp", async (c) => {
   const agent = c.get("agent");
   const agentName = agent?.name ?? "anonymous";
   const isAdmin = agent?.role === "admin";
@@ -534,21 +465,24 @@ process.on("uncaughtException", (err) => {
   process.exit(1);
 });
 
+const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
+
 // --- Start server + graceful shutdown ---
 async function start() {
-  // Rotate old data on startup
-  const oauthCleaned = cleanupExpiredOAuthTokens(db);
-  if (oauthCleaned > 0) {
-    log("info", "cleaned up expired oauth tokens", { count: oauthCleaned });
-  }
-  const msgRotated = activity.rotateMessages(MESSAGE_RETENTION_DAYS);
-  const actRotated = activity.rotate(ACTIVITY_RETENTION_DAYS);
-  if (msgRotated > 0 || actRotated > 0) {
-    log("info", "rotated retention tables", {
-      messages: msgRotated,
-      activity_entries: actRotated,
-    });
-  }
+  // Retention and expired-credential cleanup: now, then hourly. It used to
+  // run only here, so "30 days" really meant "until the next restart".
+  const stopMaintenance = startMaintenance(
+    [
+      { name: "oauth_tokens", run: () => cleanupExpiredOAuthTokens(db) },
+      { name: "messages", run: () => activity.rotateMessages(MESSAGE_RETENTION_DAYS) },
+      { name: "activity_log", run: () => activity.rotate(ACTIVITY_RETENTION_DAYS) },
+    ],
+    {
+      intervalMs: MAINTENANCE_INTERVAL_MS,
+      onResult: (name, count) => log("info", "maintenance removed expired rows", { table: name, count }),
+      onError: (name, err) => log("error", "maintenance task failed", { table: name, err: String(err) }),
+    },
+  );
 
   // C4: Bounded retry loop for initial NATS connection. Once connected,
   // the NatsService keeps itself alive via `reconnect: true`. This loop
@@ -587,6 +521,7 @@ async function start() {
 
   const shutdown = async () => {
     log("info", "shutting down");
+    stopMaintenance();
     server.close();
     await nats.close();
     db.close();
