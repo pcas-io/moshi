@@ -137,15 +137,17 @@ describe("safeNextPath — dot segments", () => {
     }
   });
 
-  it("still refuses the sign-in pages when a dot segment hides them", () => {
-    for (const next of ["/./login", "/x/../logout", "/%2e/login?next=/x"]) {
+  it("still refuses the sign-in pages when a dot segment or a percent-encoded letter hides them", () => {
+    // The router decodes the path before it matches: "/%6cogout" IS /logout,
+    // and a redirect there signs the operator out again right after sign-in.
+    for (const next of ["/./login", "/x/../logout", "/%2e/login?next=/x", "/%6cogout", "/%6Cogout", "/l%6fgin?next=/x", "/x/../%6cogout"]) {
       expect(safeNextPath(next), JSON.stringify(next)).toBe("/");
     }
   });
 
   it("is idempotent and stays on the origin for generated input", () => {
     // Deterministic generator — no Math.random, so a failure reproduces.
-    const ATOMS = ["/", "/", ".", "..", "%2e", "%2E", "%2f", "evil.example", "x", "login", "logout", "?", "#", "@", ":", "a=b", "&"];
+    const ATOMS = ["/", "/", ".", "..", "%2e", "%2E", "%2f", "%6c", "%6F", "%", "%zz", "evil.example", "x", "login", "logout", "ogout", "?", "#", "@", ":", "a=b", "&"];
     let seed = 0x9e3779b9;
     const rand = () => {
       seed ^= seed << 13; seed >>>= 0;
@@ -161,6 +163,10 @@ describe("safeNextPath — dot segments", () => {
       const out = safeNextPath(next);
       expect(new URL(out, ORIGIN).origin, JSON.stringify(next)).toBe(ORIGIN);
       expect(safeNextPath(out), JSON.stringify(next)).toBe(out);
+      // Never a sign-in page, in the form the router will match it.
+      let routed = new URL(out, ORIGIN).pathname;
+      try { routed = decodeURI(routed); } catch { /* malformed escape: the router cannot decode it either */ }
+      expect(/^\/(login|logout)/.test(routed), JSON.stringify(next)).toBe(false);
     }
   });
 });

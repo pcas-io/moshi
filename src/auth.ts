@@ -166,7 +166,17 @@ export function safeNextPath(next: string | undefined): string {
   // segments (also as %2e), so "/.//evil.example" arrives here as
   // "//evil.example" — a protocol-relative URL, i.e. another host.
   if (target.startsWith("//")) return "/";
-  if (target.startsWith("/login") || target.startsWith("/logout")) return "/";
+  // The sign-in pages are refused in the form the router will match them:
+  // it decodes the path first, so "/%6cogout" IS /logout, and landing there
+  // signs the operator out again with the very next request. A malformed
+  // escape stays as it is — the router cannot decode that either.
+  let routed = url.pathname;
+  try {
+    routed = decodeURI(routed);
+  } catch {
+    /* keep the raw path */
+  }
+  if (routed.startsWith("/login") || routed.startsWith("/logout")) return "/";
   return target;
 }
 
