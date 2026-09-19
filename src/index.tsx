@@ -192,7 +192,7 @@ app.get("/login", async (c) => {
 });
 
 // --- Sign-in / sign-out (no auth; see src/routes/session.ts) ---
-app.route("/", createSessionRoutes({ agents, isProduction: config.isProduction }));
+app.route("/", createSessionRoutes({ agents, secureCookie: config.cookieSecure }));
 
 // --- Auth middleware on all other routes ---
 app.use("*", authMiddleware(agents, presence, activity));
@@ -521,6 +521,7 @@ async function start() {
     version: VERSION,
     port: config.port,
     production: config.isProduction,
+    cookie_secure: config.cookieSecure,
   });
 
   const shutdown = async () => {

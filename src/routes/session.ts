@@ -23,14 +23,14 @@ const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 export interface SessionDeps {
   agents: Pick<AgentService, "getByTokenHash">;
-  /** `Secure` on the session cookie. Off outside production, where the
-   *  dashboard is served over plain http on localhost. */
-  isProduction: boolean;
+  /** `Secure` on the session cookie — `config.cookieSecure`. Off wherever
+   *  the dashboard is served over plain http, or the browser drops it. */
+  secureCookie: boolean;
 }
 
-export function createSessionRoutes({ agents, isProduction }: SessionDeps): Hono<HonoEnv> {
+export function createSessionRoutes({ agents, secureCookie }: SessionDeps): Hono<HonoEnv> {
   const session = new Hono<HonoEnv>();
-  const cookieAttributes = { httpOnly: true, sameSite: "Lax", path: "/", secure: isProduction } as const;
+  const cookieAttributes = { httpOnly: true, sameSite: "Lax", path: "/", secure: secureCookie } as const;
 
   session.post("/login", async (c) => {
     const cookieSecret = getCookieSecret(c.env as unknown as Record<string, string | undefined>);

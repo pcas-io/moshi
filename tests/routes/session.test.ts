@@ -19,13 +19,13 @@ function db(): Database.Database {
   return d;
 }
 
-function build(agents: AgentService, isProduction: boolean) {
+function build(agents: AgentService, secureCookie: boolean) {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
   app.use("*", async (c, next) => {
     c.env = { NATS_URL: "nats://x", MESH_ADMIN_TOKEN: ADMIN_TOKEN, MESH_COOKIE_SECRET: SECRET } as Env;
     await next();
   });
-  app.route("/", createSessionRoutes({ agents, isProduction }));
+  app.route("/", createSessionRoutes({ agents, secureCookie }));
   return app;
 }
 
@@ -55,7 +55,7 @@ describe("POST /login", () => {
     expect(res.headers.get("location")).toBe("/login?error=1");
   });
 
-  it("signs in and sets a Secure, HttpOnly, SameSite=Lax cookie in production", async () => {
+  it("signs in and sets a Secure, HttpOnly, SameSite=Lax cookie when told to", async () => {
     const res = await build(agents, true).request("/login", form({ csrf: generateCsrfToken(SECRET), token, next: "/log?tab=audit" }));
     expect(res.headers.get("location")).toBe("/log?tab=audit");
     const cookie = res.headers.get("set-cookie") ?? "";
@@ -65,7 +65,7 @@ describe("POST /login", () => {
     expect(cookie).toMatch(/;\s*Secure/i);
   });
 
-  it("leaves Secure off outside production, or local http sign-in would break", async () => {
+  it("leaves Secure off when told to, or sign-in over plain http would break", async () => {
     const res = await build(agents, false).request("/login", form({ csrf: generateCsrfToken(SECRET), token }));
     expect(res.headers.get("set-cookie") ?? "").not.toMatch(/;\s*Secure/i);
   });

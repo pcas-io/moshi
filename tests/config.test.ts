@@ -38,6 +38,28 @@ describe("loadConfig", () => {
       }
     });
 
+    // The session cookie's Secure flag. It follows NODE_ENV unless said
+    // otherwise, because the compose file pins NODE_ENV=production and that
+    // same stack is also run on plain http://localhost.
+    it("derives cookieSecure from NODE_ENV and lets MESH_COOKIE_SECURE override it", () => {
+      const secure = (env: NodeJS.ProcessEnv) => {
+        const result = loadConfig(env);
+        if (isConfigError(result)) throw new Error(result.errors.join("; "));
+        return result.cookieSecure;
+      };
+      expect(secure(VALID_DEV_ENV)).toBe(false);
+      expect(secure(VALID_PROD_ENV)).toBe(true);
+      expect(secure({ ...VALID_PROD_ENV, MESH_COOKIE_SECURE: "" })).toBe(true); // compose passes "" when unset
+      for (const off of ["0", "false", "FALSE"]) expect(secure({ ...VALID_PROD_ENV, MESH_COOKIE_SECURE: off }), off).toBe(false);
+      for (const on of ["1", "true", "True"]) expect(secure({ ...VALID_DEV_ENV, MESH_COOKIE_SECURE: on }), on).toBe(true);
+    });
+
+    it("refuses a MESH_COOKIE_SECURE it cannot read, instead of guessing", () => {
+      const result = loadConfig({ ...VALID_PROD_ENV, MESH_COOKIE_SECURE: "maybe" });
+      expect(isConfigError(result)).toBe(true);
+      if (isConfigError(result)) expect(result.errors.join(" ")).toContain("MESH_COOKIE_SECURE");
+    });
+
     it("applies defaults for NATS_URL, DATABASE_PATH, and PORT", () => {
       const minimal: NodeJS.ProcessEnv = { MESH_ADMIN_TOKEN: "a".repeat(32) };
       const result = loadConfig(minimal);

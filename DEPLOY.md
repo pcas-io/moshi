@@ -29,6 +29,12 @@ Generate each with `openssl rand -hex 32` and set:
 `docker-compose.yml` — do **not** override. `NODE_ENV=production` is what
 enforces the three separate secrets; never deploy without it.
 
+Production also marks the dashboard's session cookie `Secure`. Behind a
+TLS-terminating proxy (Coolify, step 3) that is what you want and needs no
+setting. Only when the dashboard is reached over plain http on something
+other than `localhost` does a browser drop that cookie, and sign-in loops
+back to the login page. For that case alone set `MESH_COOKIE_SECURE=0`.
+
 ## 3. Domain + TLS
 
 Point a DNS record for **`moshi.enki.run`** at the Coolify host, then map

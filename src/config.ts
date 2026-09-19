@@ -22,6 +22,9 @@ export interface Config {
   databasePath: string;
   port: number;
   isProduction: boolean;
+  /** `Secure` on the session cookie. Follows `isProduction` unless
+   *  MESH_COOKIE_SECURE says otherwise. */
+  cookieSecure: boolean;
 }
 
 export interface ConfigError {
@@ -83,6 +86,19 @@ export function loadConfig(
     errors.push(`PORT must be a valid port number (got "${portStr}")`);
   }
 
+  // Secure on the session cookie. A browser drops a Secure cookie that
+  // arrives over plain http (localhost aside), so a production-mode stack
+  // served without TLS would accept the sign-in and never see the cookie
+  // again. NODE_ENV alone cannot tell the two apart: the compose file pins
+  // it to "production". Unset or empty means "follow NODE_ENV".
+  const cookieSecureRaw = (env.MESH_COOKIE_SECURE ?? "").trim().toLowerCase();
+  let cookieSecure = isProduction;
+  if (cookieSecureRaw === "1" || cookieSecureRaw === "true") cookieSecure = true;
+  else if (cookieSecureRaw === "0" || cookieSecureRaw === "false") cookieSecure = false;
+  else if (cookieSecureRaw !== "") {
+    errors.push(`MESH_COOKIE_SECURE must be 1, 0, true or false (got "${env.MESH_COOKIE_SECURE}")`);
+  }
+
   if (errors.length > 0) {
     return { errors };
   }
@@ -96,6 +112,7 @@ export function loadConfig(
     databasePath: env.DATABASE_PATH ?? "./mesh.db",
     port,
     isProduction,
+    cookieSecure,
   };
 }
 
