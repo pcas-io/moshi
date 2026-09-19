@@ -87,9 +87,9 @@ export function loadConfig(
   }
 
   // Secure on the session cookie. A browser drops a Secure cookie that
-  // arrives over plain http (localhost aside), so a production-mode stack
-  // served without TLS would accept the sign-in and never see the cookie
-  // again. NODE_ENV alone cannot tell the two apart: the compose file pins
+  // arrives over plain http (Chrome and Firefox except http://localhost,
+  // Safari not even there), so a production-mode stack served without TLS
+  // would accept the sign-in and never see the cookie again. NODE_ENV alone cannot tell the two apart: the compose file pins
   // it to "production". Unset or empty means "follow NODE_ENV".
   const cookieSecureRaw = (env.MESH_COOKIE_SECURE ?? "").trim().toLowerCase();
   let cookieSecure = isProduction;

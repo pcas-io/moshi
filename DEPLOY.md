@@ -31,9 +31,10 @@ enforces the three separate secrets; never deploy without it.
 
 Production also marks the dashboard's session cookie `Secure`. Behind a
 TLS-terminating proxy (Coolify, step 3) that is what you want and needs no
-setting. Only when the dashboard is reached over plain http on something
-other than `localhost` does a browser drop that cookie, and sign-in loops
-back to the login page. For that case alone set `MESH_COOKIE_SECURE=0`.
+setting. When the dashboard is reached over plain http, a browser drops
+that cookie and sign-in loops back to the login page without an error.
+Chrome and Firefox make an exception for `http://localhost`, Safari does
+not. For any plain-http use set `MESH_COOKIE_SECURE=0`.
 
 ## 3. Domain + TLS
 
