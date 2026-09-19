@@ -121,13 +121,17 @@ export class AgentService {
   /**
    * The address for a new agent: its lower-cased name, unless that key is
    * still held by an agent that was renamed away from the name, or would
-   * collide with another agent's broadcast durable (`agent-<key>-broadcast`
-   * is also what an agent keyed `<key>-broadcast` would call its inbox).
+   * collide with a broadcast durable. `agent-<key>-broadcast` is both the
+   * broadcast durable of `<key>` and the inbox durable of an agent keyed
+   * `<key>-broadcast`, so the guard runs in both directions: no new key ends
+   * in the suffix, and none is a prefix of an existing `…-broadcast` key.
    * Then a short unique suffix keeps the two inboxes apart.
    */
   private allocateInboxKey(name: string): string {
     const base = name.toLowerCase();
-    const held = this.db.prepare("SELECT 1 FROM agents WHERE inbox_key = ?").get(base);
+    const held = this.db
+      .prepare("SELECT 1 FROM agents WHERE inbox_key IN (?, ?)")
+      .get(base, base + BROADCAST_DURABLE_SUFFIX);
     if (!held && !base.endsWith(BROADCAST_DURABLE_SUFFIX)) return base;
     const suffix = ulid().toLowerCase().slice(-KEY_SUFFIX_CHARS);
     const room = 64 - KEY_SUFFIX_CHARS - 1;
@@ -158,10 +162,10 @@ export class AgentService {
 
     this.db
       .prepare(
-        `INSERT INTO agents (id, name, inbox_key, avatar, token_hash, is_active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+        `INSERT INTO agents (id, name, inbox_key, name_since, avatar, token_hash, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       )
-      .run(id, name, inbox_key, avatar ?? null, token_hash, now, now);
+      .run(id, name, inbox_key, now, avatar ?? null, token_hash, now, now);
 
     clearTokenCache();
 
@@ -177,6 +181,7 @@ export class AgentService {
       id,
       name,
       inbox_key,
+      name_since: now,
       role: null,
       capabilities: null,
       token_hash,
@@ -295,18 +300,26 @@ export class AgentService {
    * Message history is rewritten to the new name in the same transaction:
    * threads group by participant name and `mesh_reply` resolves the
    * recipient from `from_agent`, so a half-renamed history would split
-   * conversations and strand replies. Only rows from this agent's lifetime
-   * are touched — older ones belong to an earlier holder of the name. The
-   * audit trail is never rewritten; it records the rename itself.
+   * conversations and strand replies. Only rows written since this agent
+   * took the name (`name_since`) are touched — before that the name may
+   * have belonged to another, since deleted agent, even during this
+   * agent's own lifetime. The audit trail is never rewritten; it records
+   * the rename itself.
+   *
+   * Returns false when the agent does not exist, true otherwise — also for
+   * an unchanged name, which is a no-op without a write or an audit entry.
    */
   rename(id: string, newName: string, adminName?: string): boolean {
-    this.assertUsableName(newName);
-
     const agent = this.db
-      .prepare("SELECT name, created_at FROM agents WHERE id = ?")
-      .get(id) as { name: string; created_at: string } | undefined;
+      .prepare("SELECT name, inbox_key, created_at, name_since FROM agents WHERE id = ?")
+      .get(id) as
+      | { name: string; inbox_key: string | null; created_at: string; name_since: string | null }
+      | undefined;
 
     if (!agent) return false;
+    if (newName === agent.name) return true;
+
+    this.assertUsableName(newName);
 
     const taken = this.db
       .prepare("SELECT id FROM agents WHERE name = ? COLLATE NOCASE AND id != ?")
@@ -316,22 +329,36 @@ export class AgentService {
     }
 
     const oldName = agent.name;
+    const heldSince = agent.name_since ?? agent.created_at;
     const now = new Date().toISOString();
     const renamed = this.db.transaction((): boolean => {
+      // A row can lack a key when it was created by a build from before
+      // migration 0005 after a rollback. Pin it to the address it has been
+      // using BEFORE the label moves, or the rename would move the address
+      // too — the very bug the key exists to prevent.
+      if (agent.inbox_key === null) {
+        const current = oldName.toLowerCase();
+        const taken = this.db
+          .prepare("SELECT 1 FROM agents WHERE inbox_key = ? AND id != ?")
+          .get(current, id);
+        this.db
+          .prepare("UPDATE agents SET inbox_key = ? WHERE id = ?")
+          .run(taken ? this.allocateInboxKey(oldName) : current, id);
+      }
       const result = this.db
-        .prepare("UPDATE agents SET name = ?, updated_at = ? WHERE id = ?")
-        .run(newName, now, id);
+        .prepare("UPDATE agents SET name = ?, name_since = ?, updated_at = ? WHERE id = ?")
+        .run(newName, now, now, id);
       if (result.changes === 0) return false;
       this.db
         .prepare(
           "UPDATE messages SET from_agent = ? WHERE from_agent = ? COLLATE NOCASE AND created_at >= ?",
         )
-        .run(newName, oldName, agent.created_at);
+        .run(newName, oldName, heldSince);
       this.db
         .prepare(
           "UPDATE messages SET to_agent = ? WHERE to_agent = ? COLLATE NOCASE AND created_at >= ?",
         )
-        .run(newName, oldName, agent.created_at);
+        .run(newName, oldName, heldSince);
       return true;
     })();
 

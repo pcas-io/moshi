@@ -22,7 +22,11 @@ export type McpServerDeps = Omit<ToolContext, "inboxKey"> & { inboxKey?: string 
 function resolveInboxKey(deps: McpServerDeps): string {
   if (deps.inboxKey !== undefined) return deps.inboxKey;
   if (deps.isAdmin) return "";
-  return inboxKeyOf(deps.agents.getByName(deps.agentName) ?? { name: deps.agentName });
+  const row = deps.agents.getByName(deps.agentName);
+  // Never guess an address from a name: with names and keys decoupled the
+  // guess can be another agent's inbox, and mesh_receive acks what it pulls.
+  if (!row) throw new Error(`No agent record for "${deps.agentName}" — refusing to guess an inbox.`);
+  return inboxKeyOf(row);
 }
 
 export function createMcpServer(deps: McpServerDeps): McpServer {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { readFileSync, readdirSync } from "fs";
 import {
@@ -199,6 +199,64 @@ describe("AgentService", () => {
     const { agent } = agents.create("scout");
     agents.rename(agent.id, "scout-eu");
     expect(db.prepare("SELECT from_agent FROM messages WHERE id = 'old'").get()).toEqual({ from_agent: "scout" });
+  });
+
+  // Found in review: bounding the rewrite by the agent's birth re-attributed
+  // the mail of a deleted namesake that had lived DURING this agent's
+  // lifetime. The bound is "since this agent holds the name".
+  it("leaves a deleted namesake's mail alone, even from this agent's lifetime", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      const { agent } = agents.create("long-lived");
+      const namesake = agents.create("alice").agent;
+
+      vi.setSystemTime(new Date("2026-02-01T00:00:00.000Z"));
+      insertMessage("theirs", "alice", "ops", new Date().toISOString());
+      agents.deleteById(namesake.id);
+
+      vi.setSystemTime(new Date("2026-03-01T00:00:00.000Z"));
+      agents.rename(agent.id, "alice");
+      vi.setSystemTime(new Date("2026-03-02T00:00:00.000Z"));
+      insertMessage("mine", "alice", "ops", new Date().toISOString());
+
+      vi.setSystemTime(new Date("2026-04-01T00:00:00.000Z"));
+      agents.rename(agent.id, "carol");
+
+      const rows = db.prepare("SELECT id, from_agent FROM messages ORDER BY id").all();
+      expect(rows).toEqual([
+        { id: "mine", from_agent: "carol" },
+        { id: "theirs", from_agent: "alice" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pins a missing key before the label moves: a rollback can leave rows without one", () => {
+    const { agent } = agents.create("legacy");
+    db.prepare("UPDATE agents SET inbox_key = NULL WHERE id = ?").run(agent.id);
+    agents.rename(agent.id, "modern");
+    expect(keyOf("modern")).toBe("legacy");
+  });
+
+  it("guards the broadcast durable in both directions", () => {
+    // A legacy agent whose name ends in -broadcast keeps that key...
+    const legacy = agents.create("placeholder").agent;
+    db.prepare("UPDATE agents SET name = 'ops-broadcast', inbox_key = 'ops-broadcast' WHERE id = ?").run(legacy.id);
+    // ...so a new agent "ops" must not get the key whose broadcast durable
+    // (agent-ops-broadcast) is the legacy agent's inbox durable.
+    const { agent } = agents.create("ops");
+    expect(agent.inbox_key).not.toBe("ops");
+    expect(agent.inbox_key.startsWith("ops-")).toBe(true);
+  });
+
+  it("treats an unchanged name as done, without a write or an audit entry", () => {
+    const { agent } = agents.create("scout");
+    const before = db.prepare("SELECT updated_at FROM agents WHERE id = ?").get(agent.id);
+    expect(agents.rename(agent.id, "scout")).toBe(true);
+    expect(db.prepare("SELECT updated_at FROM agents WHERE id = ?").get(agent.id)).toEqual(before);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM activity_log WHERE action = 'agent_renamed'").get()).toEqual({ n: 0 });
   });
 
   it("never rewrites the audit trail", () => {

@@ -32,11 +32,30 @@ const BROADCAST_SUBJECT = "mesh.broadcast";
 /** The one place a direct-message subject is built. It takes the agent
  *  row, not a name: the address is the immutable inbox key. */
 function inboxSubject(agent: { name: string; inbox_key?: string | null }): string {
-  return `mesh.agents.${inboxKeyOf(agent)}.inbox`;
+  // Lower-cased like the consumer side (inbox.ts, nats.ts), so publisher and
+  // filter can never disagree about the token.
+  return `mesh.agents.${inboxKeyOf(agent).toLowerCase()}.inbox`;
 }
 
 function unavailableAgentError(name: string): string {
   return `Agent "${name}" not found. Use mesh_status to see available agents.`;
+}
+
+interface NameRow { id: string; from_agent: string; to_agent: string }
+
+/** from/to as the history has them now. Missing ids (a history gap after a
+ *  failed dual-write) simply keep what the envelope says. */
+function currentNames(
+  db: ToolContext["db"],
+  ids: string[],
+): Map<string, NameRow> {
+  if (ids.length === 0) return new Map();
+  const rows = db
+    .prepare(
+      `SELECT id, from_agent, to_agent FROM messages WHERE id IN (${ids.map(() => "?").join(",")})`,
+    )
+    .all(...ids) as NameRow[];
+  return new Map(rows.map((r) => [r.id, r]));
 }
 
 /** Inbox view of a message: payload cut to `previewChars`, with enough
@@ -186,6 +205,18 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
 
       if (messages.length === 0) {
         return ok({ messages: [], inbox_pending: pull.remaining, hint: "No new messages." });
+      }
+
+      // The JetStream copy froze the names at send time. A rename rewrites
+      // the history, so take from/to from there: an agent that answers a
+      // renamed sender by name would otherwise be told it does not exist.
+      const current = currentNames(db, messages.map((m) => m.id));
+      for (const m of messages) {
+        const names = current.get(m.id);
+        if (names) {
+          m.from = names.from_agent;
+          m.to = names.to_agent;
+        }
       }
 
       return ok({

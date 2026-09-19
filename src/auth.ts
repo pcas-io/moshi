@@ -3,6 +3,7 @@ import { createMiddleware } from "hono/factory";
 import { getCookie } from "hono/cookie";
 import type { Env, RequestAgent, AppVariables } from "./types";
 import type { AgentService } from "./services/agent";
+import { inboxKeyOf } from "./services/agent";
 import type { ActivityService } from "./services/activity";
 import type { PresenceService } from "./services/presence";
 
@@ -170,6 +171,7 @@ export function authMiddleware(
     const adminTokenPrev = c.env.MESH_ADMIN_TOKEN_PREVIOUS;
 
     let resolvedName: string | null = null;
+    let resolvedInboxKey: string | undefined;
     let resolvedRole: "admin" | "agent" | null = null;
 
     // --- Bearer token auth ---
@@ -193,6 +195,7 @@ export function authMiddleware(
         if (agent) {
           resolvedName = agent.name;
           resolvedRole = "agent";
+          resolvedInboxKey = inboxKeyOf(agent);
         }
       }
     }
@@ -212,6 +215,7 @@ export function authMiddleware(
             if (agent && agent.is_active) {
               resolvedName = agent.name;
               resolvedRole = "agent";
+              resolvedInboxKey = inboxKeyOf(agent);
             }
           }
         }
@@ -220,7 +224,11 @@ export function authMiddleware(
 
     // --- Auth resolved ---
     if (resolvedName && resolvedRole) {
-      const agentCtx: RequestAgent = { name: resolvedName, role: resolvedRole };
+      const agentCtx: RequestAgent = {
+        name: resolvedName,
+        role: resolvedRole,
+        ...(resolvedInboxKey ? { inbox_key: resolvedInboxKey } : {}),
+      };
       c.set("agent", agentCtx);
 
       // Log auth event (best-effort, throttled to once per 30 min per agent)

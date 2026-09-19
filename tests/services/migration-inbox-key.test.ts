@@ -37,6 +37,15 @@ describe("migration 0005 — agent inbox key", () => {
     ]);
   });
 
+  it("dates every existing name from the agent's creation", () => {
+    const db = legacyDb();
+    db.exec(readFileSync(`migrations/${MIGRATION}`, "utf-8"));
+    const rows = db.prepare("SELECT name_since, created_at FROM agents").all() as
+      { name_since: string; created_at: string }[];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row.name_since).toBe(row.created_at);
+  });
+
   it("makes the key unique, so two agents can never share an inbox", () => {
     const db = legacyDb();
     db.exec(readFileSync(`migrations/${MIGRATION}`, "utf-8"));

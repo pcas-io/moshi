@@ -200,6 +200,22 @@ describe("MCP tools — rename keeps the address", () => {
     expect((inbox.json.messages as { payload: string }[]).map((m) => m.payload)).toEqual(["answer"]);
   });
 
+  it("shows current names on mail that was waiting through a rename", async () => {
+    const beta = await h.connect("beta");
+    await callTool(beta, "mesh_send", { to: "alpha", payload: "written as beta", context: CTX });
+    h.agents.rename(betaId, "gamma");
+    const inbox = await callTool(alpha, "mesh_receive", {});
+    const [msg] = inbox.json.messages as { from: string; to: string; payload: string }[];
+    // The JetStream copy still says "beta". An agent that answers by name
+    // would be told the sender does not exist.
+    expect(msg.from).toBe("gamma");
+    expect(msg.payload).toBe("written as beta");
+  });
+
+  it("refuses to guess an inbox for an identity without an agent record", async () => {
+    await expect(h.connect("nobody-by-that-name")).rejects.toThrow(/no agent record/i);
+  });
+
   it("stores the canonical recipient name, whatever case the sender typed", async () => {
     const res = await callTool(alpha, "mesh_send", { to: "BETA", payload: "x", context: CTX });
     expect(res.json.to).toBe("beta");

@@ -5,7 +5,7 @@ import { setCookie, deleteCookie } from "hono/cookie";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { initDatabase } from "./services/db.js";
 import { NatsService } from "./services/nats.js";
-import { AgentService, inboxKeyOf } from "./services/agent.js";
+import { AgentService } from "./services/agent.js";
 import { ActivityService } from "./services/activity.js";
 import { RateLimiter } from "./services/ratelimit.js";
 import {
@@ -267,9 +267,17 @@ app.all("/mcp", async (c) => {
   const agent = c.get("agent");
   const agentName = agent?.name ?? "anonymous";
   const isAdmin = agent?.role === "admin";
-  // The NATS address is the agent's immutable inbox key, not its name —
-  // a renamed agent keeps its consumers and its unread mail.
-  const inboxKey = isAdmin ? "" : inboxKeyOf(agents.getByName(agentName) ?? { name: agentName });
+  // The NATS address is the agent's immutable inbox key, read from its
+  // record at auth time — never derived from the name here. A rename can
+  // land between auth and this line, and a key guessed from a stale name
+  // could be another agent's inbox (mesh_receive acks what it pulls).
+  const inboxKey = isAdmin ? "" : agent?.inbox_key;
+  if (inboxKey === undefined) {
+    return c.json(
+      { jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized: no agent record for this identity." }, id: null },
+      401,
+    );
+  }
 
   // Ensure NATS consumers exist for this agent. The admin identity has no
   // inbox by design (see ADMIN_NOT_AGENT_HINT), so no consumers for it.

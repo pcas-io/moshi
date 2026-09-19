@@ -58,6 +58,9 @@ export interface Agent {
   /** Immutable NATS address token — subject and durable names derive from
    *  it, never from `name`. See migrations/0005_agent_inbox_key.sql. */
   inbox_key: string;
+  /** When the agent took its current `name` (ISO-8601). Bounds the history
+   *  rewrite of a rename: earlier rows belong to another holder of the name. */
+  name_since: string;
   role: string | null;
   capabilities: string | null; // JSON array stored as string
   token_hash: string;
@@ -72,6 +75,11 @@ export interface Agent {
 export interface RequestAgent {
   name: string;
   role: "agent" | "admin";
+  /** The agent's immutable NATS address, read from its record at auth time.
+   *  Absent for the admin, who has no inbox. Routes must use this and never
+   *  derive an address from `name`: a name can change mid-request, and once
+   *  names and keys are decoupled a guessed key can be someone else's inbox. */
+  inbox_key?: string;
 }
 
 // === Activity ===
