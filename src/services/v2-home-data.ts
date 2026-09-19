@@ -3,7 +3,7 @@
 
 import type Database from "better-sqlite3";
 import type { PresenceService } from "./presence.js";
-import type { NatsService } from "./nats.js";
+import type { NatsPingable } from "./health.js";
 import { getHomeStats } from "./home-stats.js";
 import { listConversations } from "./message-queries.js";
 import { buildAttentionItems } from "./attention.js";
@@ -25,7 +25,7 @@ export type V2HomeDataInput = {
   db: Database.Database;
   presence: PresenceService;
   /** Only for the health check behind the needs-attention band. */
-  nats?: NatsService;
+  nats?: NatsPingable;
 };
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
