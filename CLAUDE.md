@@ -14,6 +14,10 @@ TypeScript, Hono, @hono/node-server, @modelcontextprotocol/sdk, nats.js, better-
 - `docker compose up` — Full stack (mesh + NATS)
 
 ## Architecture
+- `src/index.tsx` — process bootstrap only: config, services, `serve`, signals, hourly maintenance
+- `src/app.tsx` — `createApp(deps)`: middleware order and mounts, no side effects; this is what `tests/app/` imports
+- `src/routes/mcp.ts` — `POST /mcp` (stateless transport via `createStatelessTransport()`, body limit on the route)
+- `src/routes/dashboard.tsx` — Home, thread SSE, Agents, Log, Conversations
 - `src/mcp/` — MCP server + 7 tools (mesh_send, mesh_receive, mesh_get, mesh_reply, mesh_status, mesh_register, mesh_history); `catalog.ts` is the tool reference the dashboard palette renders (a test keeps it in sync)
 - `src/services/inbox.ts` — JetStream pull logic (consumer info before fetch, shared limit); unit-tested with fake consumers
 - `src/services/` — Business logic (nats, agent, message, ratelimit, activity)
@@ -42,7 +46,7 @@ ULID IDs, SHA-256 token hashing, timing-safe comparison.
 - Every tool reply carries `inbox_pending`; `mesh_receive` acks on read, previews payloads (default 4000 chars) and has no type filter (it lost messages). `mesh_get` returns the full message.
 - The admin token is an operator identity: messaging tools refuse it with an onboarding hint.
 - An agent's name is a label, its `inbox_key` is the address. Subjects (`mesh.agents.<key>.inbox`) and durables (`agent-<key>`, `agent-<key>-broadcast`) derive from `agents.inbox_key`, never from `name`. The key is assigned at creation (lower-cased name, suffixed when taken) and never changes, so a rename keeps token, consumers and unread mail, and rewrites `from_agent`/`to_agent` in the history. `admin` and `broadcast` are reserved names. `mesh_send` and `mesh_reply` both refuse unknown or deactivated recipients.
-- Tests: `tests/mcp/harness.ts` runs the real McpServer over an InMemoryTransport with fake NATS + in-memory SQLite.
+- Tests: `tests/mcp/harness.ts` runs the real McpServer over an InMemoryTransport with fake NATS + in-memory SQLite. `tests/app/harness.ts` builds the whole Hono app on top of it (`app.request`).
 
 ## Pitfalls
 - Agent-controlled strings (message `type`, agent `role`, agent names from history rows) are never used as keys of a plain object: use `Object.hasOwn`, a `Map`, or `roleIndex()`. "constructor" once turned two pages into a permanent HTTP 500.
@@ -50,7 +54,7 @@ ULID IDs, SHA-256 token hashing, timing-safe comparison.
 - Free-text tool fields are bounded by `FIELD_LIMITS` in `src/types.ts`; tests pin both the rejecting and the accepting side.
 - Presence is refreshed by tool calls only. An idle but connected client decays to `stale` after 10 minutes; the old 1 Hz GET reconnect loop that kept it `live` is gone on purpose.
 - The session cookie is `Secure` when `NODE_ENV=production`; `MESH_COOKIE_SECURE=0` is the opt-out for plain-http hosts.
-- `src/index.tsx` still has import-time side effects and cannot be imported by a test. Wiring is checked against the real process until `createApp(deps)` lands.
+- Middleware order is behaviour and is pinned by `tests/app/wiring.test.ts` against the real app. Change `src/app.tsx` and those tests together, never the order alone.
 
 ## Commits
 Conventional Commits: feat:, fix:, chore:, docs:, refactor:

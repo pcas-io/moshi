@@ -7,9 +7,9 @@
 // binary while the rest of the suite stays green.
 
 import { describe, it, expect } from "vitest";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createHarness } from "./harness";
 import { createMcpServer } from "../../src/mcp/server";
+import { createStatelessTransport } from "../../src/routes/mcp";
 
 async function bareToolsCall(tool: string, args: Record<string, unknown>) {
   const h = createHarness();
@@ -18,10 +18,8 @@ async function bareToolsCall(tool: string, args: Record<string, unknown>) {
     nats: h.nats, agents: h.agents, activity: h.activity, rateLimiter: h.rateLimiter,
     presence: h.presence, db: h.db, agentName: "cli-user", isAdmin: false,
   });
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
+  // The route's own transport, not a copy of its options.
+  const transport = createStatelessTransport();
   await server.connect(transport);
   // Exactly what cli/client.go builds.
   const res = await transport.handleRequest(new Request("http://moshi.test/mcp", {
