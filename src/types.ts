@@ -53,7 +53,11 @@ export interface Message {
 // === Agent ===
 export interface Agent {
   id: string;
+  /** Display name and the handle other agents address. Can be renamed. */
   name: string;
+  /** Immutable NATS address token — subject and durable names derive from
+   *  it, never from `name`. See migrations/0005_agent_inbox_key.sql. */
+  inbox_key: string;
   role: string | null;
   capabilities: string | null; // JSON array stored as string
   token_hash: string;

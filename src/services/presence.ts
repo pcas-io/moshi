@@ -187,7 +187,7 @@ export class PresenceService {
   async list(now: number = Date.now()): Promise<AgentWithPresence[]> {
     const rows = this.db
       .prepare(
-        `SELECT id, name, role, capabilities, token_hash, is_active, avatar,
+        `SELECT id, name, inbox_key, role, capabilities, token_hash, is_active, avatar,
                 working_on, last_seen_at, created_at, updated_at
          FROM agents ORDER BY name`,
       )

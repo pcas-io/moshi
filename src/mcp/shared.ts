@@ -14,8 +14,8 @@ import { log } from "../services/logger.js";
  *  pass a plain object. */
 export interface MeshNats {
   publish(subject: string, data: Uint8Array, msgId: string): Promise<void>;
-  pullInbox(agentName: string, limit: number): Promise<InboxPull>;
-  inboxPending(agentName: string): Promise<InboxPending>;
+  pullInbox(inboxKey: string, limit: number): Promise<InboxPull>;
+  inboxPending(inboxKey: string): Promise<InboxPending>;
 }
 
 export interface ToolContext {
@@ -27,6 +27,10 @@ export interface ToolContext {
   db: Database.Database;
   /** Authenticated identity of this request. */
   agentName: string;
+  /** The caller's NATS address token (`agents.inbox_key`). Everything that
+   *  touches the inbox goes through it — never through `agentName`, which
+   *  is a label and can be renamed. Empty for the admin, who has no inbox. */
+  inboxKey: string;
   /** True when the request authenticated with the admin token. The admin
    *  is an operator identity, not an agent: it has no inbox, no roster
    *  entry and cannot be addressed — see `adminError`. */
@@ -72,7 +76,7 @@ export function adminError(): ToolResult {
 export async function pendingCount(ctx: ToolContext): Promise<number | null> {
   if (ctx.isAdmin) return null;
   try {
-    return (await ctx.nats.inboxPending(ctx.agentName)).total;
+    return (await ctx.nats.inboxPending(ctx.inboxKey)).total;
   } catch (err) {
     log("warn", "inbox pending count failed", {
       agent: ctx.agentName,

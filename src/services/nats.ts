@@ -110,10 +110,12 @@ export class NatsService {
     await this.js.publish(subject, data, { msgID: msgId });
   }
 
-  async ensureConsumer(agentName: string): Promise<void> {
-    const normalizedName = agentName.toLowerCase();
-    const inboxConsumer = inboxConsumerName(agentName);
-    const broadcastConsumer = broadcastConsumerName(agentName);
+  /** `inboxKey` is `agents.inbox_key` — the agent's immutable address, not
+   *  its display name. Subject and durable names derive from it. */
+  async ensureConsumer(inboxKey: string): Promise<void> {
+    const normalizedName = inboxKey.toLowerCase();
+    const inboxConsumer = inboxConsumerName(inboxKey);
+    const broadcastConsumer = broadcastConsumerName(inboxKey);
 
     // Inbox consumer (lowercase subject for case-insensitive routing)
     try {
@@ -142,9 +144,9 @@ export class NatsService {
     }
   }
 
-  async deleteConsumer(agentName: string): Promise<void> {
-    const inboxConsumer = inboxConsumerName(agentName);
-    const broadcastConsumer = broadcastConsumerName(agentName);
+  async deleteConsumer(inboxKey: string): Promise<void> {
+    const inboxConsumer = inboxConsumerName(inboxKey);
+    const broadcastConsumer = broadcastConsumerName(inboxKey);
 
     try {
       await this.jsm.consumers.delete(STREAM_NAME, inboxConsumer);
@@ -171,13 +173,13 @@ export class NatsService {
    * instead of blocking on the fetch deadline. Throws when the broker is
    * unreachable — callers degrade to "retry shortly".
    */
-  async pullInbox(agentName: string, limit: number): Promise<InboxPull> {
-    return pullInbox(this.consumerSource(), agentName, limit);
+  async pullInbox(inboxKey: string, limit: number): Promise<InboxPull> {
+    return pullInbox(this.consumerSource(), inboxKey, limit);
   }
 
-  /** Waiting-message count for `agentName` without consuming anything. */
-  async inboxPending(agentName: string): Promise<InboxPending> {
-    return inboxPending(this.consumerSource(), agentName);
+  /** Waiting-message count for `inboxKey` without consuming anything. */
+  async inboxPending(inboxKey: string): Promise<InboxPending> {
+    return inboxPending(this.consumerSource(), inboxKey);
   }
 
   /**

@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { VERSION, DEFAULT_PREVIEW_CHARS } from "../types.js";
 import type { ToolContext } from "./shared.js";
+import { inboxKeyOf } from "../services/agent.js";
 import { registerMessagingTools } from "./tools/messaging.js";
 import { registerRegistryTools } from "./tools/registry.js";
 import { registerHistoryTools } from "./tools/history.js";
@@ -13,7 +14,19 @@ const ADMIN_INSTRUCTIONS =
   "dashboard (/agents) and reconnect with its bt_ token to take part in the mesh. " +
   "mesh_status, mesh_history and mesh_get work as read-only observation tools.";
 
-export function createMcpServer(ctx: ToolContext): McpServer {
+/** What a caller hands in. `inboxKey` is optional: the HTTP route already
+ *  looked the agent up (it needs the key for `ensureConsumer`) and passes
+ *  it along; everyone else gets it resolved here. */
+export type McpServerDeps = Omit<ToolContext, "inboxKey"> & { inboxKey?: string };
+
+function resolveInboxKey(deps: McpServerDeps): string {
+  if (deps.inboxKey !== undefined) return deps.inboxKey;
+  if (deps.isAdmin) return "";
+  return inboxKeyOf(deps.agents.getByName(deps.agentName) ?? { name: deps.agentName });
+}
+
+export function createMcpServer(deps: McpServerDeps): McpServer {
+  const ctx: ToolContext = { ...deps, inboxKey: resolveInboxKey(deps) };
   const instructions = [
     "moshi enables async communication between AI agents via message passing.",
     "Use mesh_send to send messages to other agents. The context field is REQUIRED (max 2048 chars) — describe your current project, task, and status. Payload max is 256 KB. type defaults to 'info'.",
