@@ -3,7 +3,8 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createHarness, callTool } from "./harness";
 import type { Harness } from "./harness";
 import { ADMIN_NOT_AGENT_HINT } from "../../src/mcp/shared";
-import { DEFAULT_PREVIEW_CHARS } from "../../src/types";
+import { DEFAULT_PREVIEW_CHARS, FIELD_LIMITS } from "../../src/types";
+import { AGENT_NAME_RE } from "../../src/services/agent";
 
 const CTX = "test context";
 
@@ -254,6 +255,112 @@ describe("MCP tools — mesh_reply checks the recipient", () => {
     const res = await callTool(alpha, "mesh_reply", { message_id: messageId, payload: "pong", context: CTX });
     expect(res.isError).toBe(true);
     expect(h.nats.published).toHaveLength(0);
+  });
+});
+
+describe("MCP tools — field bounds", () => {
+  // Only the 512 KB body limit capped these. A 500 KB `working_on` is echoed
+  // to every agent in every mesh_status reply and rendered on every page load.
+  let h: Harness;
+  let alpha: Client;
+  beforeEach(async () => {
+    h = createHarness();
+    h.agents.create("alpha");
+    h.agents.create("beta");
+    alpha = await h.connect("alpha");
+  });
+
+  const send = (extra: Record<string, unknown>) =>
+    callTool(alpha, "mesh_send", { to: "beta", payload: "x", context: CTX, ...extra });
+
+  it("rejects an oversized type and an oversized correlation_id", async () => {
+    expect((await send({ type: "t".repeat(65) })).isError).toBe(true);
+    expect((await send({ correlation_id: "c".repeat(65) })).isError).toBe(true);
+    expect((await send({ type: "t".repeat(64) })).isError).toBe(false);
+  });
+
+  it("wants ttl_seconds as a positive whole number within the stream's seven days", async () => {
+    for (const ttl of [-5, 0, 1.5, 604801]) expect((await send({ ttl_seconds: ttl })).isError, String(ttl)).toBe(true);
+    expect((await send({ ttl_seconds: 3600 })).isError).toBe(false);
+  });
+
+  it("wants whole-number limits", async () => {
+    expect((await callTool(alpha, "mesh_receive", { limit: 2.5 })).isError).toBe(true);
+    expect((await callTool(alpha, "mesh_history", { limit: 2.5 })).isError).toBe(true);
+  });
+
+  it("bounds what mesh_register announces", async () => {
+    const reg = (args: Record<string, unknown>) => callTool(alpha, "mesh_register", args);
+    expect((await reg({ working_on: "w".repeat(513) })).isError).toBe(true);
+    expect((await reg({ role: "r".repeat(65) })).isError).toBe(true);
+    expect((await reg({ capabilities: Array.from({ length: 33 }, (_, i) => `c${i}`) })).isError).toBe(true);
+    expect((await reg({ capabilities: ["c".repeat(65)] })).isError).toBe(true);
+    expect((await reg({ role: "dev", working_on: "fine", capabilities: ["ts"] })).isError).toBe(false);
+  });
+
+  // The rejecting side alone would stay green if every limit shrank to 10.
+  // These pin the accepting side at exactly the documented values.
+  it("accepts every mesh_register field at exactly its limit", async () => {
+    const res = await callTool(alpha, "mesh_register", {
+      role: "r".repeat(FIELD_LIMITS.ROLE),
+      working_on: "w".repeat(FIELD_LIMITS.WORKING_ON),
+      capabilities: Array.from({ length: FIELD_LIMITS.CAPABILITIES }, (_, i) =>
+        String(i).padStart(FIELD_LIMITS.CAPABILITY, "c")),
+    });
+    expect(res.isError, res.text).toBe(false);
+    const row = h.agents.getByName("alpha")!;
+    expect(row.role).toHaveLength(64);
+    expect(row.working_on).toHaveLength(512);
+    const stored = JSON.parse(row.capabilities!) as string[];
+    expect(stored).toHaveLength(32);
+    expect(stored[0]).toHaveLength(64); // not FIELD_LIMITS.CAPABILITY: that would shrink with the constant
+  });
+
+  it("accepts a ttl of one second and of exactly seven days", async () => {
+    expect(FIELD_LIMITS.TTL_SECONDS_MAX).toBe(7 * 24 * 60 * 60);
+    for (const ttl of [1, FIELD_LIMITS.TTL_SECONDS_MAX]) {
+      const res = await send({ ttl_seconds: ttl });
+      expect(res.isError, `${ttl}: ${res.text}`).toBe(false);
+    }
+  });
+
+  it("reaches the longest legal agent name, and the name rule and the tool limit agree", async () => {
+    const longest = "a".repeat(FIELD_LIMITS.AGENT_NAME);
+    expect(AGENT_NAME_RE.test(longest)).toBe(true);
+    expect(AGENT_NAME_RE.test(longest + "a")).toBe(false);
+    h.agents.create(longest);
+    const to = (name: string) => callTool(alpha, "mesh_send", { to: name, payload: "x", context: CTX });
+    expect((await to(longest)).isError).toBe(false);
+    expect((await to(longest + "a")).isError).toBe(true);
+  });
+
+  it("publishes nothing when a bound rejects the send", async () => {
+    const before = h.nats.published.length;
+    await send({ ttl_seconds: FIELD_LIMITS.TTL_SECONDS_MAX + 1 });
+    await send({ type: "t".repeat(FIELD_LIMITS.TYPE + 1) });
+    await send({ correlation_id: "c".repeat(FIELD_LIMITS.ID + 1) });
+    expect(h.nats.published).toHaveLength(before);
+  });
+
+  it("lets a real message id through every tool that takes one", async () => {
+    const sent = await send({});
+    const id = sent.json["id"] as string;
+    expect(id.length).toBeLessThanOrEqual(FIELD_LIMITS.ID);
+
+    expect((await callTool(alpha, "mesh_get", { message_id: id })).isError).toBe(false);
+    expect((await callTool(alpha, "mesh_history", { correlation_id: id })).isError).toBe(false);
+    expect((await send({ correlation_id: id })).isError).toBe(false);
+    const beta = await h.connect("beta");
+    const reply = await callTool(beta, "mesh_reply", { message_id: id, payload: "y", context: CTX });
+    expect(reply.isError, reply.text).toBe(false);
+
+    // An id of exactly 64 characters is still a legal thread reference.
+    expect((await send({ correlation_id: "c".repeat(64) })).isError).toBe(false);
+
+    const tooLong = "m".repeat(FIELD_LIMITS.ID + 1);
+    expect((await callTool(alpha, "mesh_get", { message_id: tooLong })).isError).toBe(true);
+    expect((await callTool(alpha, "mesh_history", { correlation_id: tooLong })).isError).toBe(true);
+    expect((await callTool(beta, "mesh_reply", { message_id: tooLong, payload: "y", context: CTX })).isError).toBe(true);
   });
 });
 

@@ -16,6 +16,7 @@ import { requestOrigin } from "../services/cli-dist.js";
 import { createConnectSession, readConnectSession } from "../services/connect-session.js";
 import { NAME_RULE_MESSAGE, renderConnectPage, type ConnectStep } from "../views/v2/connect.js";
 import { stepHref } from "../views/v2/connect-parts.js";
+import { formString } from "./form.js";
 import {
   DEFAULT_CONNECT_CLIENT,
   isConnectClientKey,
@@ -118,8 +119,8 @@ export function createAgentConnectRoutes({
     if (admin?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
     const body = await c.req.parseBody();
-    const name = ((body["name"] as string) ?? "").trim();
-    const csrf = body["csrf"] as string;
+    const name = formString(body as Record<string, unknown>, "name") ?? "";
+    const csrf = (body as Record<string, unknown>)["csrf"];
 
     // Step 1 again, with the error under the constraint line and whatever
     // the operator typed still in the field.

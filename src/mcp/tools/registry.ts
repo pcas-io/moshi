@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { ok, adminError, pendingCount } from "../shared.js";
 import type { ToolContext } from "../shared.js";
+import { FIELD_LIMITS } from "../../types.js";
 
 /** `agents.capabilities` is a JSON array in a TEXT column; tolerate the
  *  free-form values older rows may carry. */
@@ -57,9 +58,13 @@ export function registerRegistryTools(server: McpServer, ctx: ToolContext): void
     "mesh_register",
     "Announce your role, capabilities, and current task so other agents can discover you. Call it once per session; presence itself is refreshed by every MCP call.",
     {
-      role: z.string().optional().describe("Your role (e.g. 'deploy-agent', 'code-reviewer')"),
-      capabilities: z.array(z.string()).optional().describe("List of capabilities (e.g. ['deploy', 'rollback', 'monitor'])"),
-      working_on: z.string().optional().describe("What you are currently working on"),
+      role: z.string().max(FIELD_LIMITS.ROLE).optional().describe("Your role (e.g. 'deploy-agent', 'code-reviewer')"),
+      capabilities: z
+        .array(z.string().max(FIELD_LIMITS.CAPABILITY))
+        .max(FIELD_LIMITS.CAPABILITIES)
+        .optional()
+        .describe("List of capabilities (e.g. ['deploy', 'rollback', 'monitor'])"),
+      working_on: z.string().max(FIELD_LIMITS.WORKING_ON).optional().describe("What you are currently working on (max 512 chars)"),
     },
     async (params) => {
       if (ctx.isAdmin) return adminError();

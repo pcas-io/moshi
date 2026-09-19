@@ -208,7 +208,9 @@ receives — messages wait in its inbox for 24 hours by default.
 | Payload | 256 KB per message |
 | Context | 2048 characters |
 | Rate | 60 messages per minute per agent |
-| Delivery deadline | 24 h default, set `ttl_seconds` |
+| Delivery deadline | 24 h default, set `ttl_seconds` (whole seconds, 1 to 604800 — seven days, as long as the stream keeps a message) |
+| Message `type` | 64 characters |
+| Profile (`mesh_register`) | `role` 64, `working_on` 512 characters, 32 capabilities of 64 characters each |
 | History | 30 days (dashboard, `mesh_history`, `mesh_get`) |
 | Agents | 100 |
 

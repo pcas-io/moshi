@@ -101,3 +101,72 @@ describe("safeNextPath", () => {
     expect(safeNextPath("/logout")).toBe("/");
   });
 });
+
+describe("safeNextPath — control characters", () => {
+  // Browsers strip tab and newline while parsing a Location header, so
+  // "/<TAB>/evil.example" resolves to "//evil.example" — another origin.
+  it("refuses anything a browser would resolve to another origin", () => {
+    for (const next of ["/\t/evil.example/login", "/\n/evil.example", "/\r/evil.example", "/ /evil.example", "/\u0000x"]) {
+      expect(safeNextPath(next), JSON.stringify(next)).toBe("/");
+    }
+  });
+
+  it("keeps ordinary same-origin targets, query string included", () => {
+    expect(safeNextPath("/agents?presence=live")).toBe("/agents?presence=live");
+    expect(safeNextPath("/log?tab=audit&q=a%20b")).toBe("/log?tab=audit&q=a%20b");
+    expect(safeNextPath("/conversations?id=msg_01ABC")).toBe("/conversations?id=msg_01ABC");
+  });
+});
+
+describe("safeNextPath — dot segments", () => {
+  // The URL parser removes "." and ".." segments, also percent-encoded ones.
+  // "/.//evil.example" therefore normalises to "//evil.example", which a
+  // browser reads as another host. The check has to run on the result.
+  const HOSTILE = [
+    "/.//evil.example",
+    "/x/..//evil.example",
+    "/%2e//evil.example",
+    "/%2E%2E//evil.example",
+    "/.//login",
+    "/a/b/../..//evil.example/path?x=1",
+  ];
+
+  it("never hands back a protocol-relative target", () => {
+    for (const next of HOSTILE) {
+      expect(safeNextPath(next), JSON.stringify(next)).toBe("/");
+    }
+  });
+
+  it("still refuses the sign-in pages when a dot segment or a percent-encoded letter hides them", () => {
+    // The router decodes the path before it matches: "/%6cogout" IS /logout,
+    // and a redirect there signs the operator out again right after sign-in.
+    for (const next of ["/./login", "/x/../logout", "/%2e/login?next=/x", "/%6cogout", "/%6Cogout", "/l%6fgin?next=/x", "/x/../%6cogout"]) {
+      expect(safeNextPath(next), JSON.stringify(next)).toBe("/");
+    }
+  });
+
+  it("is idempotent and stays on the origin for generated input", () => {
+    // Deterministic generator — no Math.random, so a failure reproduces.
+    const ATOMS = ["/", "/", ".", "..", "%2e", "%2E", "%2f", "%6c", "%6F", "%", "%zz", "evil.example", "x", "login", "logout", "ogout", "?", "#", "@", ":", "a=b", "&"];
+    let seed = 0x9e3779b9;
+    const rand = () => {
+      seed ^= seed << 13; seed >>>= 0;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5; seed >>>= 0;
+      return seed;
+    };
+    const ORIGIN = "https://moshi.example";
+    for (let i = 0; i < 20_000; i++) {
+      const parts = 1 + (rand() % 7);
+      let next = "/";
+      for (let p = 0; p < parts; p++) next += ATOMS[rand() % ATOMS.length];
+      const out = safeNextPath(next);
+      expect(new URL(out, ORIGIN).origin, JSON.stringify(next)).toBe(ORIGIN);
+      expect(safeNextPath(out), JSON.stringify(next)).toBe(out);
+      // Never a sign-in page, in the form the router will match it.
+      let routed = new URL(out, ORIGIN).pathname;
+      try { routed = decodeURI(routed); } catch { /* malformed escape: the router cannot decode it either */ }
+      expect(/^\/(login|logout)/.test(routed), JSON.stringify(next)).toBe(false);
+    }
+  });
+});

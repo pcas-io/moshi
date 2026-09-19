@@ -133,3 +133,32 @@ describe("POST /agents/rename", () => {
     expect(flashOf(res)?.error).toContain("already an agent called OPS");
   });
 });
+
+describe("admin actions — a request without a csrf field", () => {
+  // validateCsrfToken used to call token.lastIndexOf on undefined: all six
+  // actions answered 500 with a stack trace in the log instead of refusing.
+  it("is refused with the expired-form flash on every action, and nothing happens", async () => {
+    const db = createTestDb();
+    const agents = new AgentService(db, new ActivityService(db));
+    const id = agents.create("scout").agent.id;
+    for (const action of ["create", "revoke", "reactivate", "rename", "reset-token", "delete"]) {
+      const res = await buildApp(ADMIN, agents).request(`/agents/${action}`, form({ id, name: "scout-eu" }));
+      expect(res.status, action).toBe(302);
+      expect(flashOf(res)?.error, action).toBe("That form expired. Reload the page and try again.");
+    }
+    expect(agents.getByName("scout")?.is_active).toBe(1);
+  });
+
+  it("treats an uploaded file in a text field as missing, not as a crash", async () => {
+    const db = createTestDb();
+    const agents = new AgentService(db, new ActivityService(db));
+    const id = agents.create("scout").agent.id;
+    const body = new FormData();
+    body.set("csrf", generateCsrfToken(SECRET));
+    body.set("id", id);
+    body.set("name", new File(["x"], "name.txt"));
+    const res = await buildApp(ADMIN, agents).request("/agents/rename", { method: "POST", body });
+    expect(res.status).toBe(302);
+    expect(flashOf(res)?.error).toBe("Give the agent a name.");
+  });
+});

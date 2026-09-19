@@ -72,8 +72,12 @@ const STRIPE_FALLBACK = "#8a8578";
 
 /** Same fuzzy role matching as the portrait generator, so existing roles keep their colour. */
 function stripeFor(role: string | undefined): string {
-  const r = role?.toLowerCase() ?? "";
-  if (ROLE_STRIPE[r]) return ROLE_STRIPE[r]!;
+  // `role` is typed as a string, but it is looked up by agent name in maps
+  // built elsewhere. Anything that is not a string gets the fallback stripe
+  // instead of a TypeError that takes the whole page down.
+  const r = typeof role === "string" ? role.toLowerCase() : "";
+  // Own entries only — a role is agent-controlled text ("constructor").
+  if (Object.hasOwn(ROLE_STRIPE, r)) return ROLE_STRIPE[r]!;
   if (/dev|code|engineer/.test(r))  return ROLE_STRIPE["dev-assistant"]!;
   if (/sec|trust/.test(r))          return ROLE_STRIPE["security"]!;
   if (/infra|deploy/.test(r))       return ROLE_STRIPE["infra"]!;

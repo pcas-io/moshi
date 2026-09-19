@@ -196,7 +196,8 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 export function kindLabel(type: string): string {
-  return KIND_LABELS[type] ?? type;
+  // Own entries only — `type` is agent-controlled, see `kindColors`.
+  return Object.hasOwn(KIND_LABELS, type) ? KIND_LABELS[type]! : type;
 }
 
 // ── Interaction CSS ─────────────────────────────────────────────
