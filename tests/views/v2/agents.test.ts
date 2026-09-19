@@ -143,7 +143,7 @@ describe("V2AgentsPage — rename", () => {
     expect(html).toContain('action="/agents/rename"');
     expect(html).toMatch(/<input[^>]*name="name"[^>]*value="scout"/);
     expect(html).toContain('maxlength="64"');
-    expect(html).toContain('pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}"');
+    expect(html).toContain('pattern="[A-Za-z0-9][A-Za-z0-9_\\-]{0,63}"');
     expect(html).toContain("Keeps its token, inbox and history.");
     expect(html).toContain("Other agents reach it under the new name from then on.");
   });

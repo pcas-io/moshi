@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
 import { readFileSync, readdirSync } from "fs";
-import { AgentService, hashToken, isValidAgentName } from "../../src/services/agent";
+import {
+  AgentService, hashToken, isValidAgentName, AGENT_NAME_PATTERN, AGENT_NAME_RE,
+} from "../../src/services/agent";
 import { ActivityService } from "../../src/services/activity";
 
 function createTestDb(): Database.Database {
@@ -215,6 +217,21 @@ describe("AgentService", () => {
       expect(() => agents.rename(agent.id, reserved)).toThrow(/reserved/);
     }
     expect(agents.getByName("agent-a")?.name).toBe("agent-a");
+  });
+
+  // HTML compiles an <input pattern> with the `v` flag. Under `v` a bare
+  // trailing hyphen in a character class is a syntax error, and a pattern
+  // that fails to compile is silently ignored — the field then accepts
+  // anything. Found in a real browser: "bad name" reported itself valid.
+  it("ships an input pattern that browsers can compile and that agrees with the server rule", () => {
+    const html = new RegExp(`^(?:${AGENT_NAME_PATTERN})$`, "v");
+    const samples = [
+      "agent-a", "Agent_A", "x", "dex-eu", "a".repeat(64), "9lives",
+      "claude code", "a.b", "", "-lead", "_lead", "a".repeat(65), "x/y", "ümlaut",
+    ];
+    for (const name of samples) {
+      expect(html.test(name), name).toBe(AGENT_NAME_RE.test(name));
+    }
   });
 
   it("speaks English in its errors: they surface in the dashboard", () => {

@@ -23,8 +23,14 @@ export interface NatsCleanup {
 // like "claude code" would silently break routing, so the charset is
 // enforced here, at the single source of truth, for names and keys alike.
 export const AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-/** `AGENT_NAME_RE` without anchors, for an `<input pattern>`. */
-export const AGENT_NAME_PATTERN = AGENT_NAME_RE.source.replace(/^\^/, "").replace(/\$$/, "");
+/**
+ * The same rule for an `<input pattern>`. Written out instead of derived
+ * from `AGENT_NAME_RE.source`: HTML compiles patterns with the `v` flag,
+ * where a bare trailing `-` inside a character class is a syntax error —
+ * and a pattern that fails to compile is ignored, so the field accepts
+ * anything. The hyphen is escaped; a test keeps both rules in agreement.
+ */
+export const AGENT_NAME_PATTERN = "[A-Za-z0-9][A-Za-z0-9_\\-]{0,63}";
 /** Wording from the design handoff (COPY.md) — it surfaces in the dashboard. */
 export const AGENT_NAME_RULE =
   "1–64 characters: letters, digits, - or _ · must start with a letter or digit · no spaces or dots";
