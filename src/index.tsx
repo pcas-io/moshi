@@ -127,21 +127,24 @@ app.use(
     onError: (c) => c.json({ error: "body_too_large" }, 413),
   }),
 );
-app.use(
-  "/mcp",
-  bodyLimit({
-    maxSize: 512 * 1024, // 512 KB — 256 KB payload + JSON-RPC envelope + headroom
-    onError: (c) =>
-      c.json(
-        {
-          jsonrpc: "2.0",
-          error: { code: -32600, message: "Request body too large (max 512 KB)" },
-          id: null,
-        },
-        413,
-      ),
-  }),
-);
+// /mcp gets its limit on the route itself, behind the 405 guard and behind
+// auth — not here. Since hono 4.13 bodyLimit reads a chunked body to the end
+// before it calls next(). Mounted up here it made an anonymous client that
+// opens a chunked POST and then goes quiet hold a connection (and up to
+// 512 KB) for Node's five-minute request timeout, before anyone had asked
+// who it was. Behind auth the same request gets its 401 at once.
+const mcpBodyLimit = bodyLimit({
+  maxSize: 512 * 1024, // 512 KB — 256 KB payload + JSON-RPC envelope + headroom
+  onError: (c) =>
+    c.json(
+      {
+        jsonrpc: "2.0",
+        error: { code: -32600, message: "Request body too large (max 512 KB)" },
+        id: null,
+      },
+      413,
+    ),
+});
 
 // --- Security headers (incl. no-store for everything dynamic) ---
 app.use("*", securityHeaders(VERSION));
@@ -195,7 +198,7 @@ app.route("/", createSessionRoutes({ agents, isProduction: config.isProduction }
 app.use("*", authMiddleware(agents, presence, activity));
 
 // --- MCP endpoint ---
-app.post("/mcp", async (c) => {
+app.post("/mcp", mcpBodyLimit, async (c) => {
   const agent = c.get("agent");
   const agentName = agent?.name ?? "anonymous";
   const isAdmin = agent?.role === "admin";
