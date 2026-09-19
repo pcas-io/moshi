@@ -47,6 +47,7 @@ import {
   parseLogTab,
 } from "./views/v2/log.js";
 import { V2ConversationsPage } from "./views/v2/conversations.js";
+import { roleIndex } from "./views/v2/role-index.js";
 
 // --- Load and validate configuration (fail-fast on missing/invalid secrets) ---
 // Closes code-review findings C2 (empty MESH_ADMIN_TOKEN bypass) and C3
@@ -364,7 +365,7 @@ app.get("/log", (c) => {
     filterAgent,
     filterEntity,
     filterRange: range,
-    agentRoles: Object.fromEntries(allAgents.map((a) => [a.name, a.role])),
+    agentRoles: roleIndex(allAgents),
     userRole: agent?.role ?? undefined,
     userName: agent?.name ?? undefined,
     csrfToken: generateCsrfToken(cookieSecretFor(c.env)),
@@ -432,7 +433,7 @@ app.get("/conversations", (c) => {
       selectedId={c.req.query("id")}
       query={query}
       filterAgent={filterAgent}
-      agentRoles={Object.fromEntries(allAgents.map((a) => [a.name, a.role]))}
+      agentRoles={roleIndex(allAgents)}
       userRole={agent?.role ?? undefined}
       userName={agent?.name ?? undefined}
       csrfToken={csrfToken}
