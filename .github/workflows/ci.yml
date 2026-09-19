@@ -17,6 +17,19 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  # tests/integration against a real NATS with JetStream. The script starts a
+  # throwaway broker in Docker and removes it again.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:integration
+
   typecheck:
     runs-on: ubuntu-latest
     steps:

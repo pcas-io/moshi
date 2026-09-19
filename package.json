@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "test:integration": "sh scripts/test-integration.sh",
     "test:watch": "vitest"
   },
   "dependencies": {

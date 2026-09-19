@@ -9,7 +9,8 @@ TypeScript, Hono, @hono/node-server, @modelcontextprotocol/sdk, nats.js, better-
 
 ## Commands
 - `npm run dev` — Dev server with hot reload (needs NATS running)
-- `npm test` — Run tests
+- `npm test` — Run tests (the integration suite skips itself)
+- `npm run test:integration` — `tests/integration` against a throwaway NATS in Docker. Never point `MOSHI_TEST_NATS_URL` at a broker that holds data: every test deletes the stream first
 - `npx tsc --noEmit` — Type check
 - `docker compose up` — Full stack (mesh + NATS)
 
