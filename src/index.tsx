@@ -267,12 +267,23 @@ app.all("/mcp", async (c) => {
   const agent = c.get("agent");
   const agentName = agent?.name ?? "anonymous";
   const isAdmin = agent?.role === "admin";
+  // The NATS address is the agent's immutable inbox key, read from its
+  // record at auth time — never derived from the name here. A rename can
+  // land between auth and this line, and a key guessed from a stale name
+  // could be another agent's inbox (mesh_receive acks what it pulls).
+  const inboxKey = isAdmin ? "" : agent?.inbox_key;
+  if (inboxKey === undefined) {
+    return c.json(
+      { jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized: no agent record for this identity." }, id: null },
+      401,
+    );
+  }
 
   // Ensure NATS consumers exist for this agent. The admin identity has no
   // inbox by design (see ADMIN_NOT_AGENT_HINT), so no consumers for it.
   if (!isAdmin) {
     try {
-      await nats.ensureConsumer(agentName);
+      await nats.ensureConsumer(inboxKey);
     } catch {
       // Non-fatal — consumer creation may fail on first request, retry on next
     }
@@ -286,6 +297,7 @@ app.all("/mcp", async (c) => {
     presence,
     db,
     agentName,
+    inboxKey,
     isAdmin,
   });
 

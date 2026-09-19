@@ -3,6 +3,7 @@
 
 import type Database from "better-sqlite3";
 import type { PresenceService } from "./presence.js";
+import { inboxKeyOf } from "./agent.js";
 import { getAgentHeat, getAgentMsgCounts24h } from "./dashboard-stats.js";
 import type { V2AgentsAgent } from "../views/v2/agents.js";
 
@@ -27,6 +28,7 @@ export async function loadV2AgentsData(
     return {
       id: e.agent.id,
       name: e.agent.name,
+      inbox_key: inboxKeyOf(e.agent),
       role: e.agent.role,
       capabilities: caps,
       is_active: Boolean(e.agent.is_active),

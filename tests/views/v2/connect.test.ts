@@ -105,7 +105,7 @@ describe("connect — step 1", () => {
     const html = await render({ step: 1 });
     expect(html).not.toContain("disabled");
     expect(html).toContain("required");
-    expect(html).toContain('pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}"');
+    expect(html).toContain('pattern="[A-Za-z0-9][A-Za-z0-9_\\-]{0,63}"');
   });
 
   it("re-renders the typed name with the error inline", async () => {

@@ -11,7 +11,7 @@ import { Hono } from "hono";
 import type { Env, AppVariables, Agent } from "../types.js";
 import type { AgentWithPresence } from "../services/presence.js";
 import { generateCsrfToken, validateCsrfToken } from "../auth.js";
-import { isValidAgentName } from "../services/agent.js";
+import { isReservedAgentName, isValidAgentName, reservedNameError } from "../services/agent.js";
 import { requestOrigin } from "../services/cli-dist.js";
 import { createConnectSession, readConnectSession } from "../services/connect-session.js";
 import { NAME_RULE_MESSAGE, renderConnectPage, type ConnectStep } from "../views/v2/connect.js";
@@ -140,8 +140,10 @@ export function createAgentConnectRoutes({
 
     if (!validateCsrfToken(csrf, cookieSecretFor(c.env))) return again(CSRF_ERROR, 403);
     if (!name) return again(EMPTY_NAME_ERROR, 400);
-    // `AgentService.create` throws its own rule text, but that string is
-    // German and belongs to NATS routing — say it the way COPY.md does.
+    // `AgentService.create` would reject these too. Checked here first so a
+    // bad name re-renders step 1 with its reason instead of falling into the
+    // generic creation-error path below.
+    if (isReservedAgentName(name)) return again(reservedNameError(name), 400);
     if (!isValidAgentName(name)) return again(NAME_RULE_MESSAGE, 400);
     if (agents.getByName(name)) return again(takenError(name), 400);
 

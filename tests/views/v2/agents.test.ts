@@ -20,6 +20,8 @@ function agent(over: Partial<V2AgentsAgent> = {}): V2AgentsAgent {
   return {
     id: "01J0AGENT0000000000000000",
     name: "scout",
+    // The address an agent is born with is its lower-cased name.
+    inbox_key: (over.name ?? "scout").toLowerCase(),
     role: "dev-assistant",
     capabilities: ["search", "summarise"],
     is_active: true,
@@ -135,6 +137,32 @@ describe("V2AgentsPage — action consequences", () => {
   });
 });
 
+describe("V2AgentsPage — rename", () => {
+  it("offers a rename form that says what survives", async () => {
+    const html = await render({ ...BASE, agents: [agent()] });
+    expect(html).toContain('action="/agents/rename"');
+    expect(html).toMatch(/<input[^>]*name="name"[^>]*value="scout"/);
+    expect(html).toContain('maxlength="64"');
+    expect(html).toContain('pattern="[A-Za-z0-9][A-Za-z0-9_\\-]{0,63}"');
+    expect(html).toContain("Other agents reach it under the new name from then on.");
+    // The aside's own rule: the consequence lives inside the control, so it
+    // is part of what a screen reader announces for the button.
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*>Rename<span[^>]*>Keeps its token, inbox and history\./);
+    expect(html).toMatch(/<input[^>]*class="d-input"[^>]*name="name"|<input[^>]*name="name"[^>]*class="d-input"/);
+  });
+
+  it("offers it for a deactivated agent too: a label is a label", async () => {
+    const html = await render({ ...BASE, agents: [agent({ is_active: false })] });
+    expect(html).toContain('action="/agents/rename"');
+  });
+
+  it("names the inbox by its key, which a rename does not change", async () => {
+    const html = await render({ ...BASE, agents: [agent({ name: "scout-eu", inbox_key: "scout" })] });
+    expect(html).toContain("mesh.agents.scout.inbox");
+    expect(html).not.toContain("mesh.agents.scout-eu.inbox");
+  });
+});
+
 describe("V2AgentsPage — empty roster", () => {
   it("shows the empty state and drops the aside entirely", async () => {
     const html = await render({ ...BASE, agents: [] });
@@ -231,7 +259,7 @@ describe("V2AgentsPage — states a class rule has to win", () => {
     expect(html).toContain(".d-delete:hover { background: var(--subtle); color: var(--ink); }");
     // The inactive pills and every outlined button wear the classes.
     expect(html.match(/class="d-pill"/g)).toHaveLength(3);
-    expect(html.match(/class="d-outline"/g)).toHaveLength(3); // reset, deactivate, cancel
+    expect(html.match(/class="d-outline"/g)).toHaveLength(4); // rename, reset, deactivate, cancel
     expect(html).toContain('class="d-delete"');
     // Solid fills keep the shared brightness hook — `filter` is never inline.
     expect(html).toContain('class="d-solid"');

@@ -148,6 +148,115 @@ describe("MCP tools — agent identity", () => {
   });
 });
 
+describe("MCP tools — rename keeps the address", () => {
+  let h: Harness;
+  let alpha: Client;
+  let betaId: string;
+
+  beforeEach(async () => {
+    h = createHarness();
+    h.agents.create("alpha");
+    betaId = h.agents.create("beta").agent.id;
+    alpha = await h.connect("alpha");
+  });
+
+  it("delivers mail sent before the rename to the agent under its new name", async () => {
+    await callTool(alpha, "mesh_send", { to: "beta", payload: "sent before the rename", context: CTX });
+    h.agents.rename(betaId, "gamma");
+    const gamma = await h.connect("gamma");
+    const res = await callTool(gamma, "mesh_receive", {});
+    expect(res.isError).toBe(false);
+    expect(res.json.count).toBe(1);
+    expect((res.json.messages as { payload: string }[])[0].payload).toBe("sent before the rename");
+  });
+
+  it("routes new mail for the new name to the unchanged inbox", async () => {
+    h.agents.rename(betaId, "gamma");
+    const res = await callTool(alpha, "mesh_send", { to: "gamma", payload: "hello gamma", context: CTX });
+    expect(res.isError).toBe(false);
+    expect(res.json.to).toBe("gamma");
+    expect(h.nats.published[0].subject).toBe("mesh.agents.beta.inbox");
+    const gamma = await h.connect("gamma");
+    expect((await callTool(gamma, "mesh_receive", {})).json.count).toBe(1);
+  });
+
+  it("no longer knows the old name", async () => {
+    h.agents.rename(betaId, "gamma");
+    const res = await callTool(alpha, "mesh_send", { to: "beta", payload: "x", context: CTX });
+    expect(res.isError).toBe(true);
+    expect(h.nats.published).toHaveLength(0);
+  });
+
+  it("lets a reply reach a sender who was renamed after writing", async () => {
+    const beta = await h.connect("beta");
+    const sent = await callTool(beta, "mesh_send", { to: "alpha", payload: "question from beta", context: CTX });
+    h.agents.rename(betaId, "gamma");
+    const reply = await callTool(alpha, "mesh_reply", { message_id: String(sent.json.id), payload: "answer", context: CTX });
+    expect(reply.isError).toBe(false);
+    expect(reply.json.to).toBe("gamma");
+    expect(h.nats.published.at(-1)?.subject).toBe("mesh.agents.beta.inbox");
+    const gamma = await h.connect("gamma");
+    const inbox = await callTool(gamma, "mesh_receive", {});
+    expect((inbox.json.messages as { payload: string }[]).map((m) => m.payload)).toEqual(["answer"]);
+  });
+
+  it("shows current names on mail that was waiting through a rename", async () => {
+    const beta = await h.connect("beta");
+    await callTool(beta, "mesh_send", { to: "alpha", payload: "written as beta", context: CTX });
+    h.agents.rename(betaId, "gamma");
+    const inbox = await callTool(alpha, "mesh_receive", {});
+    const [msg] = inbox.json.messages as { from: string; to: string; payload: string }[];
+    // The JetStream copy still says "beta". An agent that answers by name
+    // would be told the sender does not exist.
+    expect(msg.from).toBe("gamma");
+    expect(msg.payload).toBe("written as beta");
+  });
+
+  it("refuses to guess an inbox for an identity without an agent record", async () => {
+    await expect(h.connect("nobody-by-that-name")).rejects.toThrow(/no agent record/i);
+  });
+
+  it("stores the canonical recipient name, whatever case the sender typed", async () => {
+    const res = await callTool(alpha, "mesh_send", { to: "BETA", payload: "x", context: CTX });
+    expect(res.json.to).toBe("beta");
+    const row = h.db.prepare("SELECT to_agent FROM messages WHERE id = ?").get(String(res.json.id));
+    expect(row).toEqual({ to_agent: "beta" });
+  });
+});
+
+describe("MCP tools — mesh_reply checks the recipient", () => {
+  let h: Harness;
+  let alpha: Client;
+  let betaId: string;
+  let messageId: string;
+
+  beforeEach(async () => {
+    h = createHarness();
+    h.agents.create("alpha");
+    betaId = h.agents.create("beta").agent.id;
+    alpha = await h.connect("alpha");
+    const beta = await h.connect("beta");
+    const sent = await callTool(beta, "mesh_send", { to: "alpha", payload: "ping", context: CTX });
+    messageId = String(sent.json.id);
+    h.nats.published.length = 0;
+  });
+
+  it("refuses a reply to a deleted sender instead of reporting it delivered", async () => {
+    h.agents.deleteById(betaId);
+    const res = await callTool(alpha, "mesh_reply", { message_id: messageId, payload: "pong", context: CTX });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("mesh_status");
+    expect(h.nats.published).toHaveLength(0);
+  });
+
+  it("refuses a reply to a deactivated sender", async () => {
+    h.agents.revokeById(betaId);
+    const res = await callTool(alpha, "mesh_reply", { message_id: messageId, payload: "pong", context: CTX });
+    expect(res.isError).toBe(true);
+    expect(h.nats.published).toHaveLength(0);
+  });
+});
+
 describe("MCP tools — admin identity (A1)", () => {
   let h: Harness;
   let admin: Client;

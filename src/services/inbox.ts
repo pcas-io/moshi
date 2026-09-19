@@ -2,9 +2,10 @@
  * Inbox pull logic on top of JetStream pull consumers — kept free of the
  * live `NatsService` so it can be unit-tested with fake consumers.
  *
- * Two consumers back one agent inbox: `agent-<name>` (direct messages) and
- * `agent-<name>-broadcast` (mesh.broadcast). Both are consulted for every
- * pull, and `limit` is shared across them (D5).
+ * Two consumers back one agent inbox: `agent-<key>` (direct messages) and
+ * `agent-<key>-broadcast` (mesh.broadcast), where `<key>` is the agent's
+ * immutable `inbox_key` — not its name, which can be renamed. Both are
+ * consulted for every pull, and `limit` is shared across them (D5).
  *
  * The important efficiency rule (D1): a JetStream `fetch()` blocks until
  * `max_messages` arrive OR `expires` elapses. On an empty or half-empty
@@ -49,12 +50,12 @@ export interface InboxPending {
 const INBOX_FETCH_EXPIRES_MS = 2000;
 const BROADCAST_FETCH_EXPIRES_MS = 1000;
 
-export function inboxConsumerName(agentName: string): string {
-  return `agent-${agentName.toLowerCase()}`;
+export function inboxConsumerName(inboxKey: string): string {
+  return `agent-${inboxKey.toLowerCase()}`;
 }
 
-export function broadcastConsumerName(agentName: string): string {
-  return `agent-${agentName.toLowerCase()}-broadcast`;
+export function broadcastConsumerName(inboxKey: string): string {
+  return `agent-${inboxKey.toLowerCase()}-broadcast`;
 }
 
 /** nats.js surfaces a missing durable as a NatsError carrying the
@@ -101,24 +102,24 @@ async function pullFrom(
 }
 
 /**
- * Pull up to `limit` messages for `agentName` — direct inbox first, then
- * broadcasts with whatever budget is left. Never blocks on an empty
- * consumer.
+ * Pull up to `limit` messages for the inbox `inboxKey` — direct inbox
+ * first, then broadcasts with whatever budget is left. Never blocks on an
+ * empty consumer.
  */
 export async function pullInbox(
   source: ConsumerSource,
-  agentName: string,
+  inboxKey: string,
   limit: number,
 ): Promise<InboxPull> {
   const inbox = await pullFrom(
     source,
-    inboxConsumerName(agentName),
+    inboxConsumerName(inboxKey),
     limit,
     INBOX_FETCH_EXPIRES_MS,
   );
   const broadcast = await pullFrom(
     source,
-    broadcastConsumerName(agentName),
+    broadcastConsumerName(inboxKey),
     limit - inbox.messages.length,
     BROADCAST_FETCH_EXPIRES_MS,
   );
@@ -133,10 +134,10 @@ export async function pullInbox(
 /** Count waiting messages without pulling anything. */
 export async function inboxPending(
   source: ConsumerSource,
-  agentName: string,
+  inboxKey: string,
 ): Promise<InboxPending> {
-  const inbox = await pendingOf(source, inboxConsumerName(agentName));
-  const broadcast = await pendingOf(source, broadcastConsumerName(agentName));
+  const inbox = await pendingOf(source, inboxConsumerName(inboxKey));
+  const broadcast = await pendingOf(source, broadcastConsumerName(inboxKey));
   const a = inbox?.pending ?? 0;
   const b = broadcast?.pending ?? 0;
   return { inbox: a, broadcast: b, total: a + b };

@@ -102,27 +102,38 @@ export function createAgentAdminRoutes({ agents, cookieSecretFor }: AgentAdminDe
     const name = (body["name"] as string)?.trim();
     const csrf = body["csrf"] as string;
 
+    // Back to the agent that was being renamed, so the operator sees the
+    // result (or the reason) next to the form they just used.
+    const detail = `/agents?inspect=${encodeURIComponent(id ?? "")}`;
+    const refuse = (message: string) =>
+      c.redirect(`${detail}&flash=${setFlash({ error: message })}`);
+
     if (!validateCsrfToken(csrf, cookieSecret)) {
-      const flashKey = setFlash({ error: "That form expired. Reload the page and try again." });
-      return c.redirect(`/agents?flash=${flashKey}`);
+      return refuse("That form expired. Reload the page and try again.");
     }
 
-    if (!name) {
-      const flashKey = setFlash({ error: "Give the agent a name." });
-      return c.redirect(`/agents?flash=${flashKey}`);
-    }
+    if (!name) return refuse("Give the agent a name.");
 
+    let found: boolean;
     try {
-      agents.rename(id, name, agent.name);
+      found = agents.rename(id, name, agent.name);
     } catch (err: unknown) {
-      const msg = err instanceof Error
-        ? err.message
-        : "Something went wrong renaming the agent. Check the server log.";
-      const flashKey = setFlash({ error: msg });
-      return c.redirect(`/agents?flash=${flashKey}`);
+      return refuse(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong renaming the agent. Check the server log.",
+      );
     }
 
-    return c.redirect("/agents");
+    // No `inspect` here: the Agents page falls back to the first agent for
+    // an unknown id, and the operator would land on someone else's form.
+    if (!found) {
+      return c.redirect(
+        `/agents?flash=${setFlash({ error: "That agent no longer exists. Reload the page." })}`,
+      );
+    }
+
+    return c.redirect(detail);
   });
 
   admin.post("/reset-token", async (c) => {

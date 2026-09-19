@@ -15,6 +15,7 @@ function signatureParams(signature: string): string[] {
 describe("MCP tool catalog (C4)", () => {
   it("lists exactly the registered tools", async () => {
     const h = createHarness();
+    h.agents.create("alpha"); // an authenticated agent always has a record
     const client = await h.connect("alpha");
     const registered = (await client.listTools()).tools.map((t) => t.name).sort();
     const listed = MCP_TOOL_CATALOG.map((t) => t.name).sort();
@@ -23,6 +24,7 @@ describe("MCP tool catalog (C4)", () => {
 
   it("signatures name only parameters the tool schema actually has", async () => {
     const h = createHarness();
+    h.agents.create("alpha"); // an authenticated agent always has a record
     const client = await h.connect("alpha");
     const tools = (await client.listTools()).tools;
     for (const ref of MCP_TOOL_CATALOG) {
