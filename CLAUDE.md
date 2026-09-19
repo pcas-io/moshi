@@ -35,6 +35,7 @@ ULID IDs, SHA-256 token hashing, timing-safe comparison.
 - Presence TTL: 600s (auto-updated on every MCP interaction). NATS KV holds only the liveness timestamp; role/capabilities/working_on live in SQLite. KV entries are read per agent (`kv.get`), never via `kv.keys()` (drops the latest writer).
 - Every tool reply carries `inbox_pending`; `mesh_receive` acks on read, previews payloads (default 4000 chars) and has no type filter (it lost messages). `mesh_get` returns the full message.
 - The admin token is an operator identity: messaging tools refuse it with an onboarding hint.
+- An agent's name is a label, its `inbox_key` is the address. Subjects (`mesh.agents.<key>.inbox`) and durables (`agent-<key>`, `agent-<key>-broadcast`) derive from `agents.inbox_key`, never from `name`. The key is assigned at creation (lower-cased name, suffixed when taken) and never changes, so a rename keeps token, consumers and unread mail, and rewrites `from_agent`/`to_agent` in the history. `admin` and `broadcast` are reserved names. `mesh_send` and `mesh_reply` both refuse unknown or deactivated recipients.
 - Tests: `tests/mcp/harness.ts` runs the real McpServer over an InMemoryTransport with fake NATS + in-memory SQLite.
 
 ## Commits
