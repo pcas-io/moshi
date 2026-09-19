@@ -45,6 +45,9 @@ export interface AgentConnectDeps {
   agents: ConnectAgentService;
   presence: ConnectPresenceService;
   cookieSecretFor: (env: Env) => string;
+  /** Clock seam. Session expiry and the handshake window are relative to
+   *  it, so tests can pin a moment instead of racing the wall clock. */
+  now?: () => number;
 }
 
 const CSRF_ERROR = "That form expired. Reload the page and try again.";
@@ -83,6 +86,7 @@ export function createAgentConnectRoutes({
   agents,
   presence,
   cookieSecretFor,
+  now = Date.now,
 }: AgentConnectDeps): Hono<HonoEnv> {
   const connect = new Hono<HonoEnv>();
 
@@ -90,7 +94,7 @@ export function createAgentConnectRoutes({
     const admin = c.get("agent");
     if (admin?.role !== "admin") return c.redirect("/");
 
-    const session = readConnectSession(c.req.query("s"));
+    const session = readConnectSession(c.req.query("s"), now());
     return c.html(
       await renderConnectPage({
         step: parseStep(c.req.query("step")),
@@ -152,7 +156,7 @@ export function createAgentConnectRoutes({
       agentId: created.agent.id,
       agentName: created.agent.name,
       token: created.plaintextToken,
-    });
+    }, now());
     return c.redirect(stepHref(2, session.key, parseClient(c.req.query("client"))));
   });
 
@@ -162,10 +166,10 @@ export function createAgentConnectRoutes({
     const admin = c.get("agent");
     if (admin?.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
-    const session = readConnectSession(c.req.query("s"));
+    const session = readConnectSession(c.req.query("s"), now());
     if (!session) return c.json({ error: "expired" }, 410);
 
-    const entry = (await presence.list()).find((e) => e.agent.id === session.agentId);
+    const entry = (await presence.list(now())).find((e) => e.agent.id === session.agentId);
     if (!entry) return c.json({ error: "unknown_agent" }, 404);
 
     const lastSeen = entry.effectiveLastSeen;
