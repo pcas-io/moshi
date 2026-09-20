@@ -102,7 +102,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
         .describe(`Message type, default "${DEFAULT_MESSAGE_TYPE}". Recommended: ${TYPE_LIST}. Other values are accepted.`),
       payload: z.string().max(MAX_PAYLOAD_BYTES).describe("Message content (max 256 KB)"),
       context: z.string().max(2048).describe("Your current project, task, and status (max 2048 chars) — REQUIRED for recipient to understand your situation"),
-      correlation_id: z.string().max(FIELD_LIMITS.ID).optional().describe("Thread ID to continue an existing conversation"),
+      correlation_id: z.string().max(FIELD_LIMITS.ID).optional().describe("Thread ID to continue an existing conversation: the correlation_id of the message you got, or the id of the thread's first message. Spaces around it are dropped, an empty value counts as none."),
       priority: z.enum(MESSAGE_PRIORITIES).optional().describe("Message priority (low, normal, high)"),
       ttl_seconds: z
         .number()

@@ -39,7 +39,10 @@ export function createMessage(params: {
     type: params.type,
     payload: params.payload,
     context: params.context,
-    correlation_id: params.correlation_id ?? null,
+    // A name for a thread, and links have to be able to carry it: trimmed,
+    // and none at all when nothing is left. An empty one used to put every
+    // such message into one thread with the id "" (migration 0006).
+    correlation_id: params.correlation_id?.trim() || null,
     reply_to: params.reply_to ?? null,
     priority: params.priority ?? "normal",
     ttl_seconds: params.ttl_seconds ?? DEFAULT_TTL_SECONDS,
