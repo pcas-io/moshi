@@ -55,7 +55,8 @@ process.on("unhandledRejection", (reason) => {
     stack: (reason as Error)?.stack,
   });
   // Don't exit — a stray rejection shouldn't take down the whole server.
-  // Coolify will restart us if /health starts failing.
+  // Nobody restarts this process for it either: the container healthcheck
+  // polls /livez, which only says that the process serves.
 });
 
 process.on("uncaughtException", (err) => {
@@ -87,34 +88,10 @@ async function start() {
     },
   );
 
-  // C4: Bounded retry loop for initial NATS connection. Once connected,
-  // the NatsService keeps itself alive via `reconnect: true`. This loop
-  // only matters for the first attempt — if NATS is still booting
-  // (compose startup race), we wait up to ~20s.
-  const MAX_CONNECT_ATTEMPTS = 10;
-  for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS; attempt++) {
-    try {
-      await nats.connect();
-      break;
-    } catch (err) {
-      if (attempt === MAX_CONNECT_ATTEMPTS) {
-        log("fatal", "nats connect failed after max attempts", {
-          attempts: attempt,
-          url: config.natsUrl,
-          err: String(err),
-        });
-        throw err;
-      }
-      log("warn", "nats connect attempt failed, retrying", {
-        attempt,
-        max: MAX_CONNECT_ATTEMPTS,
-        err: String(err),
-      });
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-  }
-  log("info", "nats connected", { url: config.natsUrl });
-
+  // Serve first. The dashboard runs on SQLite and must be reachable while
+  // NATS is still coming up, or gone; MCP tools answer `nats_unavailable`
+  // until the broker is there. This used to be the other way round: ten
+  // connection attempts, then the process gave up after about 20 seconds.
   const server = serve({ fetch: app.fetch, port: config.port });
   log("info", "moshi listening", {
     version: VERSION,
@@ -123,13 +100,47 @@ async function start() {
     cookie_secure: config.cookieSecure,
   });
 
+  // C4: First connect in the background, for as long as it takes. Once
+  // connected, the NatsService keeps itself alive via `reconnect: true`.
+  let stopping = false;
+  void (async () => {
+    for (let attempt = 1; !stopping; attempt++) {
+      try {
+        await nats.connect();
+        log("info", "nats connected", { url: config.natsUrl, attempts: attempt });
+        return;
+      } catch (err) {
+        const waitMs = Math.min(30_000, 2000 * attempt);
+        log(attempt === 1 ? "warn" : "error", "nats connect attempt failed, retrying", {
+          attempt,
+          retry_in_ms: waitMs,
+          url: config.natsUrl,
+          err: String(err),
+        });
+        await new Promise((r) => setTimeout(r, waitMs));
+      }
+    }
+  })();
+
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return; // SIGTERM and SIGINT, or the same signal twice
+    shuttingDown = true;
     log("info", "shutting down");
-    stopMaintenance();
-    server.close();
-    await nats.close();
-    db.close();
-    process.exit(0);
+    stopping = true;
+    // Every step runs, whatever the one before it did: a rejected close()
+    // used to skip db.close() and process.exit(0), and the process then sat
+    // there until Docker killed it.
+    try {
+      stopMaintenance();
+      server.close();
+      await nats.close();
+    } catch (err) {
+      log("error", "shutdown step failed", { err: String(err) });
+    } finally {
+      try { db.close(); } catch { /* already closed */ }
+      process.exit(0);
+    }
   };
 
   process.on("SIGTERM", shutdown);

@@ -110,6 +110,12 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   // CLI distribution: /install.sh, /install.ps1, /cli/version, /cli/:file
   registerCliRoutes(app);
 
+  // Liveness: the process is up and serving. Asks neither NATS nor SQLite.
+  // This is what the container healthcheck polls. /health below is
+  // readiness: it reports the broker, and a broker outage must not take the
+  // dashboard (which runs on SQLite) off the proxy along with it.
+  app.get("/livez", (c) => c.json({ status: "alive" }));
+
   app.get("/health", async (c) => {
     const h = await checkHealth(db, nats);
     return c.json(

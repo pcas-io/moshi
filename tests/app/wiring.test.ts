@@ -3,7 +3,7 @@
 // could import the app: a 405 guard that has to sit in front of auth, and a
 // body limit that has to sit behind it.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestApp, ADMIN_TOKEN, MCP_HEADERS, rpc } from "./harness";
 import type { TestApp } from "./harness";
 import { generateCsrfToken } from "../../src/auth";
@@ -117,6 +117,22 @@ describe("public routes and headers", () => {
     expect(await down.json()).toMatchObject({ status: "degraded", nats: "disconnected" });
   });
 
+  it("answers /livez without asking anyone: the process is up, whatever NATS does", async () => {
+    // Liveness is what the container healthcheck polls. If it depended on
+    // NATS, a broker outage would take the dashboard off the proxy as well.
+    t.natsUp.value = false;
+    const ping = vi.spyOn(t.h.nats as unknown as { ping: () => Promise<boolean> }, "ping");
+    const prepare = vi.spyOn(t.h.db, "prepare");
+    const res = await t.app.request("/livez");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "alive" });
+    expect(t.touch).not.toHaveBeenCalled();
+    // "Asks nobody" literally: a liveness probe that grows a NATS or a
+    // database check brings back the outage this route exists to survive.
+    expect(ping).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
   it("sends a browser without a session to the login page, and an API client a 401", async () => {
     const browser = await t.app.request("/log?tab=audit", { headers: { Accept: "text/html" } });
     expect(browser.status).toBe(302);
@@ -188,6 +204,16 @@ describe("dashboard behind a session", () => {
       expect(res.headers.get("cache-control"), path).toBe("no-store");
       expect(await res.text(), path).toContain("<html");
     }
+  });
+
+  it("reads presence once per Home render, not twice", async () => {
+    // Each read is one KV get per agent. Two of them also meant two chances
+    // to see different states within one page.
+    const cookie = await sessionCookie();
+    const list = vi.spyOn(t.h.presence, "list");
+    const res = await t.app.request("/", { headers: { Cookie: cookie, Accept: "text/html" } });
+    expect(res.status).toBe(200);
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the two retired routes as permanent redirects with their query string", async () => {

@@ -215,18 +215,35 @@ describe("PresenceService.list", () => {
     );
   });
 
-  it("degrades to db-only presence when NATS KV read fails", async () => {
+  it("degrades to SQLite when the KV read fails: seen within the live window still reads live", async () => {
+    // The KV bucket expires an entry after `liveMs`, and touch() writes
+    // SQLite first on every interaction. So "last_seen_at within liveMs" is
+    // the same answer the bucket would give. Before, a KV failure read
+    // EVERYONE as stale: one broker hiccup of two seconds showed an empty
+    // mesh to every agent that looked at `online`, for the hiccup plus the
+    // breaker's cool-down.
     agents.create("alpha");
-    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    db.prepare("UPDATE agents SET last_seen_at = ? WHERE name = ?").run(
-      fiveMinAgo,
-      "alpha",
-    );
+    agents.create("beta");
+    agents.create("gamma");
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60 * 1000).toISOString();
+    db.prepare("UPDATE agents SET last_seen_at = ? WHERE name = ?").run(ago(5), "alpha");
+    db.prepare("UPDATE agents SET last_seen_at = ? WHERE name = ?").run(ago(11), "beta");
     nats.failOnGet = true;
     const result = await presence.list();
-    expect(result).toHaveLength(1);
-    // NATS unavailable ⇒ not live. last_seen_at < 24h ⇒ stale.
-    expect(result[0].presence).toBe("stale");
+    const stateOf = (name: string) => result.find((r) => r.agent.name === name)!.presence;
+    expect(stateOf("alpha")).toBe("live");   // 5 min ago, inside the 10 min window
+    expect(stateOf("beta")).toBe("stale");   // 11 min ago: the bucket would have dropped it too
+    expect(stateOf("gamma")).toBe("never");
+  });
+
+  it("gives the same answer with and without the bucket for an agent that was just around", async () => {
+    agents.create("alpha");
+    await presence.touch("alpha");
+    const withKv = (await presence.list())[0]!.presence;
+    nats.failOnGet = true;
+    const withoutKv = (await presence.list())[0]!.presence;
+    expect(withKv).toBe("live");
+    expect(withoutKv).toBe("live");
   });
 
   it("returns revoked agents in the list (is_active is independent of presence)", async () => {

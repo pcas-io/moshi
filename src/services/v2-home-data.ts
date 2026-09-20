@@ -85,10 +85,8 @@ export function getLatestIncident(
 export async function loadV2HomeData(
   { db, presence, nats }: V2HomeDataInput,
 ): Promise<Omit<V2HomeProps, "userRole" | "csrfToken">> {
-  const [baseStats, presenceEntries] = await Promise.all([
-    getHomeStats(db, presence),
-    presence.list(),
-  ]);
+  const presenceEntries = await presence.list();
+  const baseStats = await getHomeStats(db, presence, presenceEntries);
 
   const msgCounts = getAgentMsgCounts24h(db);
   const agents: V2HomeAgent[] = presenceEntries.map((e) => ({

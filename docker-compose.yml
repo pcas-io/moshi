@@ -19,8 +19,11 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+    # Liveness, not readiness: /livez asks neither NATS nor SQLite. With
+    # /health here, a broker outage marked this container unhealthy and took
+    # the dashboard (which runs on SQLite) off the proxy along with it.
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80/livez"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -1,6 +1,5 @@
 import {
   connect,
-  AckPolicy,
   RetentionPolicy,
   StorageType,
 } from "nats";
@@ -16,7 +15,10 @@ import {
   inboxPending,
   inboxConsumerName,
   broadcastConsumerName,
+  isConsumerNotFound,
 } from "./inbox.js";
+import { CircuitBreaker, BrokerUnavailableError } from "./circuit-breaker.js";
+import { ConsumerRegistry } from "./consumers.js";
 import type {
   ConsumerSource,
   InboxPull,
@@ -37,56 +39,121 @@ const DUPLICATE_WINDOW_NS = 300_000_000_000;
 const MAX_BYTES = 1_073_741_824;
 // KV presence TTL: 600s in milliseconds
 const KV_TTL_MS = 600_000;
-// 30s ack wait in nanoseconds
-const ACK_WAIT_NS = 30 * 1_000_000_000;
+// How long one JetStream API call that READS may take. The nats.js default is 5 s, and
+// one agent request makes three to five such calls: with a broker that had
+// stopped answering, every request took 15 to 25 seconds (measured).
+const JS_TIMEOUT_MS = 1500;
+// A publish gets more room. When it times out the outcome is UNKNOWN: the
+// bytes may sit in the socket and be stored the moment the broker breathes
+// again, while the sender is told "not delivered", writes no history row and
+// sends the message a second time. 1.5 s made that likely for every stall
+// between 1.5 and 5 s; main's 5 s default did not. The breaker still makes
+// every send after the first one fail fast.
+const PUBLISH_TIMEOUT_MS = 4000;
+// The first connect. nats.js waits 20 s by default for a broker that accepts
+// the socket and then says nothing.
+const CONNECT_TIMEOUT_MS = 5000;
+// close() must end: drain() against a broker that does not answer never does.
+const DRAIN_TIMEOUT_MS = 3000;
+// After an outage error, fail fast for this long before probing again.
+const BREAKER_COOL_DOWN_MS = 5000;
+// /health must answer even when the broker does not.
+const PING_TIMEOUT_MS = 1000;
+
+/** Errors that mean "the broker is not answering", as opposed to an answer
+ *  that happens to be an error (consumer not found, wrong sequence, ...). */
+const OUTAGE_CODES = new Set([
+  "TIMEOUT",
+  "503", // no responders: JetStream is not there
+  "CONNECTION_CLOSED",
+  "CONNECTION_DRAINING",
+  "CONNECTION_REFUSED",
+  "CONNECTION_TIMEOUT",
+  "DISCONNECT",
+]);
+
+export function isNatsOutage(err: unknown): boolean {
+  if (err instanceof BrokerUnavailableError) return true;
+  const code = (err as { code?: unknown })?.code;
+  return typeof code === "string" && OUTAGE_CODES.has(code);
+}
+
+/** For the presence bucket: "503 no responders" there means the BUCKET is
+ *  gone, not the broker. Presence is a hint and must not switch delivery
+ *  off, so that one code does not open the breaker. A timeout still does. */
+function isKvOutage(err: unknown): boolean {
+  return isNatsOutage(err) && (err as { code?: unknown })?.code !== "503";
+}
+
+/** What connect() hands to attach(). Tests hand in fakes. */
+export interface NatsClients {
+  nc: NatsConnection;
+  js: JetStreamClient;
+  jsm: JetStreamManager;
+  kv: KV;
+}
+
+export { BrokerUnavailableError } from "./circuit-breaker.js";
 
 export class NatsService {
   private nc!: NatsConnection;
   private js!: JetStreamClient;
   private jsm!: JetStreamManager;
   private kv!: KV;
+  // Down until connect() has succeeded: a call before that fails fast
+  // instead of dereferencing a client that does not exist yet.
+  private readonly breaker = new CircuitBreaker({ coolDownMs: BREAKER_COOL_DOWN_MS, startDown: true });
+  private readonly consumers = new ConsumerRegistry({
+    info: (name) => this.jsm.consumers.info(STREAM_NAME, name),
+    add: (config) => this.jsm.consumers.add(STREAM_NAME, config),
+  });
+
+  /** Keys whose durables a delete could not remove (outage). They are
+   *  removed before the key is ensured again: otherwise a new agent that is
+   *  given the key of a deleted one reads the old one's mail. In memory only;
+   *  a restart in between leaves the durables to the next delete. */
+  private readonly pendingDeletes = new Set<string>();
 
   constructor(private url: string) {}
+
+  /** Every broker call goes through here. */
+  private guarded<T>(fn: () => Promise<T>, isOutage: (err: unknown) => boolean = isNatsOutage): Promise<T> {
+    return this.breaker.run(fn, isOutage);
+  }
 
   async connect(): Promise<void> {
     // C4: Resilient reconnect config. `reconnect: true` + infinite
     // attempts with 2s backoff means a transient NATS outage (restart,
     // network glitch) heals itself without any mesh-side intervention.
     // We intentionally do NOT set `waitOnFirstConnect: true` here —
-    // first-connect retries are handled by the explicit loop in start(),
-    // which gives us clearer startup logs and a bounded retry count.
-    this.nc = await connect({
+    // first-connect retries are handled by the loop in start(), which
+    // retries for as long as it takes and logs every attempt.
+    // A retried connect() must not leak the connection of an attempt that
+    // got as far as the socket.
+    if (this.nc && !this.nc.isClosed()) await this.nc.close().catch(() => {});
+    const nc = await connect({
       servers: this.url,
       reconnect: true,
       maxReconnectAttempts: -1,
       reconnectTimeWait: 2000,
       pingInterval: 20_000,
       maxPingOut: 3,
+      timeout: CONNECT_TIMEOUT_MS,
       name: "moshi",
     });
-    this.jsm = await this.nc.jetstreamManager();
-    this.js = this.nc.jetstream();
-
-    // Log NATS connection status events as structured JSON so we can see
-    // reconnects, disconnects, and stale-connection warnings in the log
-    // viewer. Runs as a detached async iterator; errors are suppressed to
-    // prevent crashes if the iterator closes during shutdown.
-    (async () => {
-      try {
-        for await (const s of this.nc.status()) {
-          log("info", "nats status event", { event: s.type, data: String(s.data ?? "") });
-        }
-      } catch {
-        // Iterator closed — expected on graceful shutdown.
-      }
-    })();
+    // Remembered at once, so that the next attempt (or close()) can close it
+    // if the setup below fails. It is NOT attached yet: no status loop, the
+    // breaker stays down.
+    this.nc = nc;
+    const jsm = await nc.jetstreamManager({ timeout: JS_TIMEOUT_MS });
+    const js = nc.jetstream({ timeout: JS_TIMEOUT_MS });
 
     // Ensure stream exists
     try {
-      await this.jsm.streams.info(STREAM_NAME);
+      await jsm.streams.info(STREAM_NAME);
     } catch {
       // Stream doesn't exist — create it
-      await this.jsm.streams.add({
+      await jsm.streams.add({
         name: STREAM_NAME,
         subjects: ["mesh.agents.>", "mesh.broadcast"],
         retention: RetentionPolicy.Limits,
@@ -99,7 +166,50 @@ export class NatsService {
     }
 
     // Ensure KV bucket exists (creates if not present)
-    this.kv = await this.js.views.kv(KV_BUCKET, { ttl: KV_TTL_MS });
+    const kv = await js.views.kv(KV_BUCKET, { ttl: KV_TTL_MS });
+    this.attach({ nc, js, jsm, kv });
+  }
+
+  /**
+   * Take a fully set-up connection into service: clients, status loop,
+   * breaker up. connect() ends here, and only after stream and bucket exist.
+   * The status loop used to start right after the socket came up, so a
+   * half-made connection could report "reconnect" and mark the breaker up
+   * while `kv` was still undefined.
+   */
+  attach(clients: NatsClients): void {
+    const { nc } = clients;
+    this.nc = nc;
+    this.js = clients.js;
+    this.jsm = clients.jsm;
+    this.kv = clients.kv;
+    this.consumers.clear();
+
+    // Log NATS connection status events as structured JSON so we can see
+    // reconnects, disconnects, and stale-connection warnings in the log
+    // viewer. Runs as a detached async iterator; errors are suppressed to
+    // prevent crashes if the iterator closes during shutdown.
+    (async () => {
+      try {
+        for await (const s of nc.status()) {
+          log("info", "nats status event", { event: s.type, data: String(s.data ?? "") });
+          // Only the connection in service steers the breaker. A replaced
+          // connection keeps emitting until it has closed.
+          if (nc !== this.nc) continue;
+          // Known outage: fail fast, no probes. Back up: close at once, and
+          // trust no remembered consumer — the broker may be a fresh one.
+          if (s.type === "disconnect" || s.type === "staleConnection") this.breaker.markDown();
+          if (s.type === "reconnect") {
+            this.consumers.clear();
+            this.breaker.markUp();
+          }
+        }
+      } catch {
+        // Iterator closed — expected on graceful shutdown.
+      }
+    })();
+
+    this.breaker.markUp();
   }
 
   async publish(
@@ -107,57 +217,49 @@ export class NatsService {
     data: Uint8Array,
     msgId: string,
   ): Promise<void> {
-    await this.js.publish(subject, data, { msgID: msgId });
+    await this.guarded(() => this.js.publish(subject, data, { msgID: msgId, timeout: PUBLISH_TIMEOUT_MS }));
   }
 
   /** `inboxKey` is `agents.inbox_key` — the agent's immutable address, not
-   *  its display name. Subject and durable names derive from it. */
+   *  its display name. Subject and durable names derive from it. Asked of the
+   *  broker once per key; throws when the broker cannot be asked. */
   async ensureConsumer(inboxKey: string): Promise<void> {
-    const normalizedName = inboxKey.toLowerCase();
-    const inboxConsumer = inboxConsumerName(inboxKey);
-    const broadcastConsumer = broadcastConsumerName(inboxKey);
-
-    // Inbox consumer (lowercase subject for case-insensitive routing)
-    try {
-      await this.jsm.consumers.info(STREAM_NAME, inboxConsumer);
-    } catch {
-      await this.jsm.consumers.add(STREAM_NAME, {
-        durable_name: inboxConsumer,
-        filter_subject: `mesh.agents.${normalizedName}.inbox`,
-        ack_policy: AckPolicy.Explicit,
-        max_deliver: 5,
-        ack_wait: ACK_WAIT_NS,
-      });
+    const key = inboxKey.toLowerCase();
+    if (this.pendingDeletes.has(key)) {
+      // A delete the outage swallowed. Finish it first, or the durables of
+      // the previous owner of this key hand their mail to the next one.
+      await this.removeDurables(key);
+      this.pendingDeletes.delete(key);
     }
+    // Answered from memory: not a broker call, so not through the breaker.
+    // Through it, a memory hit on a half-open breaker counted as a successful
+    // probe and closed it while the broker was still away.
+    if (this.consumers.has(key)) return;
+    await this.guarded(() => this.consumers.ensure(key));
+  }
 
-    // Broadcast consumer
+  /** Remove both durables. "Not found" is fine; an outage is reported, so the
+   *  caller can log that the durables are still there, and the delete is
+   *  finished before the key is used again. */
+  async deleteConsumer(inboxKey: string): Promise<void> {
+    const key = inboxKey.toLowerCase();
+    this.consumers.forget(key);
     try {
-      await this.jsm.consumers.info(STREAM_NAME, broadcastConsumer);
-    } catch {
-      await this.jsm.consumers.add(STREAM_NAME, {
-        durable_name: broadcastConsumer,
-        filter_subject: "mesh.broadcast",
-        ack_policy: AckPolicy.Explicit,
-        max_deliver: 5,
-        ack_wait: ACK_WAIT_NS,
-      });
+      await this.removeDurables(key);
+      this.pendingDeletes.delete(key);
+    } catch (err) {
+      this.pendingDeletes.add(key);
+      throw err;
     }
   }
 
-  async deleteConsumer(inboxKey: string): Promise<void> {
-    const inboxConsumer = inboxConsumerName(inboxKey);
-    const broadcastConsumer = broadcastConsumerName(inboxKey);
-
-    try {
-      await this.jsm.consumers.delete(STREAM_NAME, inboxConsumer);
-    } catch {
-      // Ignore — consumer may not exist
-    }
-
-    try {
-      await this.jsm.consumers.delete(STREAM_NAME, broadcastConsumer);
-    } catch {
-      // Ignore — consumer may not exist
+  private async removeDurables(key: string): Promise<void> {
+    for (const name of [inboxConsumerName(key), broadcastConsumerName(key)]) {
+      try {
+        await this.guarded(() => this.jsm.consumers.delete(STREAM_NAME, name));
+      } catch (err) {
+        if (!isConsumerNotFound(err)) throw err;
+      }
     }
   }
 
@@ -174,12 +276,20 @@ export class NatsService {
    * unreachable — callers degrade to "retry shortly".
    */
   async pullInbox(inboxKey: string, limit: number): Promise<InboxPull> {
-    return pullInbox(this.consumerSource(), inboxKey, limit);
+    const pull = await this.guarded(() => pullInbox(this.consumerSource(), inboxKey, limit));
+    // A durable is gone although this process had ensured it (deleted by
+    // hand, by another process, stream recreated). Look again next time: on
+    // main every request did, and an agent must not sit in front of an
+    // "empty" inbox until the next restart.
+    if (pull.missing) this.consumers.forget(inboxKey);
+    return pull;
   }
 
   /** Waiting-message count for `inboxKey` without consuming anything. */
   async inboxPending(inboxKey: string): Promise<InboxPending> {
-    return inboxPending(this.consumerSource(), inboxKey);
+    const pending = await this.guarded(() => inboxPending(this.consumerSource(), inboxKey));
+    if (pending.missing) this.consumers.forget(inboxKey);
+    return pending;
   }
 
   /**
@@ -196,7 +306,7 @@ export class NatsService {
     maxAgeSeconds: number;
     maxBytes: number;
   }> {
-    const info = await this.jsm.streams.info(STREAM_NAME);
+    const info = await this.guarded(() => this.jsm.streams.info(STREAM_NAME));
     return {
       name: STREAM_NAME,
       bytes: info.state.bytes,
@@ -211,7 +321,7 @@ export class NatsService {
     data: Record<string, unknown>,
   ): Promise<void> {
     const value = JSON.stringify({ ...data, timestamp: new Date().toISOString() });
-    await this.kv.put(`agent.${agentName}`, value);
+    await this.guarded(() => this.kv.put(`agent.${agentName}`, value), isKvOutage);
   }
 
   /**
@@ -227,31 +337,59 @@ export class NatsService {
   async getPresence(agentNames: string[]): Promise<Map<string, unknown>> {
     const result = new Map<string, unknown>();
     const decoder = new TextDecoder();
-    await Promise.all(
-      agentNames.map(async (agentName) => {
-        try {
-          const entry = await this.kv.get(`agent.${agentName}`);
-          if (entry && entry.operation === "PUT" && entry.value.length > 0) {
-            result.set(agentName, JSON.parse(decoder.decode(entry.value)));
+    // One guarded unit: an outage on any key is an outage, and it has to
+    // reach the breaker (and the caller, which degrades to SQLite) instead of
+    // being mistaken for "this agent is not live".
+    await this.guarded(() =>
+      Promise.all(
+        agentNames.map(async (agentName) => {
+          try {
+            const entry = await this.kv.get(`agent.${agentName}`);
+            if (entry && entry.operation === "PUT" && entry.value.length > 0) {
+              result.set(agentName, JSON.parse(decoder.decode(entry.value)));
+            }
+          } catch (err) {
+            if (isNatsOutage(err)) throw err;
+            // Missing or unparseable entry — treated as not live
           }
-        } catch {
-          // Missing or unparseable entry — treated as not live
-        }
-      }),
+        }),
+      ),
+      isKvOutage,
     );
     return result;
   }
 
+  /** Is the broker answering? Bounded: `nc.flush()` alone waits for a broker
+   *  that has stopped answering for as long as it takes. */
   async ping(): Promise<boolean> {
     try {
-      await this.nc.flush();
+      await this.guarded(() => {
+        let timer: ReturnType<typeof setTimeout>;
+        const deadline = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(Object.assign(new Error("ping timed out"), { code: "TIMEOUT" })),
+            PING_TIMEOUT_MS,
+          );
+        });
+        return Promise.race([this.nc.flush(), deadline]).finally(() => clearTimeout(timer));
+      });
       return true;
     } catch {
       return false;
     }
   }
 
+  /** Never rejects and always ends: shutdown() goes on to close the database
+   *  and exit. drain() rejects on a connection that is already closed, and
+   *  never settles against a broker that does not answer. */
   async close(): Promise<void> {
-    await this.nc.drain();
+    this.breaker.markDown();
+    const nc = this.nc;
+    if (!nc || nc.isClosed()) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => { timer = setTimeout(resolve, DRAIN_TIMEOUT_MS); });
+    await Promise.race([nc.drain().catch(() => {}), deadline]);
+    clearTimeout(timer);
+    if (!nc.isClosed()) await nc.close().catch(() => {});
   }
 }

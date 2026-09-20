@@ -61,7 +61,8 @@ client by design.
 
 Deploy. Expected:
 
-- `https://moshi.enki.run/health` → `ok`
+- `https://moshi.enki.run/health` → `ok`. This is readiness: it answers 503 with `"nats":"disconnected"` while the broker is away. The dashboard keeps working then, MCP tools answer `nats_unavailable`, and the app reconnects on its own.
+- `https://moshi.enki.run/livez` → `alive`. This is what the container healthcheck polls; it does not depend on NATS.
 - `https://moshi.enki.run/` → redirects to the SENTINEL Dark login ("Mesh Access"); log in with `MESH_ADMIN_TOKEN`
 - Dashboard → register agents, mint per-agent tokens
 - CLI install (no repo, no deps — binaries baked into the image by the

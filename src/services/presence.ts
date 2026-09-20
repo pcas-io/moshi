@@ -120,6 +120,10 @@ interface RawKvEntry {
  * continues to work and presence collapses to `stale`/`offline`/`never`
  * based on last_seen_at alone.
  */
+/** How long `touch` waits for the KV liveness write before moving on. A
+ *  healthy write takes a few milliseconds. */
+export const TOUCH_KV_WAIT_MS = 300;
+
 export class PresenceService {
   constructor(
     private readonly db: Database.Database,
@@ -165,14 +169,23 @@ export class PresenceService {
     // 2. NATS KV — best effort liveness flag (timestamp only), the bucket
     //    has its own TTL auto-expire. Metadata deliberately stays out of
     //    KV: a bare touch would overwrite it (D4).
-    try {
-      await this.nats.updatePresence(agentName, {});
-    } catch (err) {
+    //
+    //    Waited for, but only briefly. This runs in front of every agent
+    //    request, and a broker that has stopped answering must not hold each
+    //    of them for a full timeout. Not fire-and-forget either: the caller's
+    //    own mesh_status would then race the write and show it as stale.
+    const write = this.nats.updatePresence(agentName, {}).catch((err: unknown) => {
       log("warn", "presence touch: nats kv update failed", {
         agent: agentName,
         err: String(err),
       });
-    }
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const patience = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, TOUCH_KV_WAIT_MS);
+    });
+    await Promise.race([write, patience]);
+    clearTimeout(timer);
   }
 
   /**
@@ -193,19 +206,30 @@ export class PresenceService {
       )
       .all() as Agent[];
 
-    let kv: Map<string, unknown>;
+    let kv: Map<string, unknown> | null;
     try {
       kv = await this.nats.getPresence(rows.map((r) => r.name));
     } catch (err) {
       log("warn", "presence list: nats kv read failed, degrading to db-only", {
         err: String(err),
       });
-      kv = new Map();
+      kv = null;
     }
 
+    // Without the bucket, SQLite answers the same question. The bucket drops
+    // an entry after `liveMs`, and touch() writes `last_seen_at` first on
+    // every interaction, so "seen within liveMs" is what the bucket would
+    // have said. Reading everyone as "not in the bucket" instead made the
+    // whole mesh look stale for every broker hiccup.
+    const seenRecently = (lastSeenAt: string | null): boolean => {
+      if (!lastSeenAt) return false;
+      const ms = Date.parse(lastSeenAt);
+      return !Number.isNaN(ms) && now - ms < PRESENCE_THRESHOLDS.liveMs;
+    };
+
     return rows.map((agent) => {
-      const raw = kv.get(agent.name) as RawKvEntry | undefined;
-      const inKV = kv.has(agent.name);
+      const raw = kv?.get(agent.name) as RawKvEntry | undefined;
+      const inKV = kv ? kv.has(agent.name) : seenRecently(agent.last_seen_at);
       const effectiveLastSeen = raw?.timestamp ?? agent.last_seen_at ?? null;
       const presence = computePresenceState(inKV, effectiveLastSeen, now);
       return { agent, presence, effectiveLastSeen };

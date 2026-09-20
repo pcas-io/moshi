@@ -38,12 +38,18 @@ export interface InboxPull {
   messages: PulledMessage[];
   /** Messages still waiting after this pull (best-effort snapshot). */
   remaining: number;
+  /** A durable of this inbox was not there. The caller remembers which keys
+   *  it has ensured; this tells it to look again, instead of reporting an
+   *  empty inbox for as long as the process lives. */
+  missing: boolean;
 }
 
 export interface InboxPending {
   inbox: number;
   broadcast: number;
   total: number;
+  /** See `InboxPull.missing`. */
+  missing: boolean;
 }
 
 /** Wait budget for a fetch that we already know has messages. */
@@ -82,23 +88,37 @@ async function pendingOf(
   return { consumer, pending: info.num_pending + info.num_ack_pending };
 }
 
+/** nats.js ends a fetch with "503 no responders" when the durable is deleted
+ *  between the info and the fetch. That is a consumer that vanished, not a
+ *  broker that is gone — the info has just been answered. */
+function isNoResponders(err: unknown): boolean {
+  return (err as { code?: unknown })?.code === "503";
+}
+
 async function pullFrom(
   source: ConsumerSource,
   name: string,
   limit: number,
   expires: number,
-): Promise<{ messages: PulledMessage[]; pending: number }> {
+): Promise<{ messages: PulledMessage[]; pending: number; missing: boolean }> {
   const found = await pendingOf(source, name);
-  if (!found || found.pending === 0 || limit <= 0) {
-    return { messages: [], pending: found?.pending ?? 0 };
+  if (!found) return { messages: [], pending: 0, missing: true };
+  if (found.pending === 0 || limit <= 0) {
+    return { messages: [], pending: found.pending, missing: false };
   }
   const batch = Math.min(limit, found.pending);
-  const iter = await found.consumer.fetch({ max_messages: batch, expires });
   const messages: PulledMessage[] = [];
-  for await (const m of iter) {
-    messages.push({ data: m.data, ack: () => m.ack() });
+  try {
+    const iter = await found.consumer.fetch({ max_messages: batch, expires });
+    for await (const m of iter) {
+      messages.push({ data: m.data, ack: () => m.ack() });
+    }
+  } catch (err) {
+    if (!isNoResponders(err)) throw err;
+    // What was already handed over stays handed over.
+    return { messages, pending: 0, missing: true };
   }
-  return { messages, pending: found.pending };
+  return { messages, pending: found.pending, missing: false };
 }
 
 /**
@@ -128,7 +148,7 @@ export async function pullInbox(
     0,
     inbox.pending + broadcast.pending - messages.length,
   );
-  return { messages, remaining };
+  return { messages, remaining, missing: inbox.missing || broadcast.missing };
 }
 
 /** Count waiting messages without pulling anything. */
@@ -140,5 +160,5 @@ export async function inboxPending(
   const broadcast = await pendingOf(source, broadcastConsumerName(inboxKey));
   const a = inbox?.pending ?? 0;
   const b = broadcast?.pending ?? 0;
-  return { inbox: a, broadcast: b, total: a + b };
+  return { inbox: a, broadcast: b, total: a + b, missing: inbox === null || broadcast === null };
 }

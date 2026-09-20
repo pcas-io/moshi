@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { PresenceService } from "./presence.js";
+import type { PresenceService, AgentWithPresence } from "./presence.js";
 
 /**
  * Aggregate counts for the dashboard home page. Pulls the `totalAgents`
@@ -27,15 +27,24 @@ export interface HomeStats {
   recentMessages: number;
 }
 
+/**
+ * @param entries  A presence listing the caller already has. Home renders the
+ *                 same listing next to these numbers; reading it twice costs
+ *                 a KV get per agent each time and can show two different
+ *                 states on one page.
+ */
 export async function getHomeStats(
   db: Database.Database,
   presence: PresenceService,
+  entries?: AgentWithPresence[],
 ): Promise<HomeStats> {
   const totalAgentsRow = db
     .prepare("SELECT COUNT(*) as count FROM agents")
     .get() as { count: number };
 
-  const counts = await presence.countByState();
+  const live = entries
+    ? entries.filter((e) => e.presence === "live").length
+    : (await presence.countByState()).live;
 
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const recentMessagesRow = db
@@ -44,7 +53,7 @@ export async function getHomeStats(
 
   return {
     totalAgents: totalAgentsRow.count,
-    onlineAgents: counts.live,
+    onlineAgents: live,
     recentMessages: recentMessagesRow.count,
   };
 }

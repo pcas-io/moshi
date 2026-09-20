@@ -231,7 +231,9 @@ if $FRESH; then
   (cd "$(dirname "$0")/../.." && docker compose down -v && docker compose up -d) >/dev/null 2>&1
   printf "Waiting for /health...\n"
   for i in {1..30}; do
-    if curl -sS "$MESH_URL/health" >/dev/null 2>&1; then
+    # -f: wait for a 200. The server now answers before NATS is connected,
+    # and the first answer from /health can be a 503.
+    if curl -fsS "$MESH_URL/health" >/dev/null 2>&1; then
       break
     fi
     sleep 1

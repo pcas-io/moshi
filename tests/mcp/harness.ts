@@ -61,12 +61,12 @@ export function createFakeMeshNats(): FakeMeshNats {
         data,
         ack: () => { self.acked++; },
       }));
-      return { messages, remaining: queue.length };
+      return { messages, remaining: queue.length, missing: false };
     },
     async inboxPending(agentName) {
       if (self.failPending) throw new Error("nats unavailable");
       const n = (self.inboxes.get(agentName.toLowerCase()) ?? []).length;
-      return { inbox: n, broadcast: 0, total: n };
+      return { inbox: n, broadcast: 0, total: n, missing: false };
     },
     async updatePresence(agentName, data) {
       self.kv.set(agentName, { ...data, timestamp: new Date().toISOString() });
