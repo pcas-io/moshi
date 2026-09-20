@@ -115,12 +115,53 @@ describe("pullInbox", () => {
   });
 });
 
+describe("a durable that is not there", () => {
+  // The service remembers which keys it has ensured. When a durable vanishes
+  // behind its back, "empty inbox" is the wrong answer to keep giving: the
+  // pull has to say that something is missing, so the service can look again.
+  it("reports a missing consumer instead of passing it off as an empty inbox", async () => {
+    const bc = fakeConsumer(["b1"]);
+    const onlyBroadcast = source({ [broadcastConsumerName("alpha")]: bc });
+    const pull = await pullInbox(onlyBroadcast, "alpha", 10);
+    expect(pull.missing).toBe(true);
+    expect(pull.messages).toHaveLength(1); // what is there is still delivered
+    expect((await inboxPending(onlyBroadcast, "alpha")).missing).toBe(true);
+
+    const both = source({ [inboxConsumerName("alpha")]: fakeConsumer([]), [broadcastConsumerName("alpha")]: fakeConsumer([]) });
+    expect((await pullInbox(both, "alpha", 10)).missing).toBe(false);
+    expect((await inboxPending(both, "alpha")).missing).toBe(false);
+  });
+
+  it("reads 'no responders' from a fetch, after the info answered, as a vanished consumer and not as an outage", async () => {
+    // Revoke or delete of this very agent, landing between info and fetch.
+    // nats.js ends the fetch with code 503. The broker just answered the
+    // info: it is there. Passed on as it is, this would open the circuit
+    // breaker for every agent for five seconds.
+    const vanishing = fakeConsumer(["m1"]);
+    vanishing.fetch = async () => ({
+      // eslint-disable-next-line require-yield
+      async *[Symbol.asyncIterator]() { throw Object.assign(new Error("no responders"), { code: "503" }); },
+    });
+    const src = source({ [inboxConsumerName("alpha")]: vanishing, [broadcastConsumerName("alpha")]: fakeConsumer([]) });
+    const pull = await pullInbox(src, "alpha", 10);
+    expect(pull.messages).toEqual([]);
+    expect(pull.missing).toBe(true);
+  });
+
+  it("still passes on a timeout from the fetch: that one is an outage", async () => {
+    const stalling = fakeConsumer(["m1"]);
+    stalling.fetch = async () => { throw Object.assign(new Error("TIMEOUT"), { code: "TIMEOUT" }); };
+    const src = source({ [inboxConsumerName("alpha")]: stalling, [broadcastConsumerName("alpha")]: fakeConsumer([]) });
+    await expect(pullInbox(src, "alpha", 10)).rejects.toMatchObject({ code: "TIMEOUT" });
+  });
+});
+
 describe("inboxPending", () => {
   it("sums pending across inbox and broadcast without fetching", async () => {
     const inbox = fakeConsumer(["a", "b"]);
     const bc = fakeConsumer(["c"]);
     const src = source({ [inboxConsumerName("alpha")]: inbox, [broadcastConsumerName("alpha")]: bc });
-    expect(await inboxPending(src, "alpha")).toEqual({ inbox: 2, broadcast: 1, total: 3 });
+    expect(await inboxPending(src, "alpha")).toEqual({ inbox: 2, broadcast: 1, total: 3, missing: false });
     expect(inbox.fetchCalls).toEqual([]);
   });
 
@@ -132,7 +173,7 @@ describe("inboxPending", () => {
   });
 
   it("is zero for an agent without consumers", async () => {
-    expect(await inboxPending(source({}), "ghost")).toEqual({ inbox: 0, broadcast: 0, total: 0 });
+    expect(await inboxPending(source({}), "ghost")).toEqual({ inbox: 0, broadcast: 0, total: 0, missing: true });
   });
 });
 
