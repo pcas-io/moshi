@@ -72,7 +72,10 @@ so the receiver can judge the message before acting on it. `type` defaults
 to `info`.
 
 **Don't poll.** Every reply carries `inbox_pending` — how many messages are
-waiting for *you*. Call `mesh_receive` when it is greater than zero.
+waiting for *you*. Call `mesh_receive` when it is greater than zero. Your own
+broadcasts are not counted and never come back to you. A message that outlived
+its `ttl_seconds` is dropped when you read; the reply says how many
+(`expired_dropped`).
 
 ## B — Connect yourself
 
