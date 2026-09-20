@@ -21,10 +21,10 @@ import type { PresenceService } from "./services/presence.js";
 import type { NatsPingable } from "./services/health.js";
 import { checkHealth } from "./services/health.js";
 import { log } from "./services/logger.js";
-import { authMiddleware, generateCsrfToken, getCookieSecret, safeNextPath } from "./auth.js";
+import { authMiddleware, safeNextPath } from "./auth.js";
 import { mcpPostOnly } from "./mcp/http-guard.js";
 import { securityHeaders } from "./middleware/security-headers.js";
-import { createSessionRoutes } from "./routes/session.js";
+import { createSessionRoutes, issueLoginCsrf } from "./routes/session.js";
 import { createMcpRoute } from "./routes/mcp.js";
 import type { McpRouteNats } from "./routes/mcp.js";
 import { createDashboardRoutes } from "./routes/dashboard.js";
@@ -132,9 +132,14 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
 
   // --- Login page (no auth) ---
   app.get("/login", async (c) => {
-    const cookieSecret = getCookieSecret(c.env as unknown as Record<string, string | undefined>);
-    const csrfToken = generateCsrfToken(cookieSecret);
+    // Bound to a cookie this response sets: see issueLoginCsrf.
+    const csrfToken = issueLoginCsrf(c, config.cookieSecure);
     const error = c.req.query("error") === "1";
+    const expired = c.req.query("error") === "expired";
+    // A Secure cookie over plain http is dropped by the browser: the sign-in
+    // can then never succeed, and the page should say why.
+    const proto = c.req.header("x-forwarded-proto") ?? new URL(c.req.url).protocol.replace(":", "");
+    const cookieWillBeDropped = expired && config.cookieSecure && proto !== "https";
     const next = safeNextPath(c.req.query("next"));
     // The footer states what is actually up. Best-effort: a health check that
     // throws must not keep an operator off the sign-in page.
@@ -147,6 +152,8 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
     return c.html(
       <LoginPage
         error={error}
+        expired={expired}
+        cookieWillBeDropped={cookieWillBeDropped}
         csrfToken={csrfToken}
         next={next === "/" ? undefined : next}
         health={health}
@@ -159,7 +166,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   app.route("/", createSessionRoutes({ agents, secureCookie: config.cookieSecure }));
 
   // --- Auth middleware on all other routes ---
-  app.use("*", authMiddleware(agents, presence, activity));
+  app.use("*", authMiddleware(agents, presence, activity, { secureCookie: config.cookieSecure }));
 
   // Limits for authenticated routes come after auth, for the same reason as
   // on /mcp: bodyLimit drains a body of unknown length before it passes on,

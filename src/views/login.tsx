@@ -12,6 +12,12 @@ const T = V2_TOKENS;
 export interface LoginProps {
   /** True after a rejected POST /login — renders the inline error. */
   error?: boolean;
+  /** The form was not accepted, the token was never looked at: the page was
+   *  older than ten minutes, or another tab used up its pre-session cookie. */
+  expired?: boolean;
+  /** The session cookie is `Secure` and this request came over plain http: a
+   *  browser will not keep it, and every sign-in ends on "expired". */
+  cookieWillBeDropped?: boolean;
   csrfToken: string;
   /** Relative path to return to after login (validated by the route). */
   next?: string;
@@ -127,6 +133,8 @@ const CHIP = `font-family:${V2_FONT_FAMILY_MONO};font-size:12px;background:${T.s
 
 export const LoginPage: FC<LoginProps> = ({
   error,
+  expired,
+  cookieWillBeDropped,
   csrfToken,
   next,
   health,
@@ -220,7 +228,7 @@ export const LoginPage: FC<LoginProps> = ({
                     autofocus
                     autocomplete="current-password"
                     aria-invalid={error ? "true" : undefined}
-                    aria-describedby={error ? "token-error" : undefined}
+                    aria-describedby={error ? "token-error" : expired ? "form-expired" : undefined}
                     style={`width:100%;background:${T.paper};border:1px solid ${T.lineStrong};border-radius:${T.radiusControl}px;color:${T.ink};font-family:${V2_FONT_FAMILY_MONO};font-size:14px;padding:13px 15px;outline:none`}
                   />
                   {error && (
@@ -231,6 +239,21 @@ export const LoginPage: FC<LoginProps> = ({
                     >
                       <span style={`width:6px;height:6px;border-radius:50%;background:${T.red};flex-shrink:0`} />
                       Invalid token — check MESH_ADMIN_TOKEN.
+                    </div>
+                  )}
+                  {expired && !error && (
+                    <div
+                      id="form-expired"
+                      role="alert"
+                      style={`margin-top:10px;font-size:13px;font-weight:600;color:${T.body}`}
+                    >
+                      This sign-in page had expired. Try again.
+                      {cookieWillBeDropped && (
+                        <div style={`margin-top:6px;font-weight:500;color:${T.dim}`}>
+                          If it keeps happening: this page came over plain http, and browsers drop the
+                          sign-in cookie there. Serve it over https, or set MESH_COOKIE_SECURE=0.
+                        </div>
+                      )}
                     </div>
                   )}
                   <button

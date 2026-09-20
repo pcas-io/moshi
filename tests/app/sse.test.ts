@@ -5,9 +5,8 @@
 // fragment endpoints; this stream only says when to ask.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createTestApp, ADMIN_TOKEN, TEST_CONFIG, MCP_HEADERS, rpc } from "./harness";
+import { createTestApp, signIn as signInThroughTheForm, ADMIN_TOKEN, MCP_HEADERS, rpc } from "./harness";
 import type { TestApp } from "./harness";
-import { generateCsrfToken } from "../../src/auth";
 import {
   listenerCount,
   subscribeMessageEvents,
@@ -25,14 +24,7 @@ let cookie: string;
 let agentToken: string;
 const open: ReadableStreamDefaultReader<Uint8Array>[] = [];
 
-async function signIn(app: TestApp["app"], token: string): Promise<string> {
-  const res = await app.request("/login", {
-    method: "POST",
-    body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token }),
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-  });
-  return (res.headers.get("set-cookie") ?? "").split(";")[0]!;
-}
+const signIn = async (app: TestApp["app"], token: string): Promise<string> => (await signInThroughTheForm(app, token)).cookie;
 
 /** Reads until `wanted` shows up in what the stream has sent so far. */
 async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, wanted: RegExp, ms = 1000): Promise<string> {
@@ -220,8 +212,13 @@ describe("GET /sse/messages — keeping a connection alive, and not for ever", (
     await readUntil(reader, /: open\n\n/);
     expect(timers()).toBeGreaterThan(before);
     await reader.cancel();
-    await new Promise((r) => setTimeout(r, 10));
-    expect(timers()).toBe(before);
+    // The count is the whole worker's: a timer of an earlier test may end in
+    // the meantime, and the runner has its own. So this waits for the count
+    // to come back down instead of comparing two snapshots 10 ms apart
+    // (which failed about one full run in seven under load).
+    const deadline = Date.now() + 1000;
+    while (timers() > before && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+    expect(timers()).toBeLessThanOrEqual(before);
   });
 
   it("ends a connection whose reader does not read, instead of queueing events for it without end", async () => {

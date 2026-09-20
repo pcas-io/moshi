@@ -212,6 +212,13 @@ export class AgentService {
     return row ?? null;
   }
 
+  /** By id, active or not. What a session cookie names: an id never passes
+   *  to another agent, a name can. */
+  getById(id: string): Agent | null {
+    const row = this.db.prepare("SELECT * FROM agents WHERE id = ?").get(id) as Agent | undefined;
+    return row ?? null;
+  }
+
   getByTokenHash(hash: string): Agent | null {
     // Check cache first
     const cached = tokenCache.get(hash);

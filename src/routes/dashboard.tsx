@@ -11,7 +11,7 @@ import type { AgentService } from "../services/agent.js";
 import type { ActivityService } from "../services/activity.js";
 import type { PresenceService } from "../services/presence.js";
 import type { NatsPingable } from "../services/health.js";
-import { generateCsrfToken, getCookieSecret } from "../auth.js";
+import { issueCsrf } from "../auth.js";
 import { createAgentAdminRoutes } from "./agent-admin.js";
 import { createAgentConnectRoutes } from "./agent-connect.js";
 import { loadConversationList, loadLogMessages, loadOpenThread, readConversationsQuery } from "../services/section-loaders.js";
@@ -43,17 +43,13 @@ export interface DashboardDeps {
   now?: () => number;
 }
 
-function cookieSecretFor(env: Env): string {
-  return getCookieSecret(env as unknown as Record<string, string | undefined>);
-}
-
 export function createDashboardRoutes({ db, nats, agents, activity, presence, now = Date.now }: DashboardDeps): Hono<HonoEnv> {
   const dash = new Hono<HonoEnv>();
 
   // --- Dashboard: Home (v2) ---
   dash.get("/", async (c) => {
     const agent = c.get("agent");
-    const csrfToken = generateCsrfToken(cookieSecretFor(c.env));
+    const csrfToken = issueCsrf(c);
     const data = await loadV2HomeData({ db, presence, nats });
     return c.html(
       <V2HomePage
@@ -75,7 +71,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
     // still works so bookmarks and the palette entry land somewhere useful.
     if (c.req.query("new") === "1") return c.redirect("/agents/connect");
 
-    const csrfToken = generateCsrfToken(cookieSecretFor(c.env));
+    const csrfToken = issueCsrf(c);
     const flash = getFlash(c.req.query("flash"));
     const agentsData = await loadV2AgentsData(db, presence);
 
@@ -95,10 +91,10 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
 
   // --- The guided connect flow (/agents/connect, admin only) ---
   // Mounted before the admin actions so its own POST target is unambiguous.
-  dash.route("/agents", createAgentConnectRoutes({ agents, presence, cookieSecretFor }));
+  dash.route("/agents", createAgentConnectRoutes({ agents, presence }));
 
   // --- Agent admin actions (create/revoke/reactivate/rename/reset-token/delete) ---
-  dash.route("/agents", createAgentAdminRoutes({ agents, cookieSecretFor }));
+  dash.route("/agents", createAgentAdminRoutes({ agents }));
 
   // --- Dashboard: Log (Messages + Audit trail) ---
   // One route, two tabs. Both tabs filter in SQL, so the counts on screen and
@@ -125,7 +121,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
       agentRoles: roleIndex(allAgents),
       userRole: agent?.role ?? undefined,
       userName: agent?.name ?? undefined,
-      csrfToken: generateCsrfToken(cookieSecretFor(c.env)),
+      csrfToken: issueCsrf(c),
       now: now(),
     };
 
@@ -166,7 +162,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
   // --- Dashboard: Conversations ---
   dash.get("/conversations", (c) => {
     const agent = c.get("agent");
-    const csrfToken = generateCsrfToken(cookieSecretFor(c.env));
+    const csrfToken = issueCsrf(c);
 
     const query = readConversationsQuery((key) => c.req.query(key));
     const result = loadConversationList(db, query);

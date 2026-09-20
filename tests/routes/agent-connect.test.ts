@@ -19,6 +19,8 @@ import {
 } from "../../src/routes/agent-connect";
 
 const SECRET = "test-cookie-secret";
+/** Stands in for a session: the routes only ever see it through the context. */
+const BINDING = "session:admin::test";
 const ADMIN: RequestAgent = { name: "admin", role: "admin" };
 const NON_ADMIN: RequestAgent = { name: "dex-eu", role: "agent" };
 
@@ -62,7 +64,10 @@ class FakePresence implements ConnectPresenceService {
 function buildApp(who: RequestAgent | null, agents: FakeAgents, now?: () => number) {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
   app.use("*", async (c, next) => {
+    // What the auth middleware leaves behind: who, and whose forms count.
+    c.env = { NATS_URL: "nats://x", MESH_ADMIN_TOKEN: "a".repeat(40), MESH_COOKIE_SECRET: SECRET } as Env;
     c.set("agent", who);
+    c.set("csrfBinding", BINDING);
     await next();
   });
   app.route(
@@ -70,7 +75,6 @@ function buildApp(who: RequestAgent | null, agents: FakeAgents, now?: () => numb
     createAgentConnectRoutes({
       agents,
       presence: new FakePresence(agents),
-      cookieSecretFor: () => SECRET,
       now,
     }),
   );
@@ -120,7 +124,7 @@ describe("POST /agents/connect/create", () => {
   it("refuses a non-admin", async () => {
     const res = await buildApp(NON_ADMIN, agents).request(
       "/agents/connect/create",
-      form({ csrf: generateCsrfToken(SECRET), name: "dex-eu" }),
+      form({ csrf: generateCsrfToken(SECRET, BINDING), name: "dex-eu" }),
     );
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "Forbidden" });
@@ -142,7 +146,7 @@ describe("POST /agents/connect/create", () => {
   it("asks for a name when the field is empty", async () => {
     const res = await buildApp(ADMIN, agents).request(
       "/agents/connect/create",
-      form({ csrf: generateCsrfToken(SECRET), name: "   " }),
+      form({ csrf: generateCsrfToken(SECRET, BINDING), name: "   " }),
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("Give the agent a name.");
@@ -151,7 +155,7 @@ describe("POST /agents/connect/create", () => {
   it("explains the naming rule in English, not the German NATS rule", async () => {
     const res = await buildApp(ADMIN, agents).request(
       "/agents/connect/create",
-      form({ csrf: generateCsrfToken(SECRET), name: "dex eu.1" }),
+      form({ csrf: generateCsrfToken(SECRET, BINDING), name: "dex eu.1" }),
     );
     expect(res.status).toBe(400);
     const html = await res.text();
@@ -164,7 +168,7 @@ describe("POST /agents/connect/create", () => {
     agents.create("dex-eu");
     const res = await buildApp(ADMIN, agents).request(
       "/agents/connect/create",
-      form({ csrf: generateCsrfToken(SECRET), name: "dex-eu" }),
+      form({ csrf: generateCsrfToken(SECRET, BINDING), name: "dex-eu" }),
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toContain(
@@ -181,7 +185,7 @@ describe("POST /agents/connect/create", () => {
     };
     const res = await buildApp(ADMIN, failing).request(
       "/agents/connect/create",
-      form({ csrf: generateCsrfToken(SECRET), name: "dex-eu" }),
+      form({ csrf: generateCsrfToken(SECRET, BINDING), name: "dex-eu" }),
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("Maximum number of agents (100) reached");
@@ -191,7 +195,7 @@ describe("POST /agents/connect/create", () => {
     const app = buildApp(ADMIN, agents);
     const res = await app.request(
       "/agents/connect/create",
-      form({ csrf: generateCsrfToken(SECRET), name: "dex-eu" }),
+      form({ csrf: generateCsrfToken(SECRET, BINDING), name: "dex-eu" }),
     );
     expect(res.status).toBe(302);
     expect(agents.createdBy).toBe("admin");
@@ -208,7 +212,7 @@ describe("POST /agents/connect/create", () => {
   it("keeps the chosen client across the create redirect", async () => {
     const res = await buildApp(ADMIN, agents).request(
       "/agents/connect/create?client=gemini",
-      form({ csrf: generateCsrfToken(SECRET), name: "dex-eu" }),
+      form({ csrf: generateCsrfToken(SECRET, BINDING), name: "dex-eu" }),
     );
     expect(res.headers.get("location")).toContain("client=gemini");
   });

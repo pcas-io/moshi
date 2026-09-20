@@ -19,8 +19,7 @@ import { ActivityService } from "../../src/services/activity";
 import { PresenceService } from "../../src/services/presence";
 import { RateLimiter } from "../../src/services/ratelimit";
 import { createApp } from "../../src/app";
-import { generateCsrfToken } from "../../src/auth";
-import { TEST_CONFIG, ADMIN_TOKEN, MCP_HEADERS, rpc } from "../app/harness";
+import { TEST_CONFIG, ADMIN_TOKEN, MCP_HEADERS, rpc, signIn } from "../app/harness";
 
 const URL = process.env.MOSHI_TEST_NATS_URL;
 const CONTAINER = process.env.MOSHI_TEST_NATS_CONTAINER;
@@ -149,12 +148,7 @@ describe.skipIf(!URL || !CONTAINER)("a broker that stops answering", () => {
     expect(live.res.status).toBe(200);
     expect(live.ms).toBeLessThan(200);
 
-    const login = await app.request("/login", {
-      method: "POST",
-      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token: ADMIN_TOKEN }),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-    const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0]!;
+    const { cookie } = await signIn(app, ADMIN_TOKEN);
     for (const path of ["/", "/agents", "/log", "/conversations"]) {
       const page = await timed(path, { Cookie: cookie, Accept: "text/html" });
       expect(page.res.status, path).toBe(200);

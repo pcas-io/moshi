@@ -16,6 +16,8 @@ import { getFlash } from "../../src/services/flash";
 import { createAgentAdminRoutes } from "../../src/routes/agent-admin";
 
 const SECRET = "test-cookie-secret";
+/** Stands in for a session: the routes only ever see it through the context. */
+const BINDING = "session:admin::test";
 const ADMIN: RequestAgent = { name: "admin", role: "admin" };
 const NON_ADMIN: RequestAgent = { name: "dex-eu", role: "agent" };
 
@@ -30,10 +32,13 @@ function createTestDb(): Database.Database {
 function buildApp(who: RequestAgent | null, agents: AgentService) {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
   app.use("*", async (c, next) => {
+    // What the auth middleware leaves behind: who, and whose forms count.
+    c.env = { NATS_URL: "nats://x", MESH_ADMIN_TOKEN: "a".repeat(40), MESH_COOKIE_SECRET: SECRET } as Env;
     c.set("agent", who);
+    c.set("csrfBinding", BINDING);
     await next();
   });
-  app.route("/agents", createAgentAdminRoutes({ agents, cookieSecretFor: () => SECRET }));
+  app.route("/agents", createAgentAdminRoutes({ agents }));
   return app;
 }
 
@@ -66,13 +71,13 @@ describe("POST /agents/rename", () => {
     buildApp(who, agents).request("/agents/rename", form(fields));
 
   it("refuses a non-admin", async () => {
-    const res = await rename(NON_ADMIN, { csrf: generateCsrfToken(SECRET), id, name: "scout-eu" });
+    const res = await rename(NON_ADMIN, { csrf: generateCsrfToken(SECRET, BINDING), id, name: "scout-eu" });
     expect(res.status).toBe(403);
     expect(agents.getByName("scout")).not.toBeNull();
   });
 
   it("renames and lands back on the agent it renamed", async () => {
-    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET), id, name: "  scout-eu  " });
+    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET, BINDING), id, name: "  scout-eu  " });
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe(`/agents?inspect=${id}`);
     expect(agents.getByName("scout-eu")?.id).toBe(id);
@@ -88,14 +93,14 @@ describe("POST /agents/rename", () => {
   });
 
   it("says so when the agent is gone, instead of landing on someone else's form", async () => {
-    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET), id: "01NOPE", name: "scout-eu" });
+    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET, BINDING), id: "01NOPE", name: "scout-eu" });
     const location = res.headers.get("location") ?? "";
     expect(location).not.toContain("inspect=");
     expect(flashOf(res)?.error).toBe("That agent no longer exists. Reload the page.");
   });
 
   it("treats a missing id the same way", async () => {
-    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET), name: "scout-eu" });
+    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET, BINDING), name: "scout-eu" });
     expect(res.headers.get("location") ?? "").not.toContain("inspect=");
     expect(flashOf(res)?.error).toBe("That agent no longer exists. Reload the page.");
   });
@@ -110,12 +115,12 @@ describe("POST /agents/rename", () => {
   });
 
   it("asks for a name when the field is empty", async () => {
-    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET), id, name: "   " });
+    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET, BINDING), id, name: "   " });
     expect(flashOf(res)?.error).toBe("Give the agent a name.");
   });
 
   it("explains the name rule in the handoff's words and keeps the agent selected", async () => {
-    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET), id, name: "scout eu" });
+    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET, BINDING), id, name: "scout eu" });
     const location = res.headers.get("location") ?? "";
     expect(location).toContain(`inspect=${id}`);
     expect(flashOf(res)?.error).toBe(AGENT_NAME_RULE);
@@ -123,13 +128,13 @@ describe("POST /agents/rename", () => {
   });
 
   it("refuses a reserved name", async () => {
-    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET), id, name: "Admin" });
+    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET, BINDING), id, name: "Admin" });
     expect(flashOf(res)?.error).toContain("reserved");
     expect(agents.getByName("scout")).not.toBeNull();
   });
 
   it("refuses a name another agent holds, in English", async () => {
-    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET), id, name: "OPS" });
+    const res = await rename(ADMIN, { csrf: generateCsrfToken(SECRET, BINDING), id, name: "OPS" });
     expect(flashOf(res)?.error).toContain("already an agent called OPS");
   });
 });
@@ -154,7 +159,7 @@ describe("admin actions — a request without a csrf field", () => {
     const agents = new AgentService(db, new ActivityService(db));
     const id = agents.create("scout").agent.id;
     const body = new FormData();
-    body.set("csrf", generateCsrfToken(SECRET));
+    body.set("csrf", generateCsrfToken(SECRET, BINDING));
     body.set("id", id);
     body.set("name", new File(["x"], "name.txt"));
     const res = await buildApp(ADMIN, agents).request("/agents/rename", { method: "POST", body });
