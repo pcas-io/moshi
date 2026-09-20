@@ -206,19 +206,30 @@ export class PresenceService {
       )
       .all() as Agent[];
 
-    let kv: Map<string, unknown>;
+    let kv: Map<string, unknown> | null;
     try {
       kv = await this.nats.getPresence(rows.map((r) => r.name));
     } catch (err) {
       log("warn", "presence list: nats kv read failed, degrading to db-only", {
         err: String(err),
       });
-      kv = new Map();
+      kv = null;
     }
 
+    // Without the bucket, SQLite answers the same question. The bucket drops
+    // an entry after `liveMs`, and touch() writes `last_seen_at` first on
+    // every interaction, so "seen within liveMs" is what the bucket would
+    // have said. Reading everyone as "not in the bucket" instead made the
+    // whole mesh look stale for every broker hiccup.
+    const seenRecently = (lastSeenAt: string | null): boolean => {
+      if (!lastSeenAt) return false;
+      const ms = Date.parse(lastSeenAt);
+      return !Number.isNaN(ms) && now - ms < PRESENCE_THRESHOLDS.liveMs;
+    };
+
     return rows.map((agent) => {
-      const raw = kv.get(agent.name) as RawKvEntry | undefined;
-      const inKV = kv.has(agent.name);
+      const raw = kv?.get(agent.name) as RawKvEntry | undefined;
+      const inKV = kv ? kv.has(agent.name) : seenRecently(agent.last_seen_at);
       const effectiveLastSeen = raw?.timestamp ?? agent.last_seen_at ?? null;
       const presence = computePresenceState(inKV, effectiveLastSeen, now);
       return { agent, presence, effectiveLastSeen };
