@@ -7,7 +7,8 @@
 //            Success closes the breaker, an outage error opens it again.
 //
 // "Down" is a separate, externally set condition (the connection is known to
-// be gone): no probes at all until markUp(). Pure logic, clock injected.
+// be gone): no probes at all until markUp(). Pure logic, clock injected
+// (monotonic by default).
 
 export class BrokerUnavailableError extends Error {
   constructor(message = "broker unavailable") {
@@ -32,10 +33,16 @@ export class CircuitBreaker {
   private down: boolean;
   private openUntil = 0;
   private probing = false;
+  /** Counts markUp() calls. A call that started before the connection came
+   *  back says nothing about the new connection when it finally fails. */
+  private generation = 0;
 
   constructor(opts: CircuitBreakerOptions) {
     this.coolDownMs = opts.coolDownMs;
-    this.now = opts.now ?? Date.now;
+    // Monotonic by default. Date.now follows the wall clock, and a step
+    // backwards during a cool-down would hold the breaker open for as long
+    // as the step was.
+    this.now = opts.now ?? (() => performance.now());
     this.down = opts.startDown ?? false;
   }
 
@@ -52,6 +59,7 @@ export class CircuitBreaker {
 
   /** The connection is (back) up: close at once, whatever came before. */
   markUp(): void {
+    this.generation++;
     this.down = false;
     this.openUntil = 0;
     this.probing = false;
@@ -68,17 +76,21 @@ export class CircuitBreaker {
       throw new BrokerUnavailableError();
     }
     const isProbe = state === "half-open";
+    const generation = this.generation;
     if (isProbe) this.probing = true;
     try {
       const result = await fn();
-      if (isProbe) this.openUntil = 0;
+      if (isProbe && generation === this.generation) this.openUntil = 0;
       return result;
     } catch (err) {
-      if (isOutage(err)) this.openUntil = this.now() + this.coolDownMs;
-      else if (isProbe) this.openUntil = 0; // an error that is an answer: the broker is there
+      // Only the outcome of a call on the CURRENT connection counts.
+      if (generation === this.generation) {
+        if (isOutage(err)) this.openUntil = this.now() + this.coolDownMs;
+        else if (isProbe) this.openUntil = 0; // an error that is an answer: the broker is there
+      }
       throw err;
     } finally {
-      if (isProbe) this.probing = false;
+      if (isProbe && generation === this.generation) this.probing = false;
     }
   }
 }
