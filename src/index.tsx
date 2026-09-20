@@ -10,7 +10,7 @@ import { ActivityService } from "./services/activity.js";
 import { RateLimiter } from "./services/ratelimit.js";
 import { PresenceService } from "./services/presence.js";
 import { startMaintenance } from "./services/maintenance.js";
-import { cleanupExpiredOAuthTokens } from "./oauth.js";
+import { cleanupExpiredOAuthCodes, purgeLegacyOAuthTokens } from "./oauth-codes.js";
 import { RATE_LIMIT_PER_MINUTE, VERSION, MESSAGE_RETENTION_DAYS, ACTIVITY_RETENTION_DAYS } from "./types.js";
 import { loadConfig, isConfigError } from "./config.js";
 import { log } from "./services/logger.js";
@@ -77,7 +77,9 @@ async function start() {
   // run only here, so "30 days" really meant "until the next restart".
   const stopMaintenance = startMaintenance(
     [
-      { name: "oauth_tokens", run: () => cleanupExpiredOAuthTokens(db) },
+      { name: "oauth_codes", run: () => cleanupExpiredOAuthCodes(db) },
+      // Plaintext rows of a rolled-back release. See migrations/0009.
+      { name: "oauth_tokens (legacy)", run: () => purgeLegacyOAuthTokens(db) },
       { name: "messages", run: () => activity.rotateMessages(MESSAGE_RETENTION_DAYS) },
       { name: "activity_log", run: () => activity.rotate(ACTIVITY_RETENTION_DAYS) },
     ],

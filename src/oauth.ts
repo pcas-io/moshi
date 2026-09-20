@@ -1,25 +1,26 @@
-import crypto from "node:crypto";
 import { Hono } from "hono";
 import { z } from "zod";
 import type Database from "better-sqlite3";
-import { hashToken, timingSafeEqual, getCookieSecret } from "./auth.js";
+import { hashToken, timingSafeEqual } from "./auth.js";
 import type { AgentService } from "./services/agent.js";
 import type { Env, AppVariables } from "./types.js";
 import { V2_TOKENS } from "./views/v2/tokens.js";
 import { formString, formRaw } from "./routes/form.js";
+import { issueCode, redeemCode, CODE_CHALLENGE_PATTERN } from "./oauth-codes.js";
 
 /** The consent screen is the one page a Claude Desktop user sees during the
  *  connect flow, so it wears the same Daylight surfaces as the dashboard. */
 const T = V2_TOKENS;
 
 // OAuth 2.1 for MCP server
-// Uses OAUTH_SECRET (fallback: MESH_ADMIN_TOKEN) for code signing
 // PKCE (S256) is REQUIRED per OAuth 2.1
-// Multi-user: accepts admin token OR personal agent tokens
-// Token store: SQLite-backed (survives container restarts)
+// Accepts personal agent tokens; the admin token is refused.
+// Codes and the sealed token: src/oauth-codes.ts (SQLite-backed, survives
+// container restarts; OAUTH_SECRET, fallback MESH_ADMIN_TOKEN, is half the key).
 
 const OAUTH_CLIENT_ID = "moshi-mcp-client";
-const CODE_EXPIRY_MS = 300_000; // 5 minutes
+const PKCE_REQUIRED =
+  "PKCE is required. Provide code_challenge (S256: 43 base64url characters, no padding) with code_challenge_method=S256";
 
 // RFC 7591 Dynamic Client Registration request schema.
 // We accept extra fields via .passthrough() — the spec allows arbitrary
@@ -30,36 +31,6 @@ const registerClientSchema = z
     redirect_uris: z.array(z.string().url()).max(10).optional(),
   })
   .passthrough();
-
-// --- SQLite-backed token store (survives container restarts) ---
-
-export function storeToken(db: Database.Database, code: string, token: string): void {
-  const expiresAt = Date.now() + CODE_EXPIRY_MS;
-  db.prepare(
-    "INSERT OR REPLACE INTO oauth_tokens (code, token, expires_at) VALUES (?, ?, ?)",
-  ).run(code, token, expiresAt);
-}
-
-export function retrieveToken(db: Database.Database, code: string): string | null {
-  const row = db
-    .prepare("SELECT token, expires_at FROM oauth_tokens WHERE code = ?")
-    .get(code) as { token: string; expires_at: number } | undefined;
-
-  if (!row) return null;
-
-  // Always delete after retrieval (one-time use)
-  db.prepare("DELETE FROM oauth_tokens WHERE code = ?").run(code);
-
-  if (Date.now() >= row.expires_at) return null;
-  return row.token;
-}
-
-export function cleanupExpiredOAuthTokens(db: Database.Database): number {
-  const result = db
-    .prepare("DELETE FROM oauth_tokens WHERE expires_at < ?")
-    .run(Date.now());
-  return result.changes;
-}
 
 // --- Redirect URI validation ---
 // Allowed targets: (1) localhost/loopback — local MCP clients (Claude
@@ -100,28 +71,6 @@ function resolveOrigin(c: { req: { url: string; header: (name: string) => string
 // --- OAuth secret: prefer OAUTH_SECRET, fall back to MESH_ADMIN_TOKEN ---
 function getOAuthSecret(): string {
   return process.env.OAUTH_SECRET || process.env.MESH_ADMIN_TOKEN || "";
-}
-
-// --- HMAC signing (Node.js crypto) ---
-function hmacSign(data: string, secret: string): string {
-  return crypto.createHmac("sha256", secret).update(data).digest("hex");
-}
-
-// --- Stateless authorization code: timestamp.sig ---
-export function generateCode(secret: string): string {
-  const timestamp = Date.now().toString();
-  const sig = hmacSign(`code:${timestamp}`, secret);
-  return `${timestamp}.${sig}`;
-}
-
-export function verifyCode(code: string, secret: string): boolean {
-  const parts = code.split(".");
-  if (parts.length !== 2) return false;
-  const [timestamp, sig] = parts;
-  const age = Date.now() - parseInt(timestamp, 10);
-  if (isNaN(age) || age > CODE_EXPIRY_MS || age < 0) return false;
-  const expected = hmacSign(`code:${timestamp}`, secret);
-  return timingSafeEqual(sig, expected);
 }
 
 // --- HTML escape ---
@@ -380,15 +329,8 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
     }
 
     // OAuth 2.1: PKCE S256 is REQUIRED
-    if (!codeChallenge || codeChallengeMethod !== "S256") {
-      return c.json(
-        {
-          error: "invalid_request",
-          error_description:
-            "PKCE is required. Provide code_challenge with code_challenge_method=S256",
-        },
-        400,
-      );
+    if (!CODE_CHALLENGE_PATTERN.test(codeChallenge) || codeChallengeMethod !== "S256") {
+      return c.json({ error: "invalid_request", error_description: PKCE_REQUIRED }, 400);
     }
 
     return c.html(
@@ -421,15 +363,8 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
     }
 
     // OAuth 2.1: PKCE S256 is REQUIRED
-    if (!codeChallenge || codeChallengeMethod !== "S256") {
-      return c.json(
-        {
-          error: "invalid_request",
-          error_description:
-            "PKCE is required. Provide code_challenge with code_challenge_method=S256",
-        },
-        400,
-      );
+    if (!CODE_CHALLENGE_PATTERN.test(codeChallenge) || codeChallengeMethod !== "S256") {
+      return c.json({ error: "invalid_request", error_description: PKCE_REQUIRED }, 400);
     }
 
     const adminToken = process.env.MESH_ADMIN_TOKEN ?? "";
@@ -452,17 +387,12 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
       );
     }
 
-    // Generate authorization code (stateless, HMAC-signed with OAUTH_SECRET)
-    const oauthSecret = getOAuthSecret();
-    const code = generateCode(oauthSecret);
-
-    // SECURITY: Store token server-side in SQLite (5min TTL), never in the URL.
-    // The token exchange retrieves it by code key.
-    const fullCode = `${code}:${codeChallenge}`;
-    storeToken(db, code, token);
+    // The code is random and says nothing. Token and challenge stay here:
+    // the token sealed, the challenge next to it (src/oauth-codes.ts).
+    const code = issueCode(db, getOAuthSecret(), token, codeChallenge);
 
     const url = new URL(redirectUri);
-    url.searchParams.set("code", fullCode);
+    url.searchParams.set("code", code);
     if (state) url.searchParams.set("state", state);
 
     return c.redirect(url.toString());
@@ -509,78 +439,33 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
       );
     }
 
-    // Extract code and code_challenge from format: timestamp.sig:challenge
-    const colonIdx = code.lastIndexOf(":");
-    let actualCode = code;
-    let storedChallenge = "";
-
-    if (colonIdx !== -1) {
-      actualCode = code.substring(0, colonIdx);
-      storedChallenge = code.substring(colonIdx + 1);
+    // A request without a verifier is malformed, not an attempt: it does not
+    // cost the client its code.
+    if (!codeVerifier) {
+      return c.json({ error: "invalid_request", error_description: "PKCE code_verifier is required" }, 400);
     }
 
-    const oauthSecret = getOAuthSecret();
-
-    const valid = verifyCode(actualCode, oauthSecret);
-    if (!valid) {
-      return c.json(
-        {
-          error: "invalid_grant",
-          error_description: "Invalid or expired code",
-        },
-        400,
-      );
-    }
-
-    // OAuth 2.1: PKCE verification is REQUIRED
-    if (!storedChallenge || !codeVerifier) {
-      return c.json(
-        {
-          error: "invalid_grant",
-          error_description: "PKCE code_verifier is required",
-        },
-        400,
-      );
-    }
-
-    // Verify PKCE S256: SHA256(code_verifier) base64url === stored challenge
-    const digest = crypto
-      .createHash("sha256")
-      .update(codeVerifier)
-      .digest();
-    const computed = digest
-      .toString("base64")
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
-
-    if (computed !== storedChallenge) {
-      return c.json(
-        {
-          error: "invalid_grant",
-          error_description: "PKCE verification failed",
-        },
-        400,
-      );
-    }
-
-    // Retrieve the user's token from SQLite store (stored during authorize step)
-    // SECURITY: Token is never exposed in URLs — only stored server-side.
-    // SECURITY: No fallback — if the token is gone, the exchange fails.
-    const storedToken = retrieveToken(db, actualCode);
-    if (!storedToken) {
+    // One try. The verifier is checked against the challenge stored with the
+    // code; whatever else the client appends to the code makes it unknown.
+    const redeemed = redeemCode(db, getOAuthSecret(), code, codeVerifier);
+    if (!redeemed.ok) {
       return c.json(
         {
           error: "invalid_grant",
           error_description:
-            "Token exchange failed — authorization may have expired or been consumed. Please re-authorize.",
+            redeemed.reason === "pkce"
+              ? "PKCE verification failed. The code is used up; please re-authorize."
+              : "Invalid, expired or already used code. Please re-authorize.",
         },
         400,
       );
     }
 
+    // RFC 6749 §5.1: a response with a token in it is never stored anywhere.
+    c.header("Cache-Control", "no-store");
+    c.header("Pragma", "no-cache");
     return c.json({
-      access_token: storedToken,
+      access_token: redeemed.token,
       token_type: "Bearer",
       expires_in: 2592000, // 30 days
     });
