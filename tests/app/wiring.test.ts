@@ -77,7 +77,11 @@ describe("/mcp — guard, auth, limit, in that order", () => {
     expect(status.inbox_pending).toBe(0);
   });
 
-  it("ensures the consumer under the agent's inbox key, and none for the admin identity", async () => {
+  it("ensures the consumer under the agent's inbox KEY, not its name, and none for the admin identity", async () => {
+    // Renamed first: until then key and name are the same word, and a route
+    // that addressed NATS by name would pass unnoticed.
+    const alphaId = t.h.agents.getByName("alpha")!.id;
+    expect(t.h.agents.rename(alphaId, "gamma", "admin")).toBe(true);
     const call = (token: string) => t.app.request("/mcp", {
       method: "POST", headers: { ...MCP_HEADERS, ...bearer(token) },
       body: rpc("tools/call", { name: "mesh_status", arguments: {} }),
@@ -86,6 +90,51 @@ describe("/mcp — guard, auth, limit, in that order", () => {
     expect(t.ensured).toEqual(["alpha"]);
     expect((await call(ADMIN_TOKEN)).status).toBe(200);
     expect(t.ensured).toEqual(["alpha"]);
+  });
+
+  it("reads a renamed agent's mail over HTTP from the inbox it has always had", async () => {
+    const alphaId = t.h.agents.getByName("alpha")!.id;
+    t.h.agents.rename(alphaId, "gamma", "admin");
+    const betaToken = t.h.agents.resetToken(t.h.agents.getByName("beta")!.id, "admin")!.plaintextToken;
+    const tool = async (token: string, name: string, args: Record<string, unknown>) => {
+      const res = await t.app.request("/mcp", {
+        method: "POST", headers: { ...MCP_HEADERS, ...bearer(token) },
+        body: rpc("tools/call", { name, arguments: args }),
+      });
+      const body = await res.json() as { result: { content: { text: string }[]; isError?: boolean } };
+      return { isError: Boolean(body.result.isError), json: JSON.parse(body.result.content[0]!.text) as Record<string, any> };
+    };
+    const sent = await tool(betaToken, "mesh_send", { to: "gamma", payload: "for the renamed one", context: "wiring test" });
+    expect(sent.isError).toBe(false);
+    expect(t.h.nats.published.map((p) => p.subject)).toEqual(["mesh.agents.alpha.inbox"]);
+    const got = await tool(agentToken, "mesh_receive", {});
+    expect((got.json.messages as { payload: string }[]).map((m) => m.payload)).toEqual(["for the renamed one"]);
+  });
+
+  it("lets the largest legal payload through: the limit refuses 600 KB, not 256 KB", async () => {
+    const res = await t.app.request("/mcp", {
+      method: "POST", headers: { ...MCP_HEADERS, ...bearer(agentToken) },
+      body: rpc("tools/call", { name: "mesh_send", arguments: { to: "beta", payload: "x".repeat(256 * 1024), context: "wiring test" } }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { result: { isError?: boolean; content: { text: string }[] } };
+    expect(body.result.isError, body.result.content[0]?.text).toBeFalsy();
+  });
+
+  it("accepts the previous admin token while a rotation is under way", async () => {
+    const previous = "p".repeat(40);
+    const rotating = createTestApp({ meshAdminTokenPrevious: previous });
+    const res = await rotating.app.request("/mcp", {
+      method: "POST", headers: { ...MCP_HEADERS, ...bearer(previous) },
+      body: rpc("tools/call", { name: "mesh_status", arguments: {} }),
+    });
+    expect(res.status).toBe(200);
+    // And not without the setting.
+    const plain = await t.app.request("/mcp", {
+      method: "POST", headers: { ...MCP_HEADERS, ...bearer(previous) },
+      body: rpc("tools/call", { name: "mesh_status", arguments: {} }),
+    });
+    expect(plain.status).toBe(401);
   });
 
   it("answers 406 when the client does not accept both response types", async () => {
@@ -177,6 +226,21 @@ describe("public routes and headers", () => {
     expect(res.headers.get("location")).toBe("/login");
   });
 
+  it("serves the CLI distribution without a session", async () => {
+    const res = await t.app.request("/cli/version");
+    expect([401, 404]).not.toContain(res.status);
+    const script = await t.app.request("/install.sh");
+    expect(script.status).toBe(200);
+  });
+
+  it("refuses an oversized body on the public OAuth endpoints", async () => {
+    const res = await t.app.request("/oauth/register", {
+      method: "POST", body: JSON.stringify({ pad: "x".repeat(20 * 1024) }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(413);
+  });
+
   it("refuses an oversized login form before parsing it", async () => {
     const res = await t.app.request("/login", {
       method: "POST", body: "token=" + "x".repeat(8 * 1024),
@@ -224,6 +288,27 @@ describe("dashboard behind a session", () => {
     const activity = await t.app.request("/activity?range=24h", { headers: { Cookie: cookie } });
     expect(activity.status).toBe(301);
     expect(activity.headers.get("location")).toBe("/log?tab=audit&range=24h");
+  });
+
+  it("runs the admin actions: the operator creates an agent through the mounted route", async () => {
+    // The oversized-form test gets its 413 before routing, so it would pass
+    // with the admin routes gone. This one needs them.
+    const cookie = await sessionCookie();
+    const res = await t.app.request("/agents/create", {
+      method: "POST",
+      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), name: "delta" }),
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: cookie },
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location") ?? "").toContain("/agents?flash=");
+    expect(t.h.agents.list().map((a) => a.name).sort()).toEqual(["alpha", "beta", "delta"]);
+  });
+
+  it("serves the guided connect flow ahead of the admin actions", async () => {
+    const cookie = await sessionCookie();
+    const res = await t.app.request("/agents/connect", { headers: { Cookie: cookie, Accept: "text/html" } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<html");
   });
 
   it("keeps the agents page for the operator only", async () => {
