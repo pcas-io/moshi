@@ -9,6 +9,7 @@ import { CONNECT_CLIENT_LABELS, DEFAULT_ORIGIN } from "../../../src/views/v2/con
 import {
   MAX_AGENTS, MAX_CONTEXT_LENGTH, MESSAGE_RETENTION_DAYS, RATE_LIMIT_PER_MINUTE,
 } from "../../../src/types";
+import { LIVE_REFRESH_SCRIPT } from "../../../src/views/v2/live-refresh";
 
 /** Hono escapes &, <, >, " and ' in text nodes. */
 function esc(s: string): string {
@@ -218,7 +219,9 @@ describe("connect — step 4", () => {
     expect(html).toContain("dex-eu is in the mesh");
     expect(html).toContain(esc("Still nothing after two minutes."));
     expect(html).toContain(esc("Delete the cached session with rm -rf ~/.mcp-auth"));
-    expect(html).not.toContain("EventSource"); // poll, not SSE
+    // Poll, not SSE. The one EventSource on the page belongs to the layout's
+    // live-refresh script, which does nothing here: no live sections.
+    expect(html.replace(String(LIVE_REFRESH_SCRIPT), "")).not.toContain("EventSource");
     expect(html).not.toContain("Simulate the handshake"); // prototype-only
   });
 

@@ -196,7 +196,7 @@ export async function sendAndPersistMessage(
     return { delivered: true, persisted: false };
   }
 
-  // 3. Notify in-process subscribers (v2 dashboard SSE). Best-effort —
+  // 3. Notify in-process subscribers (GET /sse/messages). Best-effort —
   // listener failures are swallowed inside publishMessageEvent so they
   // can never affect the send result.
   publishMessageEvent(msg);

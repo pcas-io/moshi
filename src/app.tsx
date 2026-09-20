@@ -29,6 +29,8 @@ import { createMcpRoute } from "./routes/mcp.js";
 import type { McpRouteNats } from "./routes/mcp.js";
 import { createDashboardRoutes } from "./routes/dashboard.js";
 import { createFragmentRoutes } from "./routes/fragments.js";
+import { createSseRoutes } from "./routes/sse.js";
+import { listenerCount } from "./services/message-events.js";
 import { createOAuthRoutes } from "./oauth.js";
 import { registerCliRoutes, requestOrigin } from "./services/cli-dist.js";
 import { LoginPage } from "./views/login.js";
@@ -122,7 +124,8 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   app.get("/health", async (c) => {
     const h = await checkHealth(db, nats);
     return c.json(
-      { status: h.status, nats: h.nats, db: h.db },
+      // sse_connections: open dashboard streams, of SSE_MAX_CONNECTIONS.
+      { status: h.status, nats: h.nats, db: h.db, sse_connections: listenerCount() },
       h.httpStatus,
     );
   });
@@ -172,6 +175,9 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
 
   // --- The live sections' fragments (behind auth, like the pages) ---
   app.route("/", createFragmentRoutes({ db, agents, presence, now }));
+
+  // The signal that makes those refreshes immediate: GET /sse/messages.
+  app.route("/", createSseRoutes());
 
   // --- OAuth routes ---
   app.route("/", createOAuthRoutes(agents, db));

@@ -15,6 +15,7 @@ import {
   LatestConversationSection,
 } from "../../../src/views/v2/home";
 import type { AttentionItem } from "../../../src/services/attention";
+import { LIVE_REFRESH_SCRIPT } from "../../../src/views/v2/live-refresh";
 
 /** Local time, so the date line and the clock are stable in any TZ. */
 const NOW = new Date("2026-09-12T14:16:00");
@@ -310,9 +311,10 @@ describe("V2HomePage — the two cards", () => {
     // Hooks of the removed client-side renderer: nothing reads them any more.
     expect(html).not.toContain('id="v2-live-thread"');
     expect(html).not.toContain("data-empty");
-    // The second renderer is gone: no stream, no bubble builder, no emblem map.
+    // The second renderer is gone: no stream of its own, no bubble builder,
+    // no emblem map. (The layout's live-refresh script has the one stream.)
     expect(html).not.toContain("/sse/threads/");
-    expect(html).not.toContain("EventSource");
+    expect(html.replace(String(LIVE_REFRESH_SCRIPT), "")).not.toContain("EventSource");
     expect(html).not.toContain("var emblems");
     expect(html).not.toContain("v2-avatar-pool");
   });
