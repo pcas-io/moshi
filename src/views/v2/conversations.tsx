@@ -389,17 +389,19 @@ export const ConversationThreadSection: FC<ConversationThreadSectionProps> = ({ 
             </>
           )}
         </div>
-        {/* Only on a thread that is actually moving. This screen does not
-            poll, so on a dormant thread the pill would be a claim the page
-            cannot keep — and a pulsing dot next to a three-day-old message
-            is worse than no pill at all. */}
-        {thread && isLive(thread.last_activity, now) && (
-          <span
-            style={"display:inline-flex;align-items:center;gap:6px;font-size:12.5px;" +
-              `color:${T.greenDeep};background:${T.greenSoft};padding:4px 11px;border-radius:${T.radiusPill}px`}
-          >
-            <span class="m-pulse" style={`width:6px;height:6px;border-radius:50%;background:${T.live}`} />
-            updating live
+        {/* A claim about the page: "this updates by itself". True exactly
+            while the message stream is open, which only the browser knows:
+            rendered hidden, shown by live-refresh.ts. The hiding sits on a
+            wrapper, because display:inline-flex would win over [hidden]. */}
+        {thread && (
+          <span data-live-pill hidden>
+            <span
+              style={"display:inline-flex;align-items:center;gap:6px;font-size:12.5px;" +
+                `color:${T.greenDeep};background:${T.greenSoft};padding:4px 11px;border-radius:${T.radiusPill}px`}
+            >
+              <span class="m-pulse" style={`width:6px;height:6px;border-radius:50%;background:${T.live}`} />
+              updating live
+            </span>
           </span>
         )}
       </div>
@@ -627,6 +629,7 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
           <div
             data-live={opened ? "convos-thread" : undefined}
             data-live-src={opened ? conversationThreadSrc(opened.thread_id) : undefined}
+            data-live-thread={opened ? opened.thread_id : undefined}
             data-live-mark={opened ? "rows" : undefined}
             data-live-noun={opened ? "message" : undefined}
             style={PANE_STYLE}

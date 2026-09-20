@@ -38,6 +38,28 @@
 //   every row would be read again. New rows are counted into one role=status
 //   element outside of them.
 // - Hidden tab: no requests. Visible again: ask at once.
+//
+// WHEN to ask: every five seconds, and sooner if GET /sse/messages
+// (src/routes/sse.ts) says that something was sent. The stream carries ids
+// only; what is shown always comes from the fragments, so the rules above do
+// not know whether a stream exists.
+//   data-live-thread="id"       — optional: this section shows one thread and
+//                                 only asks when an event names that thread
+//   data-live-pill              — shown while the stream is open, hidden
+//                                 otherwise (the server renders it hidden)
+// - Stream open: ask at once (closes the gap between the render and the
+//   subscription), then the timer is only a safety net, once a minute.
+// - An event asks 300 ms later, once for a burst. A fetch that is already on
+//   its way may have read the database before the message: ask again after it.
+// - Stream lost: timer on ten seconds while the browser reconnects. A stream
+//   the server REFUSED (503 at the connection limit, 503 from the proxy
+//   during a deploy) is never retried by the browser, so the script does it:
+//   after 30 s, doubling up to five minutes.
+// - A failed fetch is retried after ten seconds, then twenty and so on up to
+//   a minute, whatever the timer stands at. The browser's "online" event asks
+//   at once and reconnects a stream that had been given up on.
+// - Hidden tab: the stream is closed. It would hold one of the server's
+//   places, and one of the browser's six connections per HTTP/1.1 origin.
 
 import { raw } from "hono/html";
 import { V2_TOKENS } from "./tokens.js";
@@ -55,13 +77,17 @@ export const LIVE_REFRESH_SCRIPT = raw(`<script>
   if (window.__dLive) return; window.__dLive = 1;
   if (!window.fetch) return;
   var ACCEPT = 'text/x-moshi-fragment';
-  var BASE = 5000, MAX = 60000;
+  var STREAM = '/sse/messages';
+  var BASE = 5000, MAX = 60000, WITH_STREAM = 60000, STREAM_LOST = 10000, DEBOUNCE = 300;
+  var RETRY = 30000, RETRY_MAX = 300000;
+  var base = BASE;
   var found = document.querySelectorAll('[data-live][data-live-src]');
   if (!found.length) return;
   var sections = [];
-  for (var i = 0; i < found.length; i++) sections.push({ el: found[i], etag: null, html: null, delay: BASE, timer: null, busy: false });
+  for (var i = 0; i < found.length; i++) sections.push({ el: found[i], etag: null, html: null, delay: BASE, fails: 0, timer: null, busy: false, again: false });
   var reloading = false;
   var pressed = null; // what a mouse button or a finger went down on, until it lifts
+  var es = null, streamUp = false, pending = null, named = Object.create(null), all = false, retry = null, retryDelay = RETRY;
 
   function inUse(el) {
     if (pressed && el.contains(pressed)) return true;
@@ -147,11 +173,19 @@ export const LIVE_REFRESH_SCRIPT = raw(`<script>
     }
   }
 
+  function pills(root) {
+    var list = root.querySelectorAll('[data-live-pill]');
+    for (var i = 0; i < list.length; i++) {
+      if (streamUp) list[i].removeAttribute('hidden'); else list[i].setAttribute('hidden', '');
+    }
+  }
+
   function swap(section, html, oob) {
     var el = section.el, before = rowIds(el), saved = scrollState(el);
     el.innerHTML = html;
     restoreScroll(el, saved);
     markNew(el, before);
+    pills(el);
     outOfBand(oob);
   }
 
@@ -162,7 +196,8 @@ export const LIVE_REFRESH_SCRIPT = raw(`<script>
   }
 
   function tick(section) {
-    if (reloading || section.busy) return;
+    if (reloading) return;
+    if (section.busy) { section.again = true; return; }
     if (document.hidden) { schedule(section); return; }
     section.busy = true;
     var headers = { 'Accept': ACCEPT };
@@ -170,25 +205,84 @@ export const LIVE_REFRESH_SCRIPT = raw(`<script>
     window.fetch(section.el.getAttribute('data-live-src'), { headers: headers, credentials: 'same-origin', cache: 'no-store' })
       .then(function(res){
         if (res.status === 401) {
-          if (!reloading) { reloading = true; window.location.reload(); }
+          if (!reloading) { reloading = true; disconnect(); window.location.reload(); }
           return null;
         }
-        if (res.status === 304) { section.delay = BASE; return null; }
+        if (res.status === 304) { section.fails = 0; section.delay = base; return null; }
         var type = res.headers.get('content-type') || '';
         if (res.status !== 200 || type.indexOf('text/html') !== 0) throw new Error('not a fragment');
         var etag = res.headers.get('etag'), oob = res.headers.get('x-moshi-oob');
         return res.text().then(function(html){
-          section.delay = BASE;
+          section.fails = 0;
+          section.delay = base;
           // In use: keep the old content AND the old ETag, so this version is
-          // asked for again instead of being counted as seen.
-          if (inUse(section.el)) return;
+          // asked for again instead of being counted as seen. Soon, also
+          // when the stream has slowed the timer down to a minute.
+          if (inUse(section.el)) { section.delay = BASE; return; }
           if (html === section.html) outOfBand(oob); else swap(section, html, oob);
           section.html = html;
           section.etag = etag;
         });
       })
-      .catch(function(){ section.delay = Math.min(MAX, section.delay * 2); })
-      .then(function(){ section.busy = false; schedule(section); });
+      // Counted from five seconds, not from the current timer: with the
+      // stream open that is a minute, and one failed request would leave a
+      // section stale for that long.
+      .catch(function(){ section.fails++; section.delay = Math.min(MAX, BASE * Math.pow(2, section.fails)); })
+      .then(function(){
+        section.busy = false;
+        if (section.again) { section.again = false; tick(section); } else schedule(section);
+      });
+  }
+
+  function askNow(everything) {
+    for (var i = 0; i < sections.length; i++) {
+      var pin = sections[i].el.getAttribute('data-live-thread');
+      if (!everything && pin && !named[pin]) continue;
+      clearTimeout(sections[i].timer);
+      tick(sections[i]);
+    }
+  }
+
+  // Only a CHANGE of state moves the timers: while the browser reconnects it
+  // reports an error every few seconds, and each one would push them away.
+  function setStream(up) {
+    if (up === streamUp) return;
+    streamUp = up;
+    base = up ? WITH_STREAM : STREAM_LOST;
+    pills(document);
+    for (var i = 0; i < sections.length; i++) sections[i].delay = base;
+    if (up) askNow(true);
+    else for (var j = 0; j < sections.length; j++) if (!sections[j].busy) schedule(sections[j]);
+  }
+
+  function disconnect() {
+    clearTimeout(retry); clearTimeout(pending); pending = null;
+    if (es) { es.onopen = es.onmessage = es.onerror = null; es.close(); es = null; }
+  }
+
+  function connect() {
+    if (!window.EventSource || es || reloading || document.hidden) return;
+    clearTimeout(retry);
+    try { es = new window.EventSource(STREAM); } catch (e) { es = null; return; }
+    es.onopen = function(){ retryDelay = RETRY; setStream(true); };
+    es.onmessage = function(ev){
+      try { named[JSON.parse(ev.data).thread_id] = 1; } catch (e) { all = true; }
+      if (pending) return;
+      pending = setTimeout(function(){
+        var everything = all;
+        pending = null; all = false;
+        askNow(everything);
+        named = Object.create(null); // no prototype: a thread can be called 'constructor'
+      }, DEBOUNCE);
+    };
+    es.onerror = function(){
+      setStream(false);
+      if (es && es.readyState === 2) {
+        es = null;
+        retry = setTimeout(connect, retryDelay);
+        retryDelay = Math.min(RETRY_MAX, retryDelay * 2);
+      }
+    };
   }
 
   function down(ev) { pressed = ev && ev.target ? ev.target : null; }
@@ -200,10 +294,20 @@ export const LIVE_REFRESH_SCRIPT = raw(`<script>
   document.addEventListener('touchcancel', up, true);
 
   document.addEventListener('visibilitychange', function(){
-    if (document.hidden || reloading) return;
+    if (reloading) return;
+    if (document.hidden) { disconnect(); setStream(false); return; }
+    connect();
     for (var i = 0; i < sections.length; i++) { clearTimeout(sections[i].timer); tick(sections[i]); }
   });
 
+  // The network is back: whatever was given up on for now is worth a try.
+  if (window.addEventListener) window.addEventListener('online', function(){
+    if (reloading || document.hidden) return;
+    if (!es) { retryDelay = RETRY; connect(); }
+    askNow(true);
+  });
+
   for (var n = 0; n < sections.length; n++) { followBottom(sections[n].el); schedule(sections[n]); }
+  connect();
 })();
 </script>`);

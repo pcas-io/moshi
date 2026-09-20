@@ -290,18 +290,38 @@ describe("V2ConversationsPage — states a class rule has to win", () => {
 });
 
 describe("V2ConversationsPage — the live pill is a claim", () => {
-  // Nothing on this screen polls, so the pill may only appear where it is
-  // still true: a thread whose last activity is inside the presence window.
-  it("shows `updating live` on a thread that is still moving", async () => {
+  // The claim is about the PAGE: "what you see here updates by itself". That
+  // is true exactly while the message stream is open, which only the browser
+  // knows. So the server renders the pill hidden, and live-refresh.ts shows
+  // it while /sse/messages is connected. Without JavaScript it never shows.
+  const HIDDEN_PILL = /<span data-live-pill[^>]*\shidden[^>]*>(?:(?!<\/span><\/span>).)*updating live/s;
+
+  it("renders `updating live` hidden on an open thread, for the script to show", async () => {
     const fresh = minutesAgo(0);
     const html = await render(page([thread({ last_activity: fresh })]));
-    expect(html).toContain("updating live");
+    expect(html).toMatch(HIDDEN_PILL);
+    // (the attribute name also occurs in the inline script, hence the tag)
+    expect(html.match(/<span data-live-pill/g)).toHaveLength(1);
   });
 
-  it("omits it on a dormant thread rather than pulsing at a dead one", async () => {
+  it("does so on a dormant thread as well: a reply there shows up just as fast", async () => {
     const old = minutesAgo(3 * 24 * 60);
     const html = await render(page([thread({ last_activity: old })]));
-    expect(html).not.toContain("updating live");
+    expect(html).toMatch(HIDDEN_PILL);
+  });
+
+  it("keeps the hiding away from the styled element, where display:inline-flex would win over it", async () => {
+    const html = await render(page([thread()]));
+    const pill = /<span data-live-pill[^>]*>/.exec(html)![0];
+    expect(pill).not.toContain("style=");
+  });
+
+  it("tells the script which thread the open pane shows", async () => {
+    const html = await render(page([thread()]));
+    const id = thread().thread_id;
+    expect(html).toMatch(new RegExp(`data-live="convos-thread"[^>]*data-live-thread="${id}"`));
+    // and nothing of the kind on the list, which every message can change
+    expect(/data-live="convos-list"[^>]*>/.exec(html)![0]).not.toContain("data-live-thread");
   });
 });
 

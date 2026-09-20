@@ -1,10 +1,9 @@
-// The dashboard pages behind the auth middleware: Home, the thread SSE
-// stream, Agents (with the connect flow and the admin actions), Log and
-// Conversations. Extracted from src/index.tsx; the order of the routes is
-// unchanged.
+// The dashboard pages behind the auth middleware: Home, Agents (with the
+// connect flow and the admin actions), Log and Conversations. Extracted from
+// src/index.tsx; the order of the routes is unchanged. The live sections'
+// fragments and the message stream have files of their own next to this one.
 
 import { Hono } from "hono";
-import { streamSSE } from "hono/streaming";
 import type Database from "better-sqlite3";
 import type { Env, AppVariables } from "../types.js";
 import { LIMITS } from "../types.js";
@@ -19,7 +18,6 @@ import { loadConversationList, loadLogMessages, loadOpenThread, readConversation
 import { getFlash } from "../services/flash.js";
 import { loadV2HomeData } from "../services/v2-home-data.js";
 import { loadV2AgentsData } from "../services/v2-agents-data.js";
-import { subscribeMessageEvents } from "../services/message-events.js";
 import { parseActivityRange, startOfDayIso } from "../services/activity.js";
 import { V2HomePage } from "../views/v2/home.js";
 import { V2AgentsPage } from "../views/v2/agents.js";
@@ -66,32 +64,6 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
         csrfToken={csrfToken}
       />,
     );
-  });
-
-  // --- SSE: live thread updates ---
-  // Subscribes to in-process message events and forwards messages with the
-  // matching correlation_id to the connected dashboard. EventSource auto-
-  // reconnects on network drops; auth piggy-backs on the session cookie.
-  dash.get("/sse/threads/:correlation_id", (c) => {
-    const correlationId = c.req.param("correlation_id");
-    return streamSSE(c, async (stream) => {
-      const unsubscribe = subscribeMessageEvents((msg) => {
-        const tid = msg.correlation_id ?? msg.id;
-        if (tid !== correlationId) return;
-        stream.writeSSE({
-          data: JSON.stringify({
-            id: msg.id, from: msg.from, payload: msg.payload, created_at: msg.created_at,
-          }),
-        }).catch(() => { /* connection closed */ });
-      });
-      stream.onAbort(() => unsubscribe());
-      // Heartbeat every 25s keeps proxies from killing idle SSE connections.
-      while (!stream.aborted) {
-        await stream.sleep(25_000);
-        await stream.writeSSE({ event: "ping", data: "" }).catch(() => {});
-      }
-      unsubscribe();
-    });
   });
 
   // --- Dashboard: Agents (admin only) ---

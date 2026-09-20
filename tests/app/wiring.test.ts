@@ -159,7 +159,7 @@ describe("public routes and headers", () => {
   it("reports health without auth, and 503 when NATS is down", async () => {
     const up = await t.app.request("/health");
     expect(up.status).toBe(200);
-    expect(await up.json()).toEqual({ status: "ok", nats: "connected", db: "ok" });
+    expect(await up.json()).toEqual({ status: "ok", nats: "connected", db: "ok", sse_connections: 0 });
     t.natsUp.value = false;
     const down = await t.app.request("/health");
     expect(down.status).toBe(503);

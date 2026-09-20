@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   publishMessageEvent,
   subscribeMessageEvents,
+  listenerCount,
   _resetMessageEventsForTest,
 } from "../../src/services/message-events";
 import type { Message } from "../../src/types";
@@ -65,5 +66,16 @@ describe("message-events", () => {
 
   it("does nothing when no listeners are registered", () => {
     expect(() => publishMessageEvent(fixtureMessage())).not.toThrow();
+  });
+
+  it("counts its listeners, and an unsubscribe called twice counts once", () => {
+    expect(listenerCount()).toBe(0);
+    const offA = subscribeMessageEvents(() => {});
+    const offB = subscribeMessageEvents(() => {});
+    expect(listenerCount()).toBe(2);
+    offA(); offA();
+    expect(listenerCount()).toBe(1);
+    offB();
+    expect(listenerCount()).toBe(0);
   });
 });

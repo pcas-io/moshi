@@ -266,9 +266,10 @@ export function authMiddleware(
       c.set("agent", agentCtx);
 
       // What an open tab does by itself: /fragments/* is a tab asking every
-      // five seconds whether anything changed. That is neither a sign-in nor
-      // the agent being around.
-      const tabOnItsOwn = path.startsWith("/fragments/");
+      // few seconds whether anything changed, /sse/* is the same tab
+      // (re)connecting its stream. Neither is a sign-in, and neither is the
+      // agent being around.
+      const tabOnItsOwn = path.startsWith("/fragments/") || path.startsWith("/sse/");
 
       // Log auth event (best-effort, throttled to once per 30 min per agent).
       // Not for a poll: an open tab would write one every half hour, for ever.
