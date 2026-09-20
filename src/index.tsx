@@ -55,7 +55,8 @@ process.on("unhandledRejection", (reason) => {
     stack: (reason as Error)?.stack,
   });
   // Don't exit — a stray rejection shouldn't take down the whole server.
-  // Coolify will restart us if /health starts failing.
+  // Nobody restarts this process for it either: the container healthcheck
+  // polls /livez, which only says that the process serves.
 });
 
 process.on("uncaughtException", (err) => {
@@ -121,14 +122,25 @@ async function start() {
     }
   })();
 
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return; // SIGTERM and SIGINT, or the same signal twice
+    shuttingDown = true;
     log("info", "shutting down");
     stopping = true;
-    stopMaintenance();
-    server.close();
-    await nats.close();
-    db.close();
-    process.exit(0);
+    // Every step runs, whatever the one before it did: a rejected close()
+    // used to skip db.close() and process.exit(0), and the process then sat
+    // there until Docker killed it.
+    try {
+      stopMaintenance();
+      server.close();
+      await nats.close();
+    } catch (err) {
+      log("error", "shutdown step failed", { err: String(err) });
+    } finally {
+      try { db.close(); } catch { /* already closed */ }
+      process.exit(0);
+    }
   };
 
   process.on("SIGTERM", shutdown);
