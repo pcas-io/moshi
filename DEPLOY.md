@@ -61,7 +61,15 @@ client by design.
 
 Deploy. Expected:
 
-- `https://moshi.enki.run/health` → `ok`. This is readiness: it answers 503 with `"nats":"disconnected"` while the broker is away. The dashboard keeps working then, MCP tools answer `nats_unavailable`, and the app reconnects on its own.
+- `https://moshi.enki.run/health` → `ok`. This is readiness: it answers 503 with `"nats":"disconnected"` while the broker is away. The dashboard keeps working then, MCP tools answer `nats_unavailable`, and the app reconnects on its own. `sse_connections` is the number of open dashboard streams (`GET /sse/messages`, at most 50).
+- The message stream, the way a browser asks for it (a bare `curl -N` sends no `Accept-Encoding` and bypasses the proxy's compress middleware):
+
+  ```bash
+  curl -N --compressed -H 'Accept-Encoding: gzip, br' -H 'Accept: text/event-stream' \
+    -b 'mesh_session=<your session cookie>' https://moshi.enki.run/sse/messages
+  ```
+
+  `: open` arrives at once, `: ping` every 25 s. Let it run for five minutes and note whether and when it ends: 100 s would be Cloudflare's idle timeout (the ping is there to prevent it). After Ctrl-C, `sse_connections` in `/health` is back where it was. The server itself ends every stream after 30 minutes; the browser reconnects.
 - `https://moshi.enki.run/livez` → `alive`. This is what the container healthcheck polls; it does not depend on NATS.
 - `https://moshi.enki.run/` → redirects to the SENTINEL Dark login ("Mesh Access"); log in with `MESH_ADMIN_TOKEN`
 - Dashboard → register agents, mint per-agent tokens
