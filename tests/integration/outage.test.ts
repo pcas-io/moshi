@@ -32,6 +32,7 @@ describe.skipIf(!URL || !CONTAINER)("a broker that stops answering", () => {
   let nats: NatsService;
   let app: ReturnType<typeof createApp>;
   let token: string;
+  let betaToken: string;
   let paused = false;
 
   const pause = () => { docker("pause", CONTAINER!); paused = true; };
@@ -52,7 +53,7 @@ describe.skipIf(!URL || !CONTAINER)("a broker that stops answering", () => {
     const activity = new ActivityService(db);
     const agents = new AgentService(db, activity, nats);
     token = agents.create("alpha").plaintextToken;
-    agents.create("beta");
+    betaToken = agents.create("beta").plaintextToken;
     app = createApp({
       config: TEST_CONFIG, db, nats, agents, activity,
       presence: new PresenceService(db, nats), rateLimiter: new RateLimiter(60),
@@ -64,10 +65,10 @@ describe.skipIf(!URL || !CONTAINER)("a broker that stops answering", () => {
     await nats.close().catch(() => {});
   });
 
-  async function tool(name: string, args: Record<string, unknown> = {}) {
+  async function tool(name: string, args: Record<string, unknown> = {}, as: string = token) {
     const t0 = performance.now();
     const res = await app.request("/mcp", {
-      method: "POST", headers: { ...MCP_HEADERS, Authorization: `Bearer ${token}` },
+      method: "POST", headers: { ...MCP_HEADERS, Authorization: `Bearer ${as}` },
       body: rpc("tools/call", { name, arguments: args }),
     });
     const body = await res.json() as { result?: { content: { text: string }[]; isError?: boolean } };
@@ -92,25 +93,37 @@ describe.skipIf(!URL || !CONTAINER)("a broker that stops answering", () => {
     expect(history.text).toContain("before the outage");
     expect(history.ms).toBeLessThan(1000);
 
+    // The send that is in flight when the outage is discovered: the presence
+    // wait (0.3 s) plus the publish timeout (4 s). A publish gets that much
+    // room because its outcome is unknown when it times out, and the sender
+    // is told exactly that.
     const send = await tool("mesh_send", { to: "beta", payload: "during the outage", context: "outage test" });
     expect(send.isError).toBe(true);
     expect(send.text).toContain("nats_unavailable");
-    // The presence wait (0.3 s) plus one JetStream timeout (1.5 s): measured
-    // 1.8 s for the call that trips the breaker, milliseconds after that.
-    expect(send.ms).toBeLessThan(2500);
+    expect(send.text).toContain("could not be confirmed");
+    expect(send.ms).toBeLessThan(5500);
 
+    // From here on the breaker answers for the broker. The limits are ten
+    // times what was measured under load, and a hundred times tighter than a
+    // single JetStream timeout: take guarded() off one method and this fails.
     const again = await tool("mesh_send", { to: "beta", payload: "during the outage, again", context: "outage test" });
-    expect(again.text).toContain("nats_unavailable");
+    expect(again.text).toContain("not delivered");
     expect(again.ms).toBeLessThan(500);
 
     const receive = await tool("mesh_receive");
     expect(receive.text).toContain("nats_unavailable");
-    expect(receive.ms).toBeLessThan(2000);
+    expect(receive.ms).toBeLessThan(500);
 
     const status = await tool("mesh_status");
     expect(status.isError).toBe(false);
     expect((JSON.parse(status.text) as { inbox_pending: number | null }).inbox_pending).toBeNull();
-    expect(status.ms).toBeLessThan(2000);
+    expect(status.ms).toBeLessThan(500);
+
+    // An agent the registry has never seen: its consumers cannot be ensured
+    // now, and that must not cost a timeout either.
+    const unseen = await tool("mesh_status", {}, betaToken);
+    expect(unseen.isError).toBe(false);
+    expect(unseen.ms).toBeLessThan(500);
   }, 30_000);
 
   it("reports the outage on /health at once, stays alive on /livez, and still serves the dashboard", async () => {
@@ -139,13 +152,14 @@ describe.skipIf(!URL || !CONTAINER)("a broker that stops answering", () => {
     for (const path of ["/", "/agents", "/log", "/conversations"]) {
       const page = await timed(path, { Cookie: cookie, Accept: "text/html" });
       expect(page.res.status, path).toBe(200);
-      expect(page.ms, path).toBeLessThan(3000);
+      expect(page.ms, path).toBeLessThan(500);
     }
   }, 30_000);
 
   it("recovers on its own once the broker answers again", async () => {
     pause();
-    await tool("mesh_send", { to: "beta", payload: "lost", context: "outage test" }); // trips the breaker
+    // Trips the breaker. Its outcome is unknown: it may arrive after the thaw.
+    await tool("mesh_send", { to: "beta", payload: "sent into the outage", context: "outage test" });
     unpause();
 
     // No restart, no reconnect event (the connection never dropped): the

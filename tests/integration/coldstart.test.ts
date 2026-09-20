@@ -31,10 +31,11 @@ describe.skipIf(!URL || !CONTAINER)("cold start while the broker does not answer
 
   afterEach(async () => {
     if (paused) { execFileSync("docker", ["unpause", CONTAINER!], { stdio: "ignore" }); paused = false; }
-    if (server && server.exitCode === null) {
+    if (server && server.exitCode === null && server.signalCode === null) {
+      const gone = new Promise((r) => server!.once("exit", r));
       server.kill("SIGTERM");
-      await new Promise((r) => setTimeout(r, 300));
-      if (server.exitCode === null) server.kill("SIGKILL");
+      await Promise.race([gone, new Promise((r) => setTimeout(r, 4000))]);
+      if (server.exitCode === null && server.signalCode === null) server.kill("SIGKILL");
     }
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
@@ -46,7 +47,9 @@ describe.skipIf(!URL || !CONTAINER)("cold start while the broker does not answer
     const port = await freePort();
     dir = mkdtempSync(path.join(tmpdir(), "moshi-coldstart-"));
     let log = "";
-    server = spawn("npx", ["tsx", "src/index.tsx"], {
+    // node directly, not through npx: a kill has to reach the app, not a
+    // wrapper that leaves tsx and node behind holding the port.
+    server = spawn(process.execPath, ["--import", "tsx", "src/index.tsx"], {
       cwd: process.cwd(),
       stdio: ["ignore", "pipe", "pipe"],
       env: {
@@ -78,12 +81,19 @@ describe.skipIf(!URL || !CONTAINER)("cold start while the broker does not answer
     });
     expect(res.status).toBe(200);
 
+    // Stay frozen until the first connect has given up. Thawed earlier, that
+    // first attempt simply completes and the retry loop, which is the claim,
+    // never runs. (It used to be "ten attempts, then exit".)
+    expect(await until(async () => log.includes("nats connect attempt failed"), 20_000), log).toBe(true);
+    expect(server.exitCode).toBeNull();
+
     execFileSync("docker", ["unpause", CONTAINER!], { stdio: "ignore" });
     paused = false;
 
-    // No restart: the background connect finds the broker.
+    // No restart: a LATER attempt of the background loop finds the broker.
     expect(await until(async () => (await status("/health")) === 200, 45_000), log).toBe(true);
     expect(server.exitCode).toBeNull();
-    expect(log).toContain("nats connected");
-  }, 90_000);
+    const attempts = Number(/"nats connected".*?"attempts":(\d+)/.exec(log)?.[1] ?? 0);
+    expect(attempts, log).toBeGreaterThanOrEqual(2);
+  }, 120_000);
 });
