@@ -19,6 +19,12 @@ import path from "node:path";
 const URL = process.env.MOSHI_TEST_NATS_URL;
 const CONTAINER = process.env.MOSHI_TEST_NATS_CONTAINER;
 
+// Under the script (and so in CI) a missing value is a failure, not a skip:
+// a suite that skips itself reports green.
+if (process.env.MOSHI_TEST_NATS_REQUIRED === "1" && (!URL || !CONTAINER)) {
+  throw new Error("MOSHI_TEST_NATS_REQUIRED is set but MOSHI_TEST_NATS_URL or MOSHI_TEST_NATS_CONTAINER is empty");
+}
+
 const freePort = () => new Promise<number>((resolve) => {
   const s = net.createServer();
   s.listen(0, "127.0.0.1", () => { const { port } = s.address() as net.AddressInfo; s.close(() => resolve(port)); });
