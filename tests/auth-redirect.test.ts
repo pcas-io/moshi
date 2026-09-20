@@ -55,13 +55,17 @@ describe("unauthenticated browser navigation (C1)", () => {
     expect(noAccept.status).toBe(401);
   });
 
-  it("never redirects /mcp, POSTs, or requests that carried a bearer token", async () => {
+  it("never redirects /mcp, other methods, or requests that carried a bearer token", async () => {
     const app = buildApp();
     const mcp = await app.request("/mcp", { headers: { Accept: "text/html" } });
     expect(mcp.status).toBe(401);
 
-    const post = await app.request("/agents", { method: "POST", headers: { Accept: "text/html" } });
-    expect(post.status).toBe(401);
+    // A browser's form POST is sent to the sign-in page since the session
+    // change (below). Everything else that is not a GET stays a 401.
+    for (const method of ["PUT", "PATCH", "DELETE"]) {
+      const res = await app.request("/agents", { method, headers: { Accept: "text/html" } });
+      expect(res.status, method).toBe(401);
+    }
 
     const badToken = await app.request("/", {
       headers: { Accept: "text/html", Authorization: "Bearer bt_wrong" },
@@ -168,5 +172,43 @@ describe("safeNextPath — dot segments", () => {
       try { routed = decodeURI(routed); } catch { /* malformed escape: the router cannot decode it either */ }
       expect(/^\/(login|logout)/.test(routed), JSON.stringify(next)).toBe(false);
     }
+  });
+});
+
+// Every session ends at the deploy of the session change, and idle ones after
+// seven days. The pages with the admin forms have no live section, so nothing
+// reloads them: the next thing such a tab does is POST a form. It used to get
+// `{"error":"Unauthorized"}` as the whole page.
+describe("a browser form posted without a session", () => {
+  const form = (headers: Record<string, string>): RequestInit => ({
+    method: "POST", body: new URLSearchParams({ name: "x" }),
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "text/html,application/xhtml+xml", ...headers },
+  });
+
+  it("is sent to the sign-in page, with the page it came from as the way back", async () => {
+    const app = buildApp();
+    const res = await app.request("/agents/rename", form({ Host: "moshi.example", Referer: "https://moshi.example/agents?inspect=01ABC" }));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`/login?next=${encodeURIComponent("/agents?inspect=01ABC")}`);
+  });
+
+  it("never takes the way back from another origin, and never a hostile one", async () => {
+    const app = buildApp();
+    for (const referer of ["https://evil.example/agents", "https://moshi.example//evil.example", "not a url", "https://moshi.example/logout", undefined]) {
+      const res = await app.request("/agents/rename", form({ Host: "moshi.example", ...(referer ? { Referer: referer } : {}) }));
+      expect(res.status, String(referer)).toBe(303);
+      expect(res.headers.get("location"), String(referer)).toBe("/login?next=%2F");
+    }
+  });
+
+  it("still answers JSON 401 to everything that is not a browser form", async () => {
+    const app = buildApp();
+    const api = await app.request("/agents/rename", { method: "POST", body: "{}", headers: { "Content-Type": "application/json", Accept: "application/json" } });
+    expect(api.status).toBe(401);
+    const bearer = await app.request("/agents/rename", form({ Authorization: "Bearer bt_wrong" }));
+    expect(bearer.status).toBe(401);
+    const mcp = await app.request("/mcp", form({}));
+    expect(mcp.status).toBe(401);
+    expect(mcp.headers.get("www-authenticate")).toContain("oauth-protected-resource");
   });
 });

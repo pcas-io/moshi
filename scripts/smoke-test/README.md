@@ -167,7 +167,7 @@ PKCE Flow inkl. der Härtung aus Commit `b6ec1e7`.
 ## Architektur-Notizen
 
 - **Stateless MCP:** Das Script nutzt direkten JSON-RPC-POST an `/mcp` ohne Initialize-Handshake. Der Server läuft in `sessionIdGenerator: undefined` stateless mode (siehe `src/index.tsx:408`).
-- **CSRF-Token:** Werden aus `GET /login` extrahiert und für alle Admin-POSTs wiederverwendet. Die Tokens sind HMAC-signiert mit dem cookie secret, nicht session-gebunden — also safe reuse.
+- **CSRF-Token:** Sind gebunden. Der Token aus `GET /login` passt zum `mesh_login`-Cookie im Cookie-Jar und gilt nur für `POST /login`. Nach dem Login holt das Script einen Token aus `/agents`; der gehört zur Session und gilt für alle Admin-POSTs (8 Stunden).
 - **Token-Cache-Invalidation:** `revoke`/`delete` rufen `clearTokenCache()` in `src/services/agent.ts`. Der Smoke-Test verifiziert dass das tatsächlich wirkt (Phase 5 Step 23).
 - **Self-Cleanup:** Der `trap EXIT` ruft `/agents/delete` für die Test-Agents egal ob das Script grün oder rot ended. IDs werden nach erfolgreichem Delete geleert, damit der Trap nicht doppelt löscht.
 

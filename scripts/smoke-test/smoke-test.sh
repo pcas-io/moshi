@@ -126,14 +126,22 @@ assert_not_empty() {
 }
 
 # ─── CSRF helper ─────────────────────────────────────────
-# CSRF tokens are HMAC-signed with cookie secret, so reusable across requests.
-# Extract once from GET /login, reuse everywhere.
+# Form tokens are bound. The one on GET /login fits the mesh_login cookie the
+# jar gets with that page and is good for POST /login only. After the sign-in
+# every page carries tokens bound to the session: fetch_session_csrf.
 fetch_csrf() {
   local html
   html=$(curl -sS -c "$COOKIE_JAR" "$MESH_URL/login")
   # CSRF token format: name="csrf" value="nonce:timestamp.hmac"
   # Extract the value attribute of the hidden csrf input.
   echo "$html" | grep -oE 'name="csrf"[^>]*value="[^"]*"' | \
+    sed -E 's/.*value="([^"]*)".*/\1/' | head -1
+}
+
+# A form token of the signed-in session, from a page of that session.
+fetch_session_csrf() {
+  curl -sS -b "$COOKIE_JAR" "$MESH_URL/agents" | \
+    grep -oE 'name="csrf"[^>]*value="[^"]*"' | \
     sed -E 's/.*value="([^"]*)".*/\1/' | head -1
 }
 
@@ -251,7 +259,7 @@ if [[ "$HEALTH_CODE" != "200" ]]; then
   exit 2
 fi
 
-# Fetch CSRF token (reusable — HMAC-signed, not session-bound)
+# The sign-in page's token. Good for POST /login, with the cookie in the jar.
 CSRF=$(fetch_csrf)
 if [[ -z "$CSRF" ]]; then
   fail "CSRF token extracted from /login"
@@ -273,9 +281,9 @@ LOGIN_CODE=$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
   --data-urlencode "csrf=$CSRF")
 assert_redirect "login accepts admin token" "$LOGIN_CODE"
 
-# After login, CSRF might have changed — refetch
-# (Actually: CSRF is HMAC'd with cookie secret, independent of session, so reuse is fine.
-#  But we need an authenticated session cookie, so the subsequent /agents GETs work.)
+# From here on the forms belong to the session: take a token from one of its pages.
+CSRF=$(fetch_session_csrf)
+assert_not_empty "session form token fetched from /agents" "$CSRF"
 
 step 2 "Create agent $ALPHA"
 

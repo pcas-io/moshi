@@ -103,7 +103,9 @@ export interface Activity {
 // === Hono App Variables ===
 export interface AppVariables {
   agent: RequestAgent | null;
-  csrfToken: string;
+  /** Set by the auth middleware: what the form tokens of this request are
+   *  bound to (src/auth.ts, `csrfBindingOf`). Empty means no form is valid. */
+  csrfBinding: string;
 }
 
 // === Pagination ===

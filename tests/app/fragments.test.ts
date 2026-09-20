@@ -6,9 +6,8 @@
 // URL returns.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { createTestApp, ADMIN_TOKEN, TEST_CONFIG } from "./harness";
+import { createTestApp, signIn as signInThroughTheForm, ADMIN_TOKEN } from "./harness";
 import type { TestApp } from "./harness";
-import { generateCsrfToken } from "../../src/auth";
 import { createMessage, persistMessage } from "../../src/services/message";
 
 const FRAGMENT = { Accept: "text/x-moshi-fragment" };
@@ -17,14 +16,7 @@ const NOW = Date.parse("2026-09-19T12:00:00.000Z");
 let t: TestApp;
 let cookie: string;
 
-async function signIn(app: TestApp["app"]): Promise<string> {
-  const res = await app.request("/login", {
-    method: "POST",
-    body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token: ADMIN_TOKEN }),
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-  });
-  return (res.headers.get("set-cookie") ?? "").split(";")[0]!;
-}
+const signIn = async (app: TestApp["app"], token: string = ADMIN_TOKEN): Promise<string> => (await signInThroughTheForm(app, token)).cookie;
 
 function say(from: string, to: string, payload: string, minutesAgo: number, correlation_id?: string) {
   const m = createMessage({ from, to, type: "info", payload, context: `about ${payload}`, correlation_id });
@@ -322,12 +314,7 @@ describe("fragment endpoints — a poll is not agent activity", () => {
     // around; the five-second poll behind it must not, or an open tab would
     // keep its agent "live" for days.
     const agentToken = t.h.agents.resetToken(t.h.agents.getByName("alpha")!.id, "admin")!.plaintextToken;
-    const res = await t.app.request("/login", {
-      method: "POST",
-      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token: agentToken }),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-    const agentCookie = (res.headers.get("set-cookie") ?? "").split(";")[0]!;
+    const agentCookie = await signIn(t.app, agentToken);
     const asAgent = (path: string, headers: Record<string, string>) =>
       t.app.request(path, { headers: { Cookie: agentCookie, ...headers } });
 
@@ -348,12 +335,7 @@ describe("fragment endpoints — a poll is not a sign-in either", () => {
     // The throttle is per name and per process, so this needs a name nobody
     // has used yet in this file.
     const token = t.h.agents.create("pollster").plaintextToken;
-    const res = await t.app.request("/login", {
-      method: "POST",
-      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token }),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-    const session = (res.headers.get("set-cookie") ?? "").split(";")[0]!;
+    const session = await signIn(t.app, token);
     const rows = () => (t.h.db.prepare("SELECT COUNT(*) AS n FROM activity_log WHERE action = 'auth_login' AND agent_name = 'pollster'").get() as { n: number }).n;
 
     for (const path of ["/fragments/log/messages", "/fragments/conversations/list", "/fragments/home/latest"]) {

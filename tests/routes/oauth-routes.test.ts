@@ -60,7 +60,7 @@ describe("POST /oauth/authorize", () => {
     expect(html).toContain("admin token");
     expect(html).toContain("/agents/connect");
     // Nothing was stored: the operator credential must not reach a connector.
-    expect(db.prepare("SELECT COUNT(*) AS n FROM oauth_tokens").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM oauth_codes").get()).toEqual({ n: 0 });
   });
 
   it("echoes state exactly as the client sent it", async () => {
@@ -141,5 +141,142 @@ describe("POST /oauth/token — malformed bodies", () => {
       expect(res.status, contentType).toBe(200);
       expect(await res.json(), contentType).toMatchObject({ access_token: plaintextToken, token_type: "Bearer" });
     }
+  });
+});
+
+// The code used to be `timestamp.signature:challenge`, and the token endpoint
+// verified PKCE against the challenge THE CLIENT sent back. Whoever saw a code
+// could put their own challenge behind the colon and redeem it.
+describe("the authorization code is bound to its challenge on the server", () => {
+  const form = (fields: Record<string, string>): RequestInit => ({
+    method: "POST",
+    body: new URLSearchParams({ grant_type: "authorization_code", ...fields }),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+  const THEIR_VERIFIER = "x".repeat(64);
+  const THEIR_CHALLENGE = crypto.createHash("sha256").update(THEIR_VERIFIER).digest("base64url");
+
+  async function authorized() {
+    const t = setup();
+    const { plaintextToken } = t.agents.create("scout");
+    const res = await t.app.request("/oauth/authorize", authorize({ token: plaintextToken }));
+    const code = new URL(res.headers.get("location")!).searchParams.get("code")!;
+    return { ...t, plaintextToken, code };
+  }
+
+  it("redirects with an opaque code: no challenge in it, no timestamp, no token", async () => {
+    const { code, plaintextToken } = await authorized();
+    expect(code).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(code).not.toContain(CHALLENGE);
+    expect(code).not.toContain(plaintextToken);
+  });
+
+  it("keeps the token out of the database while the code waits", async () => {
+    const { db, plaintextToken, code } = await authorized();
+    expect(db.serialize().includes(Buffer.from(plaintextToken))).toBe(false);
+    expect(db.serialize().includes(Buffer.from(code))).toBe(false);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM oauth_codes").get()).toEqual({ n: 1 });
+  });
+
+  it("refuses a stolen code that comes back with somebody else's challenge and verifier", async () => {
+    for (const encoding of ["form", "json"] as const) {
+      const { app, code } = await authorized();
+      const fields = { code: `${code}:${THEIR_CHALLENGE}`, code_verifier: THEIR_VERIFIER };
+      const res = await app.request("/oauth/token", encoding === "form" ? form(fields) : {
+        method: "POST", body: JSON.stringify({ grant_type: "authorization_code", ...fields }), headers: { "Content-Type": "application/json" },
+      });
+      expect(res.status, encoding).toBe(400);
+      expect(await res.json(), encoding).toMatchObject({ error: "invalid_grant" });
+    }
+  });
+
+  it("refuses the right code with the wrong verifier, and the code is used up by the attempt", async () => {
+    const { app, code } = await authorized();
+    const stolen = await app.request("/oauth/token", form({ code, code_verifier: THEIR_VERIFIER }));
+    expect(stolen.status).toBe(400);
+    expect(await stolen.json()).toMatchObject({ error: "invalid_grant" });
+    const late = await app.request("/oauth/token", form({ code, code_verifier: VERIFIER }));
+    expect(late.status).toBe(400);
+  });
+
+  it("redeems a code once", async () => {
+    const { app, code, plaintextToken } = await authorized();
+    const first = await app.request("/oauth/token", form({ code, code_verifier: VERIFIER }));
+    expect(await first.json()).toMatchObject({ access_token: plaintextToken });
+    const replay = await app.request("/oauth/token", form({ code, code_verifier: VERIFIER }));
+    expect(replay.status).toBe(400);
+    expect(await replay.json()).toMatchObject({ error: "invalid_grant" });
+  });
+
+  it("answers a request without a verifier without touching the code", async () => {
+    const { app, code, plaintextToken } = await authorized();
+    const res = await app.request("/oauth/token", form({ code }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_request" });
+    const ok = await app.request("/oauth/token", form({ code, code_verifier: VERIFIER }));
+    expect(await ok.json()).toMatchObject({ access_token: plaintextToken });
+  });
+
+  it("never lets a token response be cached", async () => {
+    const { app, code } = await authorized();
+    const res = await app.request("/oauth/token", form({ code, code_verifier: VERIFIER }));
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("pragma")).toBe("no-cache");
+  });
+
+  // An S256 challenge is 32 bytes as base64url without padding: 43 characters.
+  // It is stored now, so it is bounded like every other stored field.
+  it("accepts a well-formed challenge and nothing else", async () => {
+    const { app, agents } = setup();
+    const { plaintextToken } = agents.create("scout");
+    for (const bad of [CHALLENGE.slice(0, 42), CHALLENGE + "A", CHALLENGE + "=", CHALLENGE.slice(0, 42) + "+", "a".repeat(4000)]) {
+      const post = await app.request("/oauth/authorize", authorize({ token: plaintextToken, code_challenge: bad }));
+      expect(post.status, bad.slice(0, 50)).toBe(400);
+      const get = await app.request(`/oauth/authorize?redirect_uri=${encodeURIComponent(REDIRECT)}&code_challenge=${encodeURIComponent(bad)}&code_challenge_method=S256`);
+      expect(get.status, bad.slice(0, 50)).toBe(400);
+    }
+    const ok = await app.request("/oauth/authorize", authorize({ token: plaintextToken, code_challenge: CHALLENGE }));
+    expect(ok.status).toBe(302);
+  });
+});
+
+describe("code_challenge_method", () => {
+  it("is S256 or the request is refused, on GET and on POST, and nothing is stored", async () => {
+    const { app, agents, db } = setup();
+    const { plaintextToken } = agents.create("scout");
+    for (const method of ["plain", "", "s256", "S512"]) {
+      const post = await app.request("/oauth/authorize", authorize({ token: plaintextToken, code_challenge_method: method }));
+      expect(post.status, `POST ${method}`).toBe(400);
+      const get = await app.request(`/oauth/authorize?redirect_uri=${encodeURIComponent(REDIRECT)}&code_challenge=${CHALLENGE}&code_challenge_method=${method}`);
+      expect(get.status, `GET ${method}`).toBe(400);
+    }
+    expect(db.prepare("SELECT COUNT(*) AS n FROM oauth_codes").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("the routes seal with OAUTH_SECRET", () => {
+  const exchange = (app: ReturnType<typeof setup>["app"], code: string) =>
+    app.request("/oauth/token", { method: "POST", body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: VERIFIER }) });
+
+  it("cannot open a code that was sealed under another OAUTH_SECRET", async () => {
+    const { app, agents } = setup();
+    const { plaintextToken } = agents.create("scout");
+    const auth = await app.request("/oauth/authorize", authorize({ token: plaintextToken }));
+    const code = new URL(auth.headers.get("location")!).searchParams.get("code")!;
+    process.env.OAUTH_SECRET = "p".repeat(40); // rotated between the two requests
+    const res = await exchange(app, code);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_grant" });
+  });
+
+  it("falls back to the admin token when there is no OAUTH_SECRET, and to nothing else", async () => {
+    delete process.env.OAUTH_SECRET;
+    const { app, agents } = setup();
+    const { plaintextToken } = agents.create("scout");
+    const codeOf = async () => new URL((await app.request("/oauth/authorize", authorize({ token: plaintextToken }))).headers.get("location")!).searchParams.get("code")!;
+    expect((await exchange(app, await codeOf())).status).toBe(200);
+    const waiting = await codeOf();
+    process.env.MESH_ADMIN_TOKEN = "z".repeat(40);
+    expect((await exchange(app, waiting)).status).toBe(400);
   });
 });

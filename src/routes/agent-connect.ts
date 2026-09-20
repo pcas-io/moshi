@@ -10,7 +10,7 @@
 import { Hono } from "hono";
 import type { Env, AppVariables, Agent } from "../types.js";
 import type { AgentWithPresence } from "../services/presence.js";
-import { generateCsrfToken, validateCsrfToken } from "../auth.js";
+import { issueCsrf, csrfOk } from "../auth.js";
 import { isReservedAgentName, isValidAgentName, reservedNameError } from "../services/agent.js";
 import { requestOrigin } from "../services/cli-dist.js";
 import { createConnectSession, readConnectSession } from "../services/connect-session.js";
@@ -45,7 +45,6 @@ export interface ConnectPresenceService {
 export interface AgentConnectDeps {
   agents: ConnectAgentService;
   presence: ConnectPresenceService;
-  cookieSecretFor: (env: Env) => string;
   /** Clock seam. Session expiry and the handshake window are relative to
    *  it, so tests can pin a moment instead of racing the wall clock. */
   now?: () => number;
@@ -86,7 +85,6 @@ function parseCapabilities(raw: string | null): string[] {
 export function createAgentConnectRoutes({
   agents,
   presence,
-  cookieSecretFor,
   now = Date.now,
 }: AgentConnectDeps): Hono<HonoEnv> {
   const connect = new Hono<HonoEnv>();
@@ -101,7 +99,7 @@ export function createAgentConnectRoutes({
         step: parseStep(c.req.query("step")),
         client: parseClient(c.req.query("client")),
         origin: requestOrigin(c),
-        csrfToken: generateCsrfToken(cookieSecretFor(c.env)),
+        csrfToken: issueCsrf(c),
         userRole: admin.role,
         userName: admin.name,
         sessionKey: session?.key,
@@ -130,7 +128,7 @@ export function createAgentConnectRoutes({
           step: 1,
           client: parseClient(c.req.query("client")),
           origin: requestOrigin(c),
-          csrfToken: generateCsrfToken(cookieSecretFor(c.env)),
+          csrfToken: issueCsrf(c),
           userRole: admin.role,
           userName: admin.name,
           typedName: name,
@@ -139,7 +137,7 @@ export function createAgentConnectRoutes({
         status,
       );
 
-    if (!validateCsrfToken(csrf, cookieSecretFor(c.env))) return again(CSRF_ERROR, 403);
+    if (!csrfOk(c, csrf)) return again(CSRF_ERROR, 403);
     if (!name) return again(EMPTY_NAME_ERROR, 400);
     // `AgentService.create` would reject these too. Checked here first so a
     // bad name re-renders step 1 with its reason instead of falling into the

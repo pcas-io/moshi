@@ -32,12 +32,47 @@ enforces the three separate secrets; never deploy without it.
 Production also marks the dashboard's session cookie `Secure`. Behind a
 TLS-terminating proxy (Coolify, step 3) that is what you want and needs no
 setting. When the dashboard is reached over plain http, a browser drops
-that cookie and sign-in loops back to the login page without an error.
+that cookie, and the sign-in page's own one with it: every attempt ends on
+"This sign-in page had expired", with a hint underneath.
 Chrome and Firefox make an exception for `http://localhost`, Safari does
 not. For any plain-http use set `MESH_COOKIE_SECURE=0`. On Coolify, set it
 in the environment variables of the resource: Coolify stores the variable
 (empty) on the first deploy, and a stored value wins over a default written
 into `docker-compose.yml` later.
+
+### Sessions and what ends them
+
+A dashboard session is made from the token it was signed in with. It names
+the agent by id and carries a fingerprint of that token.
+
+- Without use it lasts **7 days**. A page view or an action renews it once it
+  is a day old. The dashboard's own polling and its event stream do not.
+- It ends **30 days** after the sign-in in any case.
+- Resetting an agent's token, revoking or deleting the agent ends its
+  sessions with the next request. A rename does not.
+- Operator sessions follow `MESH_ADMIN_TOKEN`. While the old value is set as
+  `MESH_ADMIN_TOKEN_PREVIOUS`, sessions made with it go on. Remove it and
+  they are over.
+- Changing `MESH_COOKIE_SECRET` signs everybody out. Without a
+  `MESH_COOKIE_SECRET` (development only) the secret is derived from the
+  admin token, so rotating that one signs everybody out as well.
+- `/mcp` takes a Bearer token only. A session cookie is not an identity there.
+- Signing out is a `POST` with the page's form token. A request without a
+  valid one, or one the browser reports as posted from another origin, gets
+  a "Sign out?" page and changes nothing. A request without the session
+  cookie changes nothing either.
+- Forms are accepted from this origin only (`Sec-Fetch-Site`, else `Origin`
+  against `Host`). A reverse proxy in front has to pass `Host` through
+  unchanged, as Coolify's does.
+
+Deleted rows are overwritten (`secure_delete`), and after a migration the
+database file is rebuilt (`VACUUM`) and its write-ahead log folded in, so
+nothing a migration dropped stays readable in the file or in a copy of it.
+
+`OAUTH_SECRET` is half of the key that seals an agent token for the five
+minutes it waits for its OAuth code to be redeemed. The other half is the
+code, which only the client has. Changing the secret fails the sign-ins that
+are under way at that moment, nothing else.
 
 ## 3. Domain + TLS
 
@@ -85,6 +120,14 @@ Deploy. Expected:
 `.github/workflows/ci.yml` runs `npm test` + `tsc --noEmit` on every push
 to `main`. Enable Coolify's auto-deploy webhook for push-to-deploy.
 Rollback = redeploy a previous commit from the Coolify deployments list.
+
+Rolling back across migration `0009_oauth_codes.sql` works: it empties the
+old `oauth_tokens` table and keeps it, because the release before it cannot
+sign anybody in through OAuth without that table. While that release runs it
+writes plaintext tokens there again, for five minutes each. After the
+roll-forward the hourly sweep (and the one at start) deletes them. A later
+migration drops the table; from then on a rollback past 0009 needs it
+recreated first.
 
 ## CLI endpoint
 

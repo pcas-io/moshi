@@ -4,10 +4,8 @@
 // body limit that has to sit behind it.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { createTestApp, ADMIN_TOKEN, MCP_HEADERS, rpc } from "./harness";
+import { createTestApp, signIn, csrfFor, ADMIN_TOKEN, MCP_HEADERS, rpc } from "./harness";
 import type { TestApp } from "./harness";
-import { generateCsrfToken } from "../../src/auth";
-import { TEST_CONFIG } from "./harness";
 
 let t: TestApp;
 let agentToken: string;
@@ -229,25 +227,19 @@ describe("public routes and headers", () => {
   });
 
   it("signs in through the mounted session routes and never follows a dot-segment next", async () => {
-    const res = await t.app.request("/login", {
-      method: "POST",
-      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token: ADMIN_TOKEN, next: "/.//evil.example" }),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
+    const { res, cookie } = await signIn(t.app, ADMIN_TOKEN, { next: "/.//evil.example" });
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/");
-    expect(res.headers.get("set-cookie") ?? "").toContain("mesh_session=");
+    expect(cookie).toContain("mesh_session=");
   });
 
   it("sets Secure on the session cookie exactly when the config says so", async () => {
-    const login = (app: TestApp["app"]) => app.request("/login", {
-      method: "POST",
-      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token: ADMIN_TOKEN }),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-    expect((await login(t.app)).headers.get("set-cookie") ?? "").not.toMatch(/;\s*Secure/i);
+    const sessionLine = async (app: TestApp["app"]) =>
+      (await signIn(app, ADMIN_TOKEN)).res.headers.getSetCookie().find((l) => l.startsWith("mesh_session=")) ?? "";
+    expect(await sessionLine(t.app)).toContain("mesh_session=");
+    expect(await sessionLine(t.app)).not.toMatch(/;\s*Secure/i);
     const secure = createTestApp({ cookieSecure: true });
-    expect((await login(secure.app)).headers.get("set-cookie") ?? "").toMatch(/;\s*Secure/i);
+    expect(await sessionLine(secure.app)).toMatch(/;\s*Secure/i);
   });
 
   it("logs out without a session instead of bouncing through auth", async () => {
@@ -281,14 +273,7 @@ describe("public routes and headers", () => {
 });
 
 describe("dashboard behind a session", () => {
-  async function sessionCookie(): Promise<string> {
-    const res = await t.app.request("/login", {
-      method: "POST",
-      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token: ADMIN_TOKEN }),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-    return (res.headers.get("set-cookie") ?? "").split(";")[0]!;
-  }
+  const sessionCookie = async (): Promise<string> => (await signIn(t.app, ADMIN_TOKEN)).cookie;
 
   it("renders every page for the operator, each of them no-store", async () => {
     const cookie = await sessionCookie();
@@ -326,7 +311,7 @@ describe("dashboard behind a session", () => {
     const cookie = await sessionCookie();
     const res = await t.app.request("/agents/create", {
       method: "POST",
-      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), name: "delta" }),
+      body: new URLSearchParams({ csrf: csrfFor(cookie), name: "delta" }),
       headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: cookie },
     });
     expect(res.status).toBe(302);
@@ -343,12 +328,7 @@ describe("dashboard behind a session", () => {
 
   it("keeps the agents page for the operator only", async () => {
     // An agent session: sign in with the agent's own token.
-    const res = await t.app.request("/login", {
-      method: "POST",
-      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token: agentToken }),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-    const cookie = (res.headers.get("set-cookie") ?? "").split(";")[0]!;
+    const { cookie } = await signIn(t.app, agentToken);
     const page = await t.app.request("/agents", { headers: { Cookie: cookie, Accept: "text/html" } });
     expect(page.status).toBe(302);
     expect(page.headers.get("location")).toBe("/");
@@ -380,12 +360,7 @@ describe("/agents/* — the form limit sits behind auth as well", () => {
   });
 
   it("still refuses an oversized form from the signed-in operator", async () => {
-    const login = await t.app.request("/login", {
-      method: "POST",
-      body: new URLSearchParams({ csrf: generateCsrfToken(TEST_CONFIG.meshCookieSecret), token: ADMIN_TOKEN }),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-    const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0]!;
+    const { cookie } = await signIn(t.app, ADMIN_TOKEN);
     const res = await t.app.request("/agents/create", {
       method: "POST", body: "name=" + "x".repeat(8 * 1024),
       headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: cookie },

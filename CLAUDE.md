@@ -26,10 +26,11 @@ TypeScript, Hono, @hono/node-server, @modelcontextprotocol/sdk, nats.js, better-
 - `src/services/inbox.ts` — JetStream pull logic (consumer info before fetch, shared limit, `drop` rule with bounded re-pull); unit-tested with fake consumers
 - `src/services/` — Business logic (nats, agent, message, ratelimit, activity)
 - `src/views/` — Dashboard (Hono JSX, server-rendered)
-- `src/auth.ts` — Bearer token + cookie auth, `safeNextPath` (checks run on the normalised target)
-- `src/routes/session.ts` — sign-in / sign-out, mounted before the auth middleware
+- `src/auth.ts` — Bearer token + cookie auth, the session cookie (`readSessionCookie`), form tokens (`issueCsrf` / `csrfOk`), `safeNextPath` (checks run on the normalised target)
+- `src/routes/session.tsx` — sign-in / sign-out, mounted before the auth middleware; `issueLoginCsrf` for the sign-in page
 - `src/routes/form.ts` — `formString` (trimmed, typed fields) and `formRaw` (protocol values such as OAuth `state`); never cast `parseBody()` fields with `as string`
 - `src/oauth.ts` — OAuth 2.1 + PKCE for interactive clients; the consent screen refuses the admin token
+- `src/oauth-codes.ts` — authorization codes: random, stored as a hash, the token sealed (AES-256-GCM, key from code + `OAUTH_SECRET`), the PKCE challenge stored with the row
 - `src/mcp/http-guard.ts` — `/mcp` is POST-only (405 for everything else), mounted before auth
 - `src/middleware/security-headers.ts` — security headers, `Cache-Control: no-store` unless a route set its own
 - `src/services/maintenance.ts` — hourly retention + expired OAuth rows (was: only at process start)
@@ -62,6 +63,13 @@ ULID IDs, SHA-256 token hashing, timing-safe comparison.
 - Free-text tool fields are bounded by `FIELD_LIMITS` in `src/types.ts`; tests pin both the rejecting and the accepting side.
 - Presence is refreshed by tool calls only. An idle but connected client decays to `stale` after 10 minutes; the old 1 Hz GET reconnect loop that kept it `live` is gone on purpose.
 - The session cookie is `Secure` when `NODE_ENV=production`; `MESH_COOKIE_SECURE=0` is the opt-out for plain-http hosts.
+- A session is made from a token: the cookie names the agent by ID and carries `sessionFingerprint(token_hash)`, and the middleware compares it with the record on every request. Never resolve a session by name (a name passes to another agent), and never accept the cookie on `/mcp`. Seven days sliding (renewed by real page views only, never by `/fragments/*` or `/sse/*`), thirty days absolute.
+- Form tokens are bound: to the session (`c.get("csrfBinding")`, set by the auth middleware, the same value for the cookie and for a Bearer call with that token) or, on `/login`, to the `mesh_login` pre-session cookie. Routes use `issueCsrf(c)` and `csrfOk(c, token)`; an empty binding never validates. A route test that stubs the middleware has to set `csrfBinding` too.
+- A form token says the form was rendered for this session. It cannot say who posted it: on `/login` there is no session, and a sibling host can plant the cookie the token is bound to. `isSameOriginPost()` asks the browser (`Sec-Fetch-Site`, else `Origin` against `Host`) and is part of `csrfOk()`, `/login` and `/logout`. `POST /logout` without the session cookie clears NOTHING: SameSite=Lax keeps the cookie off a cross-site POST, so "no cookie" is what a hostile form looks like.
+- `/logout` is POST only and answers a bad form token with a "Sign out?" page (403) that carries a good one. A rejected sign-in FORM is `error=expired`, a wrong TOKEN is `error=1`; a second tab that posts after another tab signed in is sent on to `next`. Every page passes `csrfToken` to the layout; `tests/app/session.test.ts` signs out from each of them.
+- `initDatabase` sets `secure_delete = ON` and, after any migration, runs `VACUUM` and truncates the WAL. SQL cannot see what a `DROP TABLE` or an old `DELETE` leaves in the file; `tests/services/migration-oauth-codes.test.ts` scans the bytes.
+- The seal in `src/oauth-codes.ts` names its tag length (`authTagLength: 16`) on both sides and authenticates every column of the row (code hash, challenge, expiry). Node accepts a four-byte GCM tag when the length is left out.
+- The OAuth token endpoint verifies PKCE against the challenge STORED with the code and burns the row on the first attempt, right or wrong. Nothing the client appends to a code is ever parsed.
 - Middleware order is behaviour and is pinned by `tests/app/wiring.test.ts` against the real app. Change `src/app.tsx` and those tests together, never the order alone.
 
 - NATS outages: every broker call goes through `NatsService.guarded()`. JetStream calls time out after 1.5 s, the first outage error opens the breaker for 5 s, a `disconnect` holds it open until `reconnect`. Never add a bare `catch` around a broker call: "not found" is an answer, a timeout is not. `presence.touch` waits at most 300 ms for its KV write.

@@ -9,6 +9,7 @@ import type { AppNats } from "../../src/app";
 import type { Config } from "../../src/config";
 import { createHarness } from "../mcp/harness";
 import type { Harness } from "../mcp/harness";
+import { generateCsrfToken, readSessionCookie, csrfBindingOf, SESSION_COOKIE, LOGIN_COOKIE } from "../../src/auth";
 
 export const ADMIN_TOKEN = "a".repeat(40);
 
@@ -65,3 +66,43 @@ export const MCP_HEADERS = {
 
 export const rpc = (method: string, params: unknown, id = 1) =>
   JSON.stringify({ jsonrpc: "2.0", id, method, params });
+
+// --- Signing in the way a browser does ---
+// The sign-in form is protected by a token bound to a pre-session cookie, and
+// every later form by one bound to the session. Tests go through the same
+// door: they fetch the page, keep the cookie, post the form.
+
+
+type App = ReturnType<typeof createApp>;
+
+/** `name=value` of one cookie a response set, or null. */
+export function cookieFrom(res: Response, name: string): string | null {
+  for (const line of res.headers.getSetCookie()) {
+    const pair = line.split(";")[0];
+    if (pair.startsWith(`${name}=`)) return pair;
+  }
+  return null;
+}
+
+export const csrfInPage = (html: string): string => /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? "";
+
+export const formPost = (fields: Record<string, string>, headers: Record<string, string> = {}): RequestInit => ({
+  method: "POST",
+  body: new URLSearchParams(fields),
+  headers: { "Content-Type": "application/x-www-form-urlencoded", ...headers },
+});
+
+/** GET /login, then POST it. Returns the POST response and the session cookie (`mesh_session=…`), if one was set. */
+export async function signIn(app: App, token: string, fields: Record<string, string> = {}): Promise<{ res: Response; cookie: string }> {
+  const page = await app.request("/login");
+  const pre = cookieFrom(page, LOGIN_COOKIE) ?? "";
+  const res = await app.request("/login", formPost({ csrf: csrfInPage(await page.text()), token, ...fields }, { Cookie: pre }));
+  return { res, cookie: cookieFrom(res, SESSION_COOKIE) ?? "" };
+}
+
+/** A form token for the session in `cookie` (`mesh_session=…`), as a page of that session would carry it. */
+export function csrfFor(cookie: string, secret: string = TEST_CONFIG.meshCookieSecret): string {
+  const claims = readSessionCookie(decodeURIComponent(cookie.slice(cookie.indexOf("=") + 1)), secret);
+  if (!claims) throw new Error("csrfFor: not a valid session cookie");
+  return generateCsrfToken(secret, csrfBindingOf(claims));
+}

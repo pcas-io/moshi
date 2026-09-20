@@ -29,8 +29,8 @@ describe("validateCsrfToken — hostile input", () => {
   const SECRET = "s".repeat(32);
   it("rejects anything that is not a non-empty string instead of throwing", () => {
     for (const bad of [undefined, null, "", 123, [], {}, new File(["x"], "f")]) {
-      expect(validateCsrfToken(bad as never, SECRET)).toBe(false);
+      expect(validateCsrfToken(bad as never, SECRET, "b")).toBe(false);
     }
-    expect(validateCsrfToken(generateCsrfToken(SECRET), SECRET)).toBe(true);
+    expect(validateCsrfToken(generateCsrfToken(SECRET, "b"), SECRET, "b")).toBe(true);
   });
 });

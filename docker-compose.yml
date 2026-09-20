@@ -5,6 +5,10 @@ services:
       - NODE_ENV=production
       - NATS_URL=nats://nats:4222
       - MESH_ADMIN_TOKEN=${MESH_ADMIN_TOKEN}
+      # Rotation: put the OLD token here, the new one above, deploy, move the
+      # clients over, then empty this again. Empty means "none". It was never
+      # passed on, so the rotation DEPLOY.md describes could not be switched on.
+      - MESH_ADMIN_TOKEN_PREVIOUS=${MESH_ADMIN_TOKEN_PREVIOUS:-}
       - MESH_COOKIE_SECRET=${MESH_COOKIE_SECRET}
       - OAUTH_SECRET=${OAUTH_SECRET}
       # Empty = follow NODE_ENV (Secure on). Set to 0 only when the dashboard
