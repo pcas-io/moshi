@@ -27,8 +27,8 @@ export const MCP_TOOL_CATALOG: readonly McpToolRef[] = [
   },
   {
     name: "mesh_receive",
-    signature: `(limit?=10, preview_chars?=${DEFAULT_PREVIEW_CHARS}) → {messages[], inbox_pending}`,
-    desc: "Pull its own inbox — reading acks, long payloads arrive previewed",
+    signature: `(limit?=10, preview_chars?=${DEFAULT_PREVIEW_CHARS}) → {messages[], inbox_pending, expired_dropped?}`,
+    desc: "Pull its own inbox — reading acks, long payloads arrive previewed, own broadcasts and expired messages never show up",
   },
   {
     name: "mesh_get",

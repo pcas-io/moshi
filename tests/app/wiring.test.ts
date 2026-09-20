@@ -137,6 +137,36 @@ describe("/mcp — guard, auth, limit, in that order", () => {
     expect(plain.status).toBe(401);
   });
 
+  it("lets a leftover durable be replaced for an agent from after the inbox_since rule, and never for one from before", async () => {
+    const body = rpc("tools/call", { name: "mesh_status", arguments: {} });
+    await t.app.request("/mcp", { method: "POST", headers: { ...MCP_HEADERS, ...bearer(agentToken) }, body });
+    expect(t.ensuredReplace).toEqual([true]); // created a moment ago, by the running code
+
+    // An agent that was there before migration 0008: backfilled from created_at.
+    const old = t.h.agents.create("veteran");
+    t.h.db.prepare("UPDATE agents SET created_at = ?, inbox_since = ? WHERE id = ?").run("2026-05-18T00:00:00.000Z", "2026-05-18T00:00:00.000Z", old.agent.id);
+    await t.app.request("/mcp", { method: "POST", headers: { ...MCP_HEADERS, ...bearer(old.plaintextToken) }, body });
+    expect(t.ensuredReplace).toEqual([true, false]);
+  });
+
+  it("hands the consumer setup the agent's inbox_since, with a bearer token and with a session", async () => {
+    const since = t.h.agents.getByName("alpha")!.inbox_since;
+    expect(since).toMatch(/^\d{4}-\d\d-\d\dT/);
+    const body = rpc("tools/call", { name: "mesh_status", arguments: {} });
+    await t.app.request("/mcp", { method: "POST", headers: { ...MCP_HEADERS, ...bearer(agentToken) }, body });
+    expect(t.ensuredSince).toEqual([since]);
+
+    // Reactivation starts the inbox over, and the next request says so.
+    const id = t.h.agents.getByName("alpha")!.id;
+    t.h.agents.revokeById(id);
+    await new Promise((r) => setTimeout(r, 5));
+    const fresh = t.h.agents.reactivate(id)!.plaintextToken;
+    await t.app.request("/mcp", { method: "POST", headers: { ...MCP_HEADERS, ...bearer(fresh) }, body });
+    const renewed = t.h.agents.getByName("alpha")!.inbox_since;
+    expect(renewed > since).toBe(true);
+    expect(t.ensuredSince).toEqual([since, renewed]);
+  });
+
   it("answers 406 when the client does not accept both response types", async () => {
     const res = await t.app.request("/mcp", {
       method: "POST", headers: { "Content-Type": "application/json", ...bearer(agentToken) },

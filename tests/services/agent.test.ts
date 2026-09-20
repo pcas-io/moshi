@@ -5,6 +5,7 @@ import {
   AgentService, hashToken, isValidAgentName, AGENT_NAME_PATTERN, AGENT_NAME_RE,
 } from "../../src/services/agent";
 import { ActivityService } from "../../src/services/activity";
+import { initDatabase } from "../../src/services/db";
 
 function createTestDb(): Database.Database {
   const db = new Database(":memory:");
@@ -83,6 +84,38 @@ describe("AgentService", () => {
     expect(result!.plaintextToken).toMatch(/^bt_/);
     const found = agents.getByTokenHash(hashToken(result!.plaintextToken));
     expect(found?.is_active).toBe(1);
+  });
+
+  it("dates a new agent's inbox from its creation: nothing older is for it", () => {
+    const { agent } = agents.create("agent-a");
+    expect(agent.inbox_since).toBe(agent.created_at);
+    expect(agents.getByName("agent-a")!.inbox_since).toBe(agent.created_at);
+  });
+
+  it("dates the inbox anew on reactivation, and leaves it alone on rename and token reset", async () => {
+    const { agent } = agents.create("agent-a");
+    agents.rename(agent.id, "agent-b");
+    agents.resetToken(agent.id);
+    expect(agents.getByName("agent-b")!.inbox_since).toBe(agent.created_at);
+
+    agents.revokeById(agent.id);
+    await new Promise((r) => setTimeout(r, 5));
+    agents.reactivate(agent.id);
+    const row = db.prepare("SELECT inbox_since, updated_at FROM agents WHERE id = ?").get(agent.id) as { inbox_since: string; updated_at: string };
+    expect(row.inbox_since > agent.created_at).toBe(true);
+    expect(row.inbox_since).toBe(row.updated_at);
+  });
+
+  it("knows which agents came after the inbox_since rule: only their leftover durables may be replaced", () => {
+    // A database the app opened itself: migrated a moment ago, and recorded.
+    const live = new AgentService(initDatabase(":memory:"), activity);
+    const { agent } = live.create("agent-a");
+    expect(live.isAfterInboxCutover(agent.inbox_since)).toBe(true);
+    expect(live.isAfterInboxCutover("2026-05-18T00:00:00.000Z")).toBe(false); // backfilled from created_at
+    expect(live.isAfterInboxCutover(undefined)).toBe(false);
+    expect(live.isAfterInboxCutover(null)).toBe(false);
+    // Built by hand, without a migrations table: unknown counts as "before".
+    expect(agents.isAfterInboxCutover(agents.create("agent-b").agent.inbox_since)).toBe(false);
   });
 
   it("resets token", () => {

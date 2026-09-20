@@ -29,6 +29,10 @@ export interface TestApp {
   h: Harness;
   /** Inbox keys ensureConsumer was called with, in order. */
   ensured: string[];
+  /** The `since` that came with each of those calls. */
+  ensuredSince: (string | null | undefined)[];
+  /** Whether each call asked to replace a durable older than the agent. */
+  ensuredReplace: (boolean | undefined)[];
   natsUp: { value: boolean };
   touch: ReturnType<typeof vi.spyOn>;
 }
@@ -36,10 +40,14 @@ export interface TestApp {
 export function createTestApp(config: Partial<Config> = {}, extra: { now?: () => number } = {}): TestApp {
   const h = createHarness();
   const ensured: string[] = [];
+  const ensuredSince: (string | null | undefined)[] = [];
+  const ensuredReplace: (boolean | undefined)[] = [];
   const natsUp = { value: true };
   const nats: AppNats = Object.assign(h.nats, {
     ping: async () => natsUp.value,
-    ensureConsumer: async (inboxKey: string) => { ensured.push(inboxKey); },
+    ensureConsumer: async (inboxKey: string, since?: string | null, opts?: { replaceLeftBehind?: boolean }) => {
+      ensured.push(inboxKey); ensuredSince.push(since); ensuredReplace.push(opts?.replaceLeftBehind);
+    },
   });
   const touch = vi.spyOn(h.presence, "touch");
   const app = createApp({
@@ -47,7 +55,7 @@ export function createTestApp(config: Partial<Config> = {}, extra: { now?: () =>
     db: h.db, nats, agents: h.agents, activity: h.activity, presence: h.presence, rateLimiter: h.rateLimiter,
     now: extra.now,
   });
-  return { app, h, ensured, natsUp, touch };
+  return { app, h, ensured, ensuredSince, ensuredReplace, natsUp, touch };
 }
 
 export const MCP_HEADERS = {

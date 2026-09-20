@@ -162,10 +162,10 @@ export class AgentService {
 
     this.db
       .prepare(
-        `INSERT INTO agents (id, name, inbox_key, name_since, avatar, token_hash, is_active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        `INSERT INTO agents (id, name, inbox_key, name_since, inbox_since, avatar, token_hash, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       )
-      .run(id, name, inbox_key, now, avatar ?? null, token_hash, now, now);
+      .run(id, name, inbox_key, now, now, avatar ?? null, token_hash, now, now);
 
     clearTokenCache();
 
@@ -182,6 +182,7 @@ export class AgentService {
       name,
       inbox_key,
       name_since: now,
+      inbox_since: now,
       role: null,
       capabilities: null,
       token_hash,
@@ -258,6 +259,29 @@ export class AgentService {
     return false;
   }
 
+  private inboxCutover: string | null | undefined;
+
+  /**
+   * Was this `inbox_since` set by the running code, or backfilled by
+   * migration 0008? Only an agent created or reactivated after the rule came
+   * in may have a leftover durable replaced (see ConsumerRegistry). Unknown
+   * counts as "before": never delete on a guess.
+   */
+  isAfterInboxCutover(inboxSince: string | null | undefined): boolean {
+    if (!inboxSince) return false;
+    if (this.inboxCutover === undefined) {
+      try {
+        const row = this.db
+          .prepare("SELECT applied_at FROM _migrations WHERE name = '0008_agent_inbox_since.sql'")
+          .get() as { applied_at: string } | undefined;
+        this.inboxCutover = row?.applied_at ?? null;
+      } catch {
+        this.inboxCutover = null; // no migrations table: a database somebody built by hand
+      }
+    }
+    return this.inboxCutover !== null && inboxSince >= this.inboxCutover;
+  }
+
   reactivate(
     id: string,
     adminName?: string,
@@ -274,9 +298,11 @@ export class AgentService {
 
     this.db
       .prepare(
-        "UPDATE agents SET is_active = 1, token_hash = ?, updated_at = ? WHERE id = ?",
+        // The inbox starts over: the durables went with the revoke, and new
+        // ones must not hand out again what the stream still holds.
+        "UPDATE agents SET is_active = 1, token_hash = ?, inbox_since = ?, updated_at = ? WHERE id = ?",
       )
-      .run(token_hash, now, id);
+      .run(token_hash, now, now, id);
 
     clearTokenCache();
 

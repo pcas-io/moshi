@@ -149,6 +149,211 @@ describe("MCP tools — agent identity", () => {
   });
 });
 
+// inbox_pending is what the agents' loops trigger on ("only call mesh_receive
+// when it is > 0"). Three things used to make it lie.
+describe("MCP tools — inbox_pending counts messages for you, and nothing else", () => {
+  let h: Harness;
+  let alpha: Client;
+  let beta: Client;
+
+  beforeEach(async () => {
+    h = createHarness();
+    h.agents.create("alpha");
+    h.agents.create("beta");
+    alpha = await h.connect("alpha");
+    beta = await h.connect("beta");
+  });
+
+  it("does not count your own broadcast, in the reply to the send and afterwards", async () => {
+    const sent = await callTool(alpha, "mesh_send", { to: "broadcast", payload: "to all", context: CTX });
+    expect(sent.isError).toBe(false);
+    expect(sent.json.inbox_pending).toBe(0);
+    expect((await callTool(alpha, "mesh_status", {})).json.inbox_pending).toBe(0);
+    // Everybody else has it waiting.
+    expect((await callTool(beta, "mesh_status", {})).json.inbox_pending).toBe(1);
+  });
+
+  it("still counts what others broadcast while your own is in between", async () => {
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "from beta 1", context: CTX });
+    await callTool(alpha, "mesh_send", { to: "broadcast", payload: "from alpha", context: CTX });
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "from beta 2", context: CTX });
+    expect((await callTool(alpha, "mesh_status", {})).json.inbox_pending).toBe(2);
+    expect((await callTool(beta, "mesh_status", {})).json.inbox_pending).toBe(1);
+  });
+
+  it("mesh_receive never hands you your own broadcast, and fills the limit with the others", async () => {
+    await callTool(alpha, "mesh_send", { to: "broadcast", payload: "mine 1", context: CTX });
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "theirs 1", context: CTX });
+    await callTool(alpha, "mesh_send", { to: "broadcast", payload: "mine 2", context: CTX });
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "theirs 2", context: CTX });
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "theirs 3", context: CTX });
+    const first = await callTool(alpha, "mesh_receive", { limit: 2 });
+    expect(first.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["theirs 1", "theirs 2"]);
+    expect(first.json.inbox_pending).toBe(1);
+    const second = await callTool(alpha, "mesh_receive", {});
+    expect(second.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["theirs 3"]);
+    expect(second.json.inbox_pending).toBe(0);
+  });
+
+  it("reports what is left after a receive without your own broadcasts that the pull did not reach", async () => {
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "theirs 1", context: CTX });
+    await callTool(alpha, "mesh_send", { to: "broadcast", payload: "mine", context: CTX });
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "theirs 2", context: CTX });
+    const got = await callTool(alpha, "mesh_receive", { limit: 1 });
+    expect(got.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["theirs 1"]);
+    expect(got.json.inbox_pending).toBe(1); // "theirs 2"; "mine" is still in the consumer, and does not count
+  });
+
+  it("never subtracts more than the broadcast side holds, whatever the history says", async () => {
+    // A history that does not belong to this stream (a restored SQLite file):
+    // rows that claim to be alpha's broadcasts at sequences the stream uses
+    // for other messages. Only the clamp keeps them out of the direct mail.
+    for (let i = 0; i < 5; i++) await callTool(beta, "mesh_send", { to: "beta", payload: `filler ${i}`, context: CTX }); // seq 1..5
+    const insert = h.db.prepare(
+      `INSERT INTO messages (id, from_agent, to_agent, type, payload, context, correlation_id, reply_to, priority, ttl_seconds, created_at, stream_seq, from_key)
+       VALUES (?, 'alpha', 'broadcast', 'info', 'p', 'c', NULL, NULL, 'normal', 86400, ?, ?, 'alpha')`,
+    );
+    for (let i = 1; i <= 5; i++) insert.run(`msg_ghost${i}`, new Date().toISOString(), i);
+    await callTool(beta, "mesh_send", { to: "alpha", payload: "direct 1", context: CTX });
+    await callTool(beta, "mesh_send", { to: "alpha", payload: "direct 2", context: CTX });
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "theirs", context: CTX });
+    expect((await callTool(alpha, "mesh_status", {})).json.inbox_pending).toBe(2); // 3 waiting, at most the 1 broadcast can be "mine"
+    const got = await callTool(alpha, "mesh_receive", { limit: 1 });
+    expect(got.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["direct 1"]);
+    expect(got.json.inbox_pending).toBe(1); // 2 left, the clamp is by the broadcast side, not by the total
+  });
+
+  const payloadsOf = (r: { json: Record<string, any> }) => (r.json.messages as { payload: string }[]).map((m) => m.payload);
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("does not let the history of a lost stream hide new broadcasts: sequences start over, the rows stay", async () => {
+    for (let i = 1; i <= 3; i++) await callTool(alpha, "mesh_send", { to: "broadcast", payload: `old ${i}`, context: CTX });
+    expect(payloadsOf(await callTool(beta, "mesh_receive", {}))).toHaveLength(3);
+    await sleep(5);
+    h.nats.resetStream(); // the NATS volume is gone, SQLite is not
+    await sleep(5);
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "news 1", context: CTX });
+    expect((await callTool(alpha, "mesh_status", {})).json.inbox_pending).toBe(1);
+    await callTool(beta, "mesh_send", { to: "alpha", payload: "direct", context: CTX });
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "news 2", context: CTX });
+    const got = await callTool(alpha, "mesh_receive", { limit: 2 });
+    expect(payloadsOf(got)).toEqual(["direct", "news 1"]);
+    expect(got.json.inbox_pending).toBe(1);
+    expect((await callTool(alpha, "mesh_status", {})).json.inbox_pending).toBe(1);
+  });
+
+  it("subtracts nothing when the stream's bounds cannot be had: one too many costs an empty receive, one too few hides mail", async () => {
+    await callTool(alpha, "mesh_send", { to: "broadcast", payload: "mine", context: CTX });
+    h.nats.withoutBounds = true;
+    expect((await callTool(alpha, "mesh_status", {})).json.inbox_pending).toBe(1);
+    h.nats.withoutBounds = false;
+    expect((await callTool(alpha, "mesh_status", {})).json.inbox_pending).toBe(0);
+  });
+
+  it("does not take a deleted agent's broadcast for yours because you were given its name", async () => {
+    h.agents.create("xavier");
+    h.agents.create("yara");
+    const xavier = await h.connect("xavier");
+    await callTool(xavier, "mesh_send", { to: "broadcast", payload: "from the first xavier", context: CTX });
+    h.agents.deleteById(h.agents.getByName("xavier")!.id, "admin");
+    h.agents.rename(h.agents.getByName("yara")!.id, "xavier", "admin");
+    const renamed = await h.connect("xavier");
+    expect((await callTool(renamed, "mesh_status", {})).json.inbox_pending).toBe(1);
+    expect(payloadsOf(await callTool(renamed, "mesh_receive", {}))).toEqual(["from the first xavier"]);
+  });
+
+  it("knows a broadcast as yours after two renames, when neither the stream's name nor the history's is your name any more", async () => {
+    await callTool(alpha, "mesh_send", { to: "broadcast", payload: "sent as alpha", context: CTX });
+    const id = h.agents.getByName("alpha")!.id;
+    await sleep(5);
+    h.agents.rename(id, "tmpname", "admin");
+    await sleep(5);
+    h.agents.rename(id, "gamma", "admin");
+    const gamma = await h.connect("gamma");
+    expect((await callTool(gamma, "mesh_status", {})).json.inbox_pending).toBe(0);
+    expect(payloadsOf(await callTool(gamma, "mesh_receive", {}))).toEqual([]);
+  });
+
+  it("does not report your own expired broadcast as mail you missed", async () => {
+    await callTool(alpha, "mesh_send", { to: "broadcast", payload: "short-lived", context: CTX, ttl_seconds: 1 });
+    await sleep(1100);
+    const got = await callTool(alpha, "mesh_receive", {});
+    expect(got.json.messages).toEqual([]);
+    expect(got.json.expired_dropped).toBeUndefined();
+    expect(got.json.hint).toBe("No new messages.");
+  });
+
+  it("falls back to the name on the message when the history has no row for it", async () => {
+    // The publish landed, the history insert did not (or the row is gone).
+    await callTool(alpha, "mesh_send", { to: "broadcast", payload: "no row", context: CTX });
+    h.db.prepare("DELETE FROM messages").run();
+    const got = await callTool(alpha, "mesh_receive", {});
+    expect(got.json.messages).toEqual([]); // still its own, by the envelope
+    expect(payloadsOf(await callTool(beta, "mesh_receive", {}))).toEqual(["no row"]);
+  });
+
+  it("keeps a message it cannot judge rather than breaking the receive, and drops a body that is no message", async () => {
+    h.nats.enqueueRaw("mesh.broadcast", "null");
+    h.nats.enqueueRaw("mesh.agents.alpha.inbox", "42");
+    await callTool(beta, "mesh_send", { to: "broadcast", payload: "legitimate", context: CTX });
+    const got = await callTool(alpha, "mesh_receive", {});
+    expect(got.isError).toBe(false);
+    expect(payloadsOf(got)).toEqual(["legitimate"]);
+    expect(got.json.inbox_pending).toBe(0);
+  });
+
+  it("knows a broadcast as yours after you were renamed", async () => {
+    await callTool(alpha, "mesh_send", { to: "broadcast", payload: "before the rename", context: CTX });
+    h.agents.rename(h.agents.getByName("alpha")!.id, "gamma", "admin");
+    const gamma = await h.connect("gamma");
+    expect((await callTool(gamma, "mesh_status", {})).json.inbox_pending).toBe(0);
+    const got = await callTool(gamma, "mesh_receive", {});
+    expect(got.json.messages).toEqual([]);
+    expect(got.json.inbox_pending).toBe(0);
+  });
+
+  it("takes expired messages out instead of reporting an inbox it then shows as empty", async () => {
+    const past = new Date(Date.now() - 3600_000).toISOString();
+    const expired = (id: string) => ({ id, from: "beta", to: "alpha", type: "info", payload: "too late", context: CTX, correlation_id: null, reply_to: null, priority: "normal", ttl_seconds: 60, created_at: past });
+    h.nats.enqueue("alpha", expired("msg_old1"));
+    h.nats.enqueue("alpha", expired("msg_old2"));
+    await callTool(beta, "mesh_send", { to: "alpha", payload: "in time", context: CTX });
+    const got = await callTool(alpha, "mesh_receive", { limit: 1 });
+    expect(got.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["in time"]);
+    expect(got.json.inbox_pending).toBe(0);
+    expect(got.json.expired_dropped).toBe(2);
+  });
+
+  it("says so when everything that waited had expired", async () => {
+    const past = new Date(Date.now() - 3600_000).toISOString();
+    h.nats.enqueue("alpha", { id: "msg_old", from: "beta", to: "alpha", type: "info", payload: "too late", context: CTX, correlation_id: null, reply_to: null, priority: "normal", ttl_seconds: 60, created_at: past });
+    const got = await callTool(alpha, "mesh_receive", {});
+    expect(got.json.messages).toEqual([]);
+    expect(got.json.inbox_pending).toBe(0);
+    expect(got.json.expired_dropped).toBe(1);
+    expect(got.json.hint).toMatch(/expired/i);
+  });
+
+  it("never acks a message it does not return, even when the broker hands out other bytes than it showed", async () => {
+    // What nats.js does: `data` is a fresh object on every access.
+    const pull = h.nats.pullInbox.bind(h.nats);
+    h.nats.pullInbox = async (key, limit, opts) => {
+      const res = await pull(key, limit, opts);
+      return { ...res, messages: res.messages.map((m) => ({ ...m, data: m.data.slice() })) };
+    };
+    await callTool(beta, "mesh_send", { to: "alpha", payload: "must arrive", context: CTX });
+    const got = await callTool(alpha, "mesh_receive", {});
+    expect(got.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["must arrive"]);
+  });
+
+  it("does not take a direct message from yourself for a broadcast of yours", async () => {
+    await callTool(alpha, "mesh_send", { to: "alpha", payload: "note to self", context: CTX });
+    expect((await callTool(alpha, "mesh_status", {})).json.inbox_pending).toBe(1);
+    const got = await callTool(alpha, "mesh_receive", {});
+    expect(got.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["note to self"]);
+  });
+});
+
 describe("MCP tools — rename keeps the address", () => {
   let h: Harness;
   let alpha: Client;

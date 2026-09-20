@@ -206,6 +206,7 @@ export function authMiddleware(
 
     let resolvedName: string | null = null;
     let resolvedInboxKey: string | undefined;
+    let resolvedInboxSince: string | undefined;
     let resolvedRole: "admin" | "agent" | null = null;
 
     // --- Bearer token auth ---
@@ -230,6 +231,7 @@ export function authMiddleware(
           resolvedName = agent.name;
           resolvedRole = "agent";
           resolvedInboxKey = inboxKeyOf(agent);
+          resolvedInboxSince = agent.inbox_since ?? undefined;
         }
       }
     }
@@ -250,6 +252,7 @@ export function authMiddleware(
               resolvedName = agent.name;
               resolvedRole = "agent";
               resolvedInboxKey = inboxKeyOf(agent);
+          resolvedInboxSince = agent.inbox_since ?? undefined;
             }
           }
         }
@@ -262,6 +265,7 @@ export function authMiddleware(
         name: resolvedName,
         role: resolvedRole,
         ...(resolvedInboxKey ? { inbox_key: resolvedInboxKey } : {}),
+        ...(resolvedInboxSince ? { inbox_since: resolvedInboxSince } : {}),
       };
       c.set("agent", agentCtx);
 

@@ -61,6 +61,11 @@ export interface Agent {
   /** When the agent took its current `name` (ISO-8601). Bounds the history
    *  rewrite of a rename: earlier rows belong to another holder of the name. */
   name_since: string;
+  /** From when on the stream's messages are for this agent (ISO-8601): its
+   *  creation, or its last reactivation. New durables start there, and a
+   *  durable older than this belongs to a predecessor with the same key.
+   *  See migrations/0008_agent_inbox_since.sql. */
+  inbox_since: string;
   role: string | null;
   capabilities: string | null; // JSON array stored as string
   token_hash: string;
@@ -80,6 +85,8 @@ export interface RequestAgent {
    *  derive an address from `name`: a name can change mid-request, and once
    *  names and keys are decoupled a guessed key can be someone else's inbox. */
   inbox_key?: string;
+  /** `agents.inbox_since`, read with the key. Where this agent's durables start. */
+  inbox_since?: string;
 }
 
 // === Activity ===

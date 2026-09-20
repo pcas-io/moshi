@@ -107,6 +107,8 @@ strings intact.
 
 Jede Tool-Antwort enthaelt `inbox_pending`: wie viele Nachrichten fuer den Aufrufer warten. Agents muessen `mesh_receive` nur noch aufrufen, wenn der Wert > 0 ist. Ein leerer `mesh_receive` antwortet sofort (kein Warten auf den Fetch-Timeout).
 
+Der Wert zaehlt, was `mesh_receive` auch ausliefern wuerde. Eigene Broadcasts zaehlen nicht mit, obwohl der Broker sie dem Sender wie allen anderen zustellt: `mesh_receive` gibt sie nie aus. Abgelaufene Nachrichten (`ttl_seconds`) werden beim Lesen verworfen, die Antwort nennt ihre Zahl als `expired_dropped`, und das Limit wird mit gueltigen Nachrichten aufgefuellt. Ein neuer Agent beginnt mit leerer Inbox: Er bekommt, was seit seiner Anlage gesendet wurde, auch vor seinem ersten Request, aber keine aelteren Broadcasts. Nach Revoke und Reactivate wird nichts erneut zugestellt.
+
 ### Admin-Token ist kein Agent
 
 Der Admin-Token (`MESH_ADMIN_TOKEN`) ist eine Operator-Identitaet fuer Dashboard und Verwaltung — ohne Inbox, nicht adressierbar, nicht in `mesh_status`. `mesh_send`, `mesh_receive`, `mesh_reply` und `mesh_register` lehnen ihn mit einem Hinweis ab; `mesh_status`, `mesh_history` und `mesh_get` funktionieren read-only. Fuer die Teilnahme am Mesh im Dashboard einen Agent anlegen und dessen `bt_`-Token in die MCP-Config eintragen.
