@@ -5,7 +5,7 @@
 
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
-import type { ConversationThread, MessageView } from "../../services/message-queries.js";
+import type { ConversationSummary, ConversationThread, MessageView } from "../../services/message-queries.js";
 import type { PaginatedResult } from "../../types.js";
 import { DEFAULT_PREVIEW_CHARS, PRESENCE_TTL_SECONDS } from "../../types.js";
 import { MCP_TOOL_CATALOG } from "../../mcp/catalog.js";
@@ -16,9 +16,16 @@ import { V2_FONT_FAMILY_MONO, V2_TOKENS, kindColors } from "./tokens.js";
 const T = V2_TOKENS;
 
 export interface V2ConversationsProps {
-  result: PaginatedResult<ConversationThread>;
-  /** `?id=` — the thread to open. Falls back to the first one on the page. */
-  selectedId?: string;
+  /** The list: summaries, no message bodies. */
+  result: PaginatedResult<ConversationSummary>;
+  /** The open thread. The ROUTE decides: the one `?id=` names, wherever in
+   *  the history it is, else the first of this page. */
+  opened: ConversationThread | null;
+  /** `?id=` that matched nothing. The pane says so instead of showing some
+   *  other thread, which is what the old fallback did. */
+  unknownId?: string;
+  /** Render clock. Injected so page and fragment agree to the millisecond. */
+  now?: number;
   query?: string;
   /** Only threads this agent took part in (`?agent=`). */
   filterAgent?: string;
@@ -125,7 +132,7 @@ interface ThreadParties {
   title: string;
 }
 
-function partiesOf(thread: ConversationThread): ThreadParties {
+function partiesOf(thread: ConversationSummary): ThreadParties {
   const isBroadcast = thread.participants.includes(BROADCAST);
   const named = thread.participants.filter((p) => p !== BROADCAST);
   const a = named[0] ?? BROADCAST;
@@ -134,7 +141,7 @@ function partiesOf(thread: ConversationThread): ThreadParties {
   return { a, b, isBroadcast, title };
 }
 
-function metaLine(thread: ConversationThread, now: number): string {
+function metaLine(thread: ConversationSummary, now: number): string {
   const parts = [plural(thread.message_count, "message")];
   if (thread.first_context) parts.push(`about ${thread.first_context}`);
   parts.push(`last activity ${fmtRel(thread.last_activity, now)}`);
@@ -192,7 +199,7 @@ const KindPill: FC<{ type: string }> = ({ type }) => {
 };
 
 const ThreadRow: FC<{
-  thread: ConversationThread;
+  thread: ConversationSummary;
   selected: boolean;
   href: string;
   agentRoles: Record<string, string | null>;
@@ -210,6 +217,7 @@ const ThreadRow: FC<{
     <a
       class="d-thread"
       href={href}
+      data-id={thread.thread_id}
       aria-current={selected ? "true" : undefined}
       style={`padding:14px 20px;border-bottom:1px solid ${LINE_THREAD_ROW};cursor:pointer${state}`}
     >
@@ -266,7 +274,10 @@ const MessageRow: FC<{
       ? `background:${T.greenSoft};border:1px solid ${BUBBLE_LINE_OWN};border-bottom-right-radius:5px`
       : `background:${T.subtle};border:1px solid ${BUBBLE_LINE_OTHER};border-bottom-left-radius:5px`);
   return (
-    <div style={`display:flex;gap:12px;align-items:flex-end;flex-direction:${ownSide ? "row-reverse" : "row"}`}>
+    <div
+      data-id={message.id}
+      style={`display:flex;gap:12px;align-items:flex-end;flex-direction:${ownSide ? "row-reverse" : "row"}`}
+    >
       <V2Avatar name={message.from} role={role} size={34} bordered />
       <div
         style={"max-width:min(74%,720px);display:flex;flex-direction:column;" +
@@ -337,17 +348,31 @@ const DetailFooter: FC<{ lastMessageId?: string }> = ({ lastMessageId }) => (
   </div>
 );
 
-const DetailPane: FC<{
+/** The container of the open thread. Rendered by the page; its CHILDREN are
+ *  ConversationThreadSection, which is also what the fragment returns. */
+const PANE_STYLE = "flex:1 1 460px;min-width:0;display:flex;flex-direction:column";
+
+export interface ConversationThreadSectionProps {
   thread: ConversationThread | null;
+  /** `?id=` that matched nothing. */
+  unknownId?: string;
   agentRoles: Record<string, string | null>;
   now: number;
-}> = ({ thread, agentRoles, now }) => {
+}
+
+/**
+ * Everything inside the open-thread pane: header, messages, footer. One
+ * component for the page and for GET /fragments/conversations/thread, so the
+ * two cannot drift. No entrance animation in here — it would replay on every
+ * refresh.
+ */
+export const ConversationThreadSection: FC<ConversationThreadSectionProps> = ({ thread, unknownId, agentRoles, now }) => {
   const parties = thread ? partiesOf(thread) : null;
   const lastMessageId = thread?.messages[thread.messages.length - 1]?.id;
   const today = new Date(now);
   let openDay = "";
   return (
-    <div style="flex:1 1 460px;min-width:0;display:flex;flex-direction:column">
+    <>
       <div
         style={"display:flex;align-items:center;gap:14px;padding:18px clamp(16px,2.4vw,28px);" +
           `border-bottom:1px solid ${T.lineSoft};flex-wrap:wrap`}
@@ -381,6 +406,7 @@ const DetailPane: FC<{
 
       {thread && parties ? (
         <div
+          data-live-scroll="thread"
           style={"flex:1;overflow-y:auto;padding:24px clamp(16px,2.4vw,30px);" +
             "display:flex;flex-direction:column;gap:20px"}
         >
@@ -405,36 +431,124 @@ const DetailPane: FC<{
           style={"flex:1;display:flex;align-items:center;justify-content:center;" +
             `padding:24px clamp(16px,2.4vw,30px);font-size:14.5px;color:${T.dim}`}
         >
-          Pick a conversation on the left · もしもし
+          {unknownId
+            ? <span style="text-align:center;overflow-wrap:anywhere">
+                That conversation is not here. It may have aged out after 30 days,
+                or the id is not one of ours: <span style={`font-family:${V2_FONT_FAMILY_MONO}`}>{unknownId}</span>
+              </span>
+            : "Pick a conversation on the left · もしもし"}
         </div>
       )}
 
       <DetailFooter lastMessageId={lastMessageId} />
-    </div>
+    </>
   );
 };
 
-// ── Page ────────────────────────────────────────────────────────
-export const V2ConversationsPage: FC<V2ConversationsProps> = ({
-  result, selectedId, query, filterAgent, agentRoles, csrfToken, userRole, userName,
-}) => {
-  const now = Date.now();
-  // Search and agent filter are applied in SQL (listConversations), so
-  // `result.data` is already the filtered page.
-  const threads = result.data;
-  const opened = threads.find((t) => t.thread_id === selectedId) ?? threads[0] ?? null;
-  const liveCount = threads.filter((t) => isLive(t.last_activity, now)).length;
+// ── The list section ────────────────────────────────────────────
+export interface ConversationListSectionProps {
+  result: PaginatedResult<ConversationSummary>;
+  /** The open thread's id, for the highlight. May be a thread that is not
+   *  on this page. */
+  openedId?: string;
+  query?: string;
+  filterAgent?: string;
+  agentRoles: Record<string, string | null>;
+  now: number;
+}
 
+function filterQueryString(query?: string, filterAgent?: string): string {
   const filters = new URLSearchParams();
   if (query) filters.set("q", query);
   if (filterAgent) filters.set("agent", filterAgent);
-  const filterQs = filters.toString();
+  return filters.toString();
+}
+
+/** "12 threads · 3 still moving". liveCount is a count within this page.
+ *  Threads sort by last activity, so every moving one is on page 1 — past
+ *  that the clause would just read "0 still moving". */
+export function conversationCountLine(result: PaginatedResult<ConversationSummary>, now: number): string {
+  const liveCount = result.data.filter((t) => isLive(t.last_activity, now)).length;
+  return plural(result.total, "thread") + (result.offset === 0 ? ` · ${liveCount} still moving` : "");
+}
+
+/**
+ * Everything inside the thread list's scroller: rows and pager. One component
+ * for the page and for GET /fragments/conversations/list.
+ */
+export const ConversationListSection: FC<ConversationListSectionProps> = ({
+  result, openedId, query, filterAgent, agentRoles, now,
+}) => {
+  const threads = result.data;
+  const filterQs = filterQueryString(query, filterAgent);
   const pageQs = result.offset > 0 ? `${filterQs ? `${filterQs}&` : ""}offset=${result.offset}` : filterQs;
   const threadHref = (id: string): string =>
     `/conversations?id=${encodeURIComponent(id)}${pageQs ? `&${pageQs}` : ""}`;
   const pageHref = (offset: number): string =>
     offset > 0 ? `/conversations?offset=${offset}${filterQs ? `&${filterQs}` : ""}`
       : `/conversations${filterQs ? `?${filterQs}` : ""}`;
+  return (
+    <>
+      {threads.length === 0 ? (
+        <div style={`padding:32px 20px;font-size:13.5px;color:${T.faint};text-align:center`}>
+          {query
+            ? `Nothing matches "${query}".`
+            : "Nothing here yet · しずか — no conversations so far."}
+        </div>
+      ) : (
+        threads.map((thread) => (
+          <ThreadRow
+            thread={thread}
+            selected={openedId === thread.thread_id}
+            href={threadHref(thread.thread_id)}
+            agentRoles={agentRoles}
+            now={now}
+          />
+        ))
+      )}
+      {(result.offset > 0 || result.has_more) && (
+        <div
+          style={`display:flex;gap:14px;padding:14px 20px;border-top:1px solid ${LINE_THREAD_ROW};font-size:13px`}
+        >
+          {result.offset > 0 && (
+            <a href={pageHref(Math.max(0, result.offset - result.limit))}>← Newer</a>
+          )}
+          <span style="flex:1" />
+          {result.has_more && <a href={pageHref(result.offset + result.limit)}>Older →</a>}
+        </div>
+      )}
+    </>
+  );
+};
+
+/** The count line sits next to the search box, outside of the list, and a
+ *  refresh must never touch that box. The list fragment hands the current
+ *  line over in a response header (see OUT_OF_BAND_HEADER in fragments.tsx)
+ *  and the live script writes it in here as text. */
+export const COUNT_LINE_ID = "convos-count";
+
+/** The fragment URL of the list: same filters, same page, same highlight. */
+export function conversationListSrc(p: { query?: string; filterAgent?: string; offset: number; openedId?: string }): string {
+  const qs = new URLSearchParams(filterQueryString(p.query, p.filterAgent));
+  if (p.offset > 0) qs.set("offset", String(p.offset));
+  if (p.openedId) qs.set("id", p.openedId);
+  const text = qs.toString();
+  return `/fragments/conversations/list${text ? `?${text}` : ""}`;
+}
+
+/** The fragment URL of one thread. The id is pinned on purpose. */
+export function conversationThreadSrc(threadId: string): string {
+  return `/fragments/conversations/thread?id=${encodeURIComponent(threadId)}`;
+}
+
+// ── Page ────────────────────────────────────────────────────────
+export const V2ConversationsPage: FC<V2ConversationsProps> = ({
+  result, opened, unknownId, now: nowProp, query, filterAgent, agentRoles, csrfToken, userRole, userName,
+}) => {
+  const now = nowProp ?? Date.now();
+  // Search and agent filter are applied in SQL (listConversationSummaries),
+  // so `result.data` is already the filtered page.
+  const openedId = opened?.thread_id;
 
   return (
     <V2Layout
@@ -452,7 +566,8 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
           so the split never learns it has to wrap, and the page scrolled
           sideways by ~190px on a phone. */}
       <div style={`${CONTAINER_APP};width:100%;flex:1;display:flex;flex-direction:column`}>
-        {/* The one entrance animation on this screen. Never on the rows. */}
+        {/* The one entrance animation on this screen. Never on the rows, and
+            never inside a live container: it would replay on every refresh. */}
         <div class="m-rise" style={SPLIT_STYLE}>
           {/* Left: the thread panel */}
           <div style={PANEL_STYLE}>
@@ -460,12 +575,9 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
               <h1 style="margin:0 0 4px;font-size:21px;font-weight:600;letter-spacing:-0.02em">
                 Conversations
               </h1>
-              <div style={`font-size:13.5px;color:${T.faint}`}>
-                {plural(result.total, "thread")}
-                {/* liveCount is a count within this page. Threads sort by
-                    last activity, so every moving one is on page 1 — past
-                    that the clause would just read "0 still moving". */}
-                {result.offset === 0 ? ` · ${liveCount} still moving` : ""}
+              {/* Kept current by the list fragment, out of band. */}
+              <div id={COUNT_LINE_ID} style={`font-size:13.5px;color:${T.faint}`}>
+                {conversationCountLine(result, now)}
               </div>
               <form method="get" action="/conversations">
                 <input
@@ -493,40 +605,34 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
               )}
             </div>
 
-            <div style="flex:1;overflow-y:auto">
-              {threads.length === 0 ? (
-                <div style={`padding:32px 20px;font-size:13.5px;color:${T.faint};text-align:center`}>
-                  {query
-                    ? `Nothing matches "${query}".`
-                    : "Nothing here yet · しずか — no conversations so far."}
-                </div>
-              ) : (
-                threads.map((thread) => (
-                  <ThreadRow
-                    thread={thread}
-                    selected={opened?.thread_id === thread.thread_id}
-                    href={threadHref(thread.thread_id)}
-                    agentRoles={agentRoles}
-                    now={now}
-                  />
-                ))
-              )}
-              {(result.offset > 0 || result.has_more) && (
-                <div
-                  style={`display:flex;gap:14px;padding:14px 20px;border-top:1px solid ${LINE_THREAD_ROW};font-size:13px`}
-                >
-                  {result.offset > 0 && (
-                    <a href={pageHref(Math.max(0, result.offset - result.limit))}>← Newer</a>
-                  )}
-                  <span style="flex:1" />
-                  {result.has_more && <a href={pageHref(result.offset + result.limit)}>Older →</a>}
-                </div>
-              )}
+            <div
+              data-live="convos-list"
+              data-live-src={conversationListSrc({ query, filterAgent, offset: result.offset, openedId })}
+              data-live-mark={result.offset === 0 ? "rows" : undefined}
+              data-live-noun={result.offset === 0 ? "conversation" : undefined}
+              style="flex:1;overflow-y:auto"
+            >
+              <ConversationListSection
+                result={result}
+                openedId={openedId}
+                query={query}
+                filterAgent={filterAgent}
+                agentRoles={agentRoles}
+                now={now}
+              />
             </div>
           </div>
 
-          {/* Right: the open thread */}
-          <DetailPane thread={opened} agentRoles={agentRoles} now={now} />
+          {/* Right: the open thread. Live only when there is a thread. */}
+          <div
+            data-live={opened ? "convos-thread" : undefined}
+            data-live-src={opened ? conversationThreadSrc(opened.thread_id) : undefined}
+            data-live-mark={opened ? "rows" : undefined}
+            data-live-noun={opened ? "message" : undefined}
+            style={PANE_STYLE}
+          >
+            <ConversationThreadSection thread={opened} unknownId={unknownId} agentRoles={agentRoles} now={now} />
+          </div>
         </div>
       </div>
     </V2Layout>

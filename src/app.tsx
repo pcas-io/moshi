@@ -28,6 +28,7 @@ import { createSessionRoutes } from "./routes/session.js";
 import { createMcpRoute } from "./routes/mcp.js";
 import type { McpRouteNats } from "./routes/mcp.js";
 import { createDashboardRoutes } from "./routes/dashboard.js";
+import { createFragmentRoutes } from "./routes/fragments.js";
 import { createOAuthRoutes } from "./oauth.js";
 import { registerCliRoutes, requestOrigin } from "./services/cli-dist.js";
 import { LoginPage } from "./views/login.js";
@@ -45,9 +46,11 @@ export interface AppDeps {
   activity: ActivityService;
   presence: PresenceService;
   rateLimiter: RateLimiter;
+  /** Render clock for pages and fragments. Tests pin it. */
+  now?: () => number;
 }
 
-export function createApp({ config, db, nats, agents, activity, presence, rateLimiter }: AppDeps): Hono<HonoEnv> {
+export function createApp({ config, db, nats, agents, activity, presence, rateLimiter, now }: AppDeps): Hono<HonoEnv> {
   const app = new Hono<HonoEnv>();
 
   // --- Global error handler (C5) ---
@@ -165,7 +168,10 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   app.route("/", createMcpRoute({ nats, agents, activity, rateLimiter, presence, db }));
 
   // --- Dashboard pages, the connect flow and the agent admin actions ---
-  app.route("/", createDashboardRoutes({ db, nats, agents, activity, presence }));
+  app.route("/", createDashboardRoutes({ db, nats, agents, activity, presence, now }));
+
+  // --- The live sections' fragments (behind auth, like the pages) ---
+  app.route("/", createFragmentRoutes({ db, agents, presence, now }));
 
   // --- OAuth routes ---
   app.route("/", createOAuthRoutes(agents, db));

@@ -6,7 +6,7 @@
 // the redesign deleted.
 
 import { describe, it, expect } from "vitest";
-import { V2LogPage, parseLogTab, parseLogRouting, messageRoutingOf } from "../../../src/views/v2/log";
+import { V2LogPage, LogMessagesSection, parseLogTab, parseLogRouting, messageRoutingOf } from "../../../src/views/v2/log";
 import type { V2LogProps } from "../../../src/views/v2/log";
 import { auditSentence, entityLabel } from "../../../src/views/v2/activity";
 import { LOG_EMPTY_TEXT } from "../../../src/views/v2/messages";
@@ -378,5 +378,68 @@ describe("audit sentences", () => {
     expect(entityLabel("session")).toBe("sign-in");
     expect(entityLabel("agent")).toBe("agent change");
     expect(entityLabel("webhook")).toBe("webhook");
+  });
+});
+
+
+// ── The Messages tab refreshes itself ─────────────────────────────
+describe("V2LogPage — the messages card is a live section", () => {
+  const FIXED = Date.parse("2026-09-12T12:00:00Z");
+  const page = (rows: MessageView[], over: Partial<PaginatedResult<MessageView>> = {}): PaginatedResult<MessageView> =>
+    ({ data: rows, has_more: false, total: rows.length, limit: 50, offset: 0, ...over });
+  const base = (over: Partial<V2LogProps> = {}): V2LogProps =>
+    ({ tab: "messages", messages: page([msg()]), agentRoles: {}, now: FIXED, ...over });
+
+  it("marks the card as live and hands it the URL of its fragment, filters and page included", async () => {
+    const html = text(await render(base({
+      query: "redeploy", routing: "direct", filterAgent: "ops-kai",
+      messages: page([msg()], { offset: 50, total: 120, has_more: true }),
+    })));
+    expect(html).toContain('data-live="log-messages"');
+    expect(html).toContain('data-live-src="/fragments/log/messages?routing=direct&q=redeploy&agent=ops-kai&offset=50"');
+  });
+
+  it("does not mark rows as new on a later page, where every new message shifts them all", async () => {
+    expect(text(await render(base()))).toContain('data-live-mark="rows" data-live-noun="message"');
+    expect(text(await render(base({ messages: page([msg()], { offset: 50, total: 60 }) })))).not.toContain('data-live-mark="rows"');
+  });
+
+  it("gives every row a data-id and marks the sideways scroller", async () => {
+    const html = text(await render(base()));
+    expect(html).toContain('data-id="01JMSG000000000000000000"');
+    expect(html).toContain('data-live-scroll="log-x"');
+  });
+
+  it("is not live on the audit tab", async () => {
+    const html = text(await render({ tab: "audit", events: { data: [ev()], has_more: false, total: 1, limit: 50, offset: 0 }, agentRoles: {} }));
+    expect(html).not.toContain("data-live=");
+  });
+
+  it("renders the same markup as its fragment, entrance animation excluded", async () => {
+    const props = base({ query: "redeploy", messages: page([msg(), msg({ id: "01JMSG2", to: "broadcast" })], { has_more: true, total: 80 }) });
+    const html = await render(props);
+    const fragment = String(await Promise.resolve(LogMessagesSection(props)));
+    expect(fragment.length).toBeGreaterThan(300);
+    expect(html).toContain(fragment);
+    expect(fragment).not.toContain("m-rise");
+    // The pager is part of the section: its links carry the filters.
+    expect(text(fragment)).toContain("offset=50");
+  });
+
+  it("formats times against the injected clock: same day reads HH:MM, another day carries the date", async () => {
+    const sameDay = text(await render(base({ messages: page([msg({ created_at: "2026-09-12T09:41:00Z" })]) })));
+    const otherDay = text(await render(base({ now: Date.parse("2026-09-14T12:00:00Z") })));
+    expect(sameDay).not.toMatch(/12 Sep/);
+    expect(otherDay).toMatch(/12 Sep/);
+  });
+});
+
+
+describe("live refresh script", () => {
+  it("is included exactly once per page, with its marker style", async () => {
+    const html = await render({ tab: "messages", messages: { data: [msg()], has_more: false, total: 1, limit: 50, offset: 0 }, agentRoles: {} });
+    expect(html.split("window.__dLive").length - 1).toBe(2); // the guard reads and sets it: one script
+    expect(html.split("text/x-moshi-fragment").length - 1).toBe(1);
+    expect(html).toContain(".d-new-fade");
   });
 });

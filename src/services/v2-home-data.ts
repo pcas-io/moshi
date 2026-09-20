@@ -5,7 +5,7 @@ import type Database from "better-sqlite3";
 import type { PresenceService } from "./presence.js";
 import type { NatsPingable } from "./health.js";
 import { getHomeStats } from "./home-stats.js";
-import { listConversations } from "./message-queries.js";
+import { loadLatestThread } from "./section-loaders.js";
 import { buildAttentionItems } from "./attention.js";
 import { checkHealth, type HealthResult } from "./health.js";
 import {
@@ -99,24 +99,7 @@ export async function loadV2HomeData(
     last_seen_at: e.effectiveLastSeen,
   }));
 
-  const liveThread: V2HomeThread | null = (() => {
-    const recent = listConversations(db, { limit: 1, offset: 0 });
-    const t = recent.data[0];
-    if (!t) return null;
-    return {
-      correlation_id: t.thread_id,
-      context: t.first_context,
-      participants: t.participants,
-      messageCount: t.message_count,
-      messages: t.messages.map((m) => ({
-        id: m.id,
-        from: m.from,
-        type: m.type,
-        payload: m.payload,
-        created_at: m.created_at,
-      })),
-    };
-  })();
+  const liveThread = loadHomeLatestThread(db);
 
   // Health feeds the needs-attention band, and a backend that cannot answer
   // must not take the page down with it.
@@ -145,5 +128,40 @@ export async function loadV2HomeData(
     attention: buildAttentionItems({ db, health }),
     latestIncident: getLatestIncident(db),
     liveThread,
+  };
+}
+
+
+/** The most recently active thread in the shape Home's card draws. */
+export function loadHomeLatestThread(db: Database.Database): V2HomeThread | null {
+  const t = loadLatestThread(db);
+  if (!t) return null;
+  return {
+    correlation_id: t.thread_id,
+    context: t.first_context,
+    participants: t.participants,
+    messageCount: t.message_count,
+    messages: t.messages.map((m) => ({
+      id: m.id,
+      from: m.from,
+      type: m.type,
+      payload: m.payload,
+      created_at: m.created_at,
+    })),
+  };
+}
+
+/**
+ * Everything the "Latest conversation" card needs, for its fragment. The
+ * page gets the same thread through loadV2HomeData and the same agents, of
+ * which the card reads name, role and presence only. One presence read.
+ */
+export async function loadHomeLatest(
+  { db, presence }: Pick<V2HomeDataInput, "db" | "presence">,
+): Promise<{ thread: V2HomeThread | null; agents: Pick<V2HomeAgent, "name" | "role" | "presence">[] }> {
+  const entries = await presence.list();
+  return {
+    thread: loadHomeLatestThread(db),
+    agents: entries.map((e) => ({ name: e.agent.name, role: e.agent.role, presence: e.presence })),
   };
 }

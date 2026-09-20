@@ -33,7 +33,7 @@ export interface TestApp {
   touch: ReturnType<typeof vi.spyOn>;
 }
 
-export function createTestApp(config: Partial<Config> = {}): TestApp {
+export function createTestApp(config: Partial<Config> = {}, extra: { now?: () => number } = {}): TestApp {
   const h = createHarness();
   const ensured: string[] = [];
   const natsUp = { value: true };
@@ -45,6 +45,7 @@ export function createTestApp(config: Partial<Config> = {}): TestApp {
   const app = createApp({
     config: { ...TEST_CONFIG, ...config },
     db: h.db, nats, agents: h.agents, activity: h.activity, presence: h.presence, rateLimiter: h.rateLimiter,
+    now: extra.now,
   });
   return { app, h, ensured, natsUp, touch };
 }

@@ -46,6 +46,15 @@ describe("Message Service", () => {
     expect(msg.reply_to).toBe("msg_prev");
   });
 
+  it("takes a correlation id as a name for a thread: trimmed, and none at all when nothing is left", () => {
+    const base = { from: "alpha", to: "beta", type: "info", payload: "p", context: "c" };
+    expect(createMessage({ ...base, correlation_id: " topic-1 " }).correlation_id).toBe("topic-1");
+    expect(createMessage({ ...base, correlation_id: "" }).correlation_id).toBeNull();
+    expect(createMessage({ ...base, correlation_id: "   " }).correlation_id).toBeNull();
+    expect(createMessage({ ...base }).correlation_id).toBeNull();
+    expect(createMessage({ ...base, correlation_id: "msg_01ABC" }).correlation_id).toBe("msg_01ABC");
+  });
+
   it("throws when payload exceeds 256 KB", () => {
     const largePayload = "x".repeat(262145);
     expect(() =>

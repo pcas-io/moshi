@@ -10,10 +10,8 @@ import { describe, it, expect } from "vitest";
 import { kindColors, KIND_COLORS } from "../../../src/views/v2/tokens";
 import { kindLabel } from "../../../src/views/v2/components";
 import { deriveAvatarSpec, renderAvatarSvg } from "../../../src/views/v2/avatar";
-import { threadScript } from "../../../src/views/v2/home-thread";
 import { MessagesTable } from "../../../src/views/v2/messages";
 import { roleIndex } from "../../../src/views/v2/role-index";
-import vm from "node:vm";
 
 const INHERITED = ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"];
 
@@ -87,45 +85,5 @@ describe("lookups keyed by agent-controlled strings", () => {
       agentRoles: {},
     } as never)));
     expect(html).toContain("constructor");
-  });
-
-  it("the home thread script draws an emblem only for agents it knows", () => {
-    const html = String(threadScript("thread-1", "me", { scout: "<svg id='scout'/>" }));
-    const js = html.replace(/^<script>/, "").replace(/<\/script>$/, "");
-    new vm.Script(js); // still a valid classic script
-
-    type Node = {
-      style: Record<string, string>; children: Node[]; attrs: Record<string, string>;
-      innerHTML: string; textContent: string; scrollTop: number; scrollHeight: number;
-      setAttribute(k: string, v: string): void; getAttribute(k: string): string | undefined;
-      appendChild(n: Node): void; querySelector(): null;
-    };
-    const node = (): Node => ({
-      style: {}, children: [], attrs: {}, innerHTML: "", textContent: "", scrollTop: 0, scrollHeight: 0,
-      setAttribute(k, v) { this.attrs[k] = v; },
-      getAttribute(k) { return this.attrs[k]; },
-      appendChild(n) { this.children.push(n); },
-      querySelector() { return null; },
-    });
-    const box = node();
-    let onMessage: ((ev: { data: string }) => void) | undefined;
-    vm.runInNewContext(js, {
-      document: { getElementById: () => box, createElement: node },
-      EventSource: function () {
-        return { addEventListener: (_: string, h: (ev: { data: string }) => void) => { onMessage = h; }, close() {} };
-      },
-      window: { addEventListener() {} },
-      JSON, String, Date, Object, encodeURIComponent,
-    });
-    expect(onMessage).toBeTypeOf("function");
-
-    for (const from of ["scout", "SCOUT", "constructor", "toString", "__proto__"]) {
-      onMessage!({ data: JSON.stringify({ id: "m_" + from, from, payload: "hi", created_at: "2026-09-19T10:00:00.000Z" }) });
-    }
-    const emblemOf = (id: string) => box.children.find((r) => r.attrs["data-msg-id"] === id)!.children[0]!.innerHTML;
-    expect(box.children).toHaveLength(5);
-    expect(emblemOf("m_scout")).toBe("<svg id='scout'/>");
-    expect(emblemOf("m_SCOUT")).toBe("<svg id='scout'/>");
-    for (const from of ["constructor", "toString", "__proto__"]) expect(emblemOf("m_" + from), from).toBe("");
   });
 });

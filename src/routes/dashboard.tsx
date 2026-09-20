@@ -15,7 +15,7 @@ import type { NatsPingable } from "../services/health.js";
 import { generateCsrfToken, getCookieSecret } from "../auth.js";
 import { createAgentAdminRoutes } from "./agent-admin.js";
 import { createAgentConnectRoutes } from "./agent-connect.js";
-import { listMessages, listConversations } from "../services/message-queries.js";
+import { loadConversationList, loadLogMessages, loadOpenThread, readConversationsQuery } from "../services/section-loaders.js";
 import { getFlash } from "../services/flash.js";
 import { loadV2HomeData } from "../services/v2-home-data.js";
 import { loadV2AgentsData } from "../services/v2-agents-data.js";
@@ -41,13 +41,15 @@ export interface DashboardDeps {
   agents: AgentService;
   activity: ActivityService;
   presence: PresenceService;
+  /** Render clock. Injected by tests so page and fragment agree exactly. */
+  now?: () => number;
 }
 
 function cookieSecretFor(env: Env): string {
   return getCookieSecret(env as unknown as Record<string, string | undefined>);
 }
 
-export function createDashboardRoutes({ db, nats, agents, activity, presence }: DashboardDeps): Hono<HonoEnv> {
+export function createDashboardRoutes({ db, nats, agents, activity, presence, now = Date.now }: DashboardDeps): Hono<HonoEnv> {
   const dash = new Hono<HonoEnv>();
 
   // --- Dashboard: Home (v2) ---
@@ -58,6 +60,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence }: 
     return c.html(
       <V2HomePage
         {...data}
+        now={new Date(now())}
         userRole={agent?.role ?? undefined}
         userName={agent?.name ?? undefined}
         csrfToken={csrfToken}
@@ -151,6 +154,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence }: 
       userRole: agent?.role ?? undefined,
       userName: agent?.name ?? undefined,
       csrfToken: generateCsrfToken(cookieSecretFor(c.env)),
+      now: now(),
     };
 
     if (tab === "audit") {
@@ -168,13 +172,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence }: 
     return c.html(
       <V2LogPage
         {...shared}
-        messages={listMessages(db, {
-          limit: LIMITS.PAGINATION_DEFAULT,
-          offset,
-          agent: filterAgent,
-          q: query,
-          routing: messageRoutingOf(routing),
-        })}
+        messages={loadLogMessages(db, { offset, agent: filterAgent, q: query, routing: messageRoutingOf(routing) })}
       />,
     );
   });
@@ -198,24 +196,18 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence }: 
     const agent = c.get("agent");
     const csrfToken = generateCsrfToken(cookieSecretFor(c.env));
 
-    const offsetParam = parseInt(c.req.query("offset") ?? "0", 10);
-    const offset = isNaN(offsetParam) || offsetParam < 0 ? 0 : offsetParam;
-    const query = c.req.query("q")?.trim() || undefined;
-    const filterAgent = c.req.query("agent")?.trim() || undefined;
-    const result = listConversations(db, {
-      limit: LIMITS.PAGINATION_DEFAULT,
-      offset,
-      q: query,
-      agent: filterAgent,
-    });
-    const allAgents = agents.list();
+    const query = readConversationsQuery((key) => c.req.query(key));
+    const result = loadConversationList(db, query);
+    const { opened, unknownId } = loadOpenThread(db, query, result);
     return c.html(
       <V2ConversationsPage
         result={result}
-        selectedId={c.req.query("id")}
-        query={query}
-        filterAgent={filterAgent}
-        agentRoles={roleIndex(allAgents)}
+        opened={opened}
+        unknownId={unknownId}
+        now={now()}
+        query={query.q}
+        filterAgent={query.agent}
+        agentRoles={roleIndex(agents.list())}
         userRole={agent?.role ?? undefined}
         userName={agent?.name ?? undefined}
         csrfToken={csrfToken}

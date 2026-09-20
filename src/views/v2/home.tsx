@@ -9,8 +9,9 @@
 // Gone from the SENTINEL version: the dark hero, the four-cell KPI band, the
 // force-directed mesh topology (and `layout-engine.ts` with it), the recent
 // activity list and the hidden avatar pool the SSE script used to clone from.
-// The live thread stays: it is the one place on the dashboard where waiting
-// for a reload would be wrong.
+// The latest conversation refreshes itself (a live section, see
+// live-refresh.ts): it is the one place on Home where waiting for a reload
+// would be wrong.
 
 import type { FC } from "hono/jsx";
 import { PRESENCE_TTL_SECONDS } from "../../types.js";
@@ -25,15 +26,12 @@ import {
   V2Avatar,
   V2Btn,
 } from "./components.js";
-import { renderAvatarSvg } from "./avatar.js";
 import {
   bubbleStyle,
   colStyle,
   headStyle,
   PREVIEW_MAX,
   rowStyle,
-  THREAD_BOX_ID,
-  threadScript,
   TIME_STYLE,
 } from "./home-thread.js";
 
@@ -366,17 +364,27 @@ function threadTitle(thread: V2HomeThread | null): string {
 }
 
 /** One side of the conversation sits right for the whole card — the second
- *  named participant, the way the Conversations screen orders them. The
- *  server render and the SSE script must agree on it, so both ask here. */
+ *  named participant, the way the Conversations screen orders them. */
 function rightSide(thread: V2HomeThread | null): string {
   return (namedParticipants(thread)[1] ?? "").toLowerCase();
 }
 
-const LatestConversation: FC<{
+/** Where the card refreshes itself from. */
+export const HOME_LATEST_SRC = "/fragments/home/latest";
+
+export interface LatestConversationProps {
   thread: V2HomeThread | null;
-  agents: V2HomeAgent[];
+  /** Name, role and presence are all the card reads of an agent. */
+  agents: ReadonlyArray<Pick<V2HomeAgent, "name" | "role" | "presence">>;
   now: Date;
-}> = ({ thread, agents, now }) => {
+}
+
+/**
+ * Everything inside the "Latest conversation" card. One component for the
+ * page and for GET /fragments/home/latest, so the refreshed card cannot look
+ * different from the one the page rendered.
+ */
+export const LatestConversationSection: FC<LatestConversationProps> = ({ thread, agents, now }) => {
   const roleOf = (name: string): string | undefined =>
     agents.find((a) => a.name.toLowerCase() === name.toLowerCase())?.role ?? undefined;
   const presenceOf = (name: string): Presence | undefined =>
@@ -393,7 +401,7 @@ const LatestConversation: FC<{
   );
 
   return (
-    <section style={CARD_SHELL}>
+    <>
       <div style={`${CARD_HEAD};display:flex;align-items:center;gap:12px`}>
         <div style="flex:1;min-width:0">
           <h2 style={CARD_H2}>Latest conversation</h2>
@@ -411,18 +419,19 @@ const LatestConversation: FC<{
       </div>
 
       <div
-        id={THREAD_BOX_ID}
+        data-live-scroll="home-thread"
+        data-live-follow="bottom"
         style="padding:18px 22px;display:flex;flex-direction:column;gap:14px;max-height:340px;overflow-y:auto"
       >
         {messages.length === 0 ? (
-          <div data-empty="1" style={`font-size:14px;color:${T.faint};padding:26px 0;text-align:center`}>
+          <div style={`font-size:14px;color:${T.faint};padding:26px 0;text-align:center`}>
             Nothing here yet · しずか — no conversations so far.
           </div>
         ) : (
           messages.slice(-BUBBLES_SHOWN).map((m) => {
             const isMine = m.from.toLowerCase() === mine;
             return (
-              <div key={m.id} data-msg-id={m.id} style={rowStyle(isMine)}>
+              <div key={m.id} data-id={m.id} style={rowStyle(isMine)}>
                 <V2Avatar name={m.from} role={roleOf(m.from)} size={28} bordered />
                 <div style={colStyle(isMine)}>
                   <div style={headStyle(isMine)}>
@@ -455,9 +464,17 @@ const LatestConversation: FC<{
           </span>
         </div>
       )}
-    </section>
+    </>
   );
 };
+
+/** The card itself: a live container around the section. Live also without a
+ *  thread, so the first conversation of a mesh appears by itself. */
+const LatestConversation: FC<LatestConversationProps> = (props) => (
+  <section data-live="home-latest" data-live-src={HOME_LATEST_SRC} data-live-mark="rows" data-live-noun="message" style={CARD_SHELL}>
+    <LatestConversationSection {...props} />
+  </section>
+);
 
 // ── Card B — What everyone is working on ────────────────────────
 
@@ -576,19 +593,6 @@ export const V2HomePage: FC<V2HomeProps> = ({
 }) => {
   const clock = now ?? new Date();
   const empty = stats.agentsTotal === 0;
-  const mine = rightSide(liveThread);
-  // Only the thread's own parties. The whole roster would inline up to
-  // MAX_AGENTS emblems at ~850 bytes each into a script that draws two or
-  // three; an unknown sender falls back to the plain bordered box.
-  const emblems: Record<string, string> = {};
-  if (liveThread) {
-    const parties = new Set(namedParticipants(liveThread).map((p) => p.toLowerCase()));
-    for (const a of agents) {
-      const key = a.name.toLowerCase();
-      if (parties.has(key)) emblems[key] = renderAvatarSvg(a.name, a.role ?? undefined, { size: 28 });
-    }
-  }
-
   return (
     <V2Layout title="Home" active="HOME" userRole={userRole} userName={userName} csrfToken={csrfToken}>
       {empty ? (
@@ -604,7 +608,6 @@ export const V2HomePage: FC<V2HomeProps> = ({
             <WorkingOn agents={agents} total={stats.agentsTotal} />
           </div>
           <ConnectPrompt />
-          {liveThread && threadScript(liveThread.correlation_id, mine, emblems)}
         </>
       )}
     </V2Layout>

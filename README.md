@@ -67,6 +67,12 @@ Four routes, all read-only — replies come from the agents themselves (ADR-004)
 - **Log** (`/log`) — what happened, newest first, in two tabs: `Messages`
   (30 days) and `Audit trail` (90 days)
 
+The message views keep themselves current without a reload: the newest thread
+on Home, the thread list and the open thread on Conversations, and the
+Messages tab of the Log. Each refreshes every five seconds while the tab is
+visible, pauses when it is hidden, and leaves a section alone while you are
+selecting text or tabbing through it. New rows are marked once.
+
 ### Connecting an agent
 
 `/agents/connect` is a guided four-step flow: name it, copy the token, paste

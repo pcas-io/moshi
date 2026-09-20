@@ -12,6 +12,7 @@ import {
   type V2HomeAgent,
   type V2HomeProps,
   type V2HomeThread,
+  LatestConversationSection,
 } from "../../../src/views/v2/home";
 import type { AttentionItem } from "../../../src/services/attention";
 
@@ -299,11 +300,42 @@ describe("V2HomePage — the two cards", () => {
     expect(html).not.toContain(">sec-warden<");
   });
 
-  it("wires the live thread to SSE without an avatar pool", async () => {
+  it("makes the latest conversation a live section instead of a client-side renderer", async () => {
     const html = await render(props({ liveThread: thread() }));
-    expect(html).toContain("/sse/threads/");
-    expect(html).toContain('id="v2-live-thread"');
+    expect(html).toContain('data-live="home-latest"');
+    expect(html).toContain('data-live-src="/fragments/home/latest"');
+    expect(html).toContain('data-live-scroll="home-thread" data-live-follow="bottom"');
+    expect(html).toMatch(/data-live="home-latest"[^>]*data-live-mark="rows"/);
+    expect(html).toContain('data-live-noun="message"');
+    // Hooks of the removed client-side renderer: nothing reads them any more.
+    expect(html).not.toContain('id="v2-live-thread"');
+    expect(html).not.toContain("data-empty");
+    // The second renderer is gone: no stream, no bubble builder, no emblem map.
+    expect(html).not.toContain("/sse/threads/");
+    expect(html).not.toContain("EventSource");
+    expect(html).not.toContain("var emblems");
     expect(html).not.toContain("v2-avatar-pool");
+  });
+
+  it("gives every bubble a data-id, so a refresh can tell what is new", async () => {
+    const t = thread();
+    const html = await render(props({ liveThread: t }));
+    for (const m of t.messages.slice(-4)) expect(html).toContain(`data-id="${m.id}"`);
+  });
+
+  it("renders the card's inside from one component, shared with its fragment", async () => {
+    const p = props({ liveThread: thread() });
+    const html = await render(p);
+    const inside = String(await Promise.resolve(LatestConversationSection({ thread: p.liveThread, agents: p.agents, now: p.now! })));
+    expect(inside.length).toBeGreaterThan(200);
+    expect(html).toContain(inside);
+    expect(inside).not.toContain("m-rise");
+  });
+
+  it("keeps the card live when there is no conversation yet, so the first one can appear", async () => {
+    const html = await render(props({ liveThread: null }));
+    expect(html).toContain('data-live="home-latest"');
+    expect(html).toContain("no conversations so far");
   });
 
   // `participants` carries recipients, so it holds the `broadcast` sentinel.
@@ -320,13 +352,6 @@ describe("V2HomePage — the two cards", () => {
     expect(html).not.toContain("and broadcast");
   });
 
-  // The SSE script inlines an emblem per name it might have to draw. The
-  // whole roster would be up to MAX_AGENTS of them for a two-party thread.
-  it("inlines emblems only for the thread's own parties", async () => {
-    const html = await render(props({ liveThread: thread() }));
-    const map = /var emblems = (\{.*?\});/s.exec(html)?.[1] ?? "";
-    expect(Object.keys(JSON.parse(map)).sort()).toEqual(["ops-kai", "triage-1"]);
-  });
 });
 
 describe("V2HomePage — connect prompt and empty state", () => {
