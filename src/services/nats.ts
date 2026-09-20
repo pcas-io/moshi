@@ -19,14 +19,17 @@ import {
 } from "./inbox.js";
 import { CircuitBreaker, BrokerUnavailableError } from "./circuit-breaker.js";
 import { ConsumerRegistry } from "./consumers.js";
+import type { EnsureOptions } from "./consumers.js";
 import type {
   ConsumerSource,
   InboxPull,
+  InboxStream,
+  PullOptions,
   InboxPending,
   PulledMessage,
 } from "./inbox.js";
 
-export type { PulledMessage, InboxPull, InboxPending } from "./inbox.js";
+export type { PulledMessage, InboxPull, InboxPending, PullOptions } from "./inbox.js";
 
 const STREAM_NAME = "MESH_MESSAGES";
 const KV_BUCKET = "mesh-presence";
@@ -103,10 +106,7 @@ export class NatsService {
   // Down until connect() has succeeded: a call before that fails fast
   // instead of dereferencing a client that does not exist yet.
   private readonly breaker = new CircuitBreaker({ coolDownMs: BREAKER_COOL_DOWN_MS, startDown: true });
-  private readonly consumers = new ConsumerRegistry({
-    info: (name) => this.jsm.consumers.info(STREAM_NAME, name),
-    add: (config) => this.jsm.consumers.add(STREAM_NAME, config),
-  });
+  private readonly consumers: ConsumerRegistry;
 
   /** Keys whose durables a delete could not remove (outage). They are
    *  removed before the key is ensured again: otherwise a new agent that is
@@ -114,7 +114,17 @@ export class NatsService {
    *  a restart in between leaves the durables to the next delete. */
   private readonly pendingDeletes = new Set<string>();
 
-  constructor(private url: string) {}
+  /** `consumerClockToleranceMs`: see ConsumerRegistry. Only tests change it. */
+  constructor(private url: string, opts: { consumerClockToleranceMs?: number } = {}) {
+    this.consumers = new ConsumerRegistry(
+      {
+        info: (name) => this.jsm.consumers.info(STREAM_NAME, name),
+        add: (config) => this.jsm.consumers.add(STREAM_NAME, config),
+        delete: (name) => this.jsm.consumers.delete(STREAM_NAME, name),
+      },
+      { clockToleranceMs: opts.consumerClockToleranceMs },
+    );
+  }
 
   /** Every broker call goes through here. */
   private guarded<T>(fn: () => Promise<T>, isOutage: (err: unknown) => boolean = isNatsOutage): Promise<T> {
@@ -212,18 +222,20 @@ export class NatsService {
     this.breaker.markUp();
   }
 
+  /** Resolves with the stream sequence the broker stored the message under. */
   async publish(
     subject: string,
     data: Uint8Array,
     msgId: string,
-  ): Promise<void> {
-    await this.guarded(() => this.js.publish(subject, data, { msgID: msgId, timeout: PUBLISH_TIMEOUT_MS }));
+  ): Promise<{ seq: number; duplicate: boolean }> {
+    const ack = await this.guarded(() => this.js.publish(subject, data, { msgID: msgId, timeout: PUBLISH_TIMEOUT_MS }));
+    return { seq: ack.seq, duplicate: ack.duplicate };
   }
 
   /** `inboxKey` is `agents.inbox_key` — the agent's immutable address, not
    *  its display name. Subject and durable names derive from it. Asked of the
    *  broker once per key; throws when the broker cannot be asked. */
-  async ensureConsumer(inboxKey: string): Promise<void> {
+  async ensureConsumer(inboxKey: string, since?: string | null, opts: EnsureOptions = {}): Promise<void> {
     const key = inboxKey.toLowerCase();
     if (this.pendingDeletes.has(key)) {
       // A delete the outage swallowed. Finish it first, or the durables of
@@ -235,7 +247,7 @@ export class NatsService {
     // Through it, a memory hit on a half-open breaker counted as a successful
     // probe and closed it while the broker was still away.
     if (this.consumers.has(key)) return;
-    await this.guarded(() => this.consumers.ensure(key));
+    await this.guarded(() => this.consumers.ensure(key, since, opts));
   }
 
   /** Remove both durables. "Not found" is fine; an outage is reported, so the
@@ -275,13 +287,14 @@ export class NatsService {
    * instead of blocking on the fetch deadline. Throws when the broker is
    * unreachable — callers degrade to "retry shortly".
    */
-  async pullInbox(inboxKey: string, limit: number): Promise<InboxPull> {
-    const pull = await this.guarded(() => pullInbox(this.consumerSource(), inboxKey, limit));
+  async pullInbox(inboxKey: string, limit: number, opts: PullOptions = {}): Promise<InboxPull> {
+    const pull = await this.guarded(() => pullInbox(this.consumerSource(), inboxKey, limit, opts));
     // A durable is gone although this process had ensured it (deleted by
     // hand, by another process, stream recreated). Look again next time: on
     // main every request did, and an agent must not sit in front of an
     // "empty" inbox until the next restart.
     if (pull.missing) this.consumers.forget(inboxKey);
+    if (pull.remainingBroadcast > 0) pull.stream = await this.streamBounds();
     return pull;
   }
 
@@ -289,7 +302,23 @@ export class NatsService {
   async inboxPending(inboxKey: string): Promise<InboxPending> {
     const pending = await this.guarded(() => inboxPending(this.consumerSource(), inboxKey));
     if (pending.missing) this.consumers.forget(inboxKey);
+    if (pending.broadcast > 0) pending.stream = await this.streamBounds();
     return pending;
+  }
+
+  /**
+   * When the stream was created and which sequences it holds right now: what
+   * a caller needs to tell which history rows are in it. Asked only while
+   * broadcasts are waiting. Null when it cannot be had; the caller then
+   * subtracts nothing, which is the safe direction.
+   */
+  private async streamBounds(): Promise<InboxStream | null> {
+    try {
+      const info = await this.guarded(() => this.jsm.streams.info(STREAM_NAME));
+      return { created: String(info.created), firstSeq: info.state.first_seq, lastSeq: info.state.last_seq };
+    } catch {
+      return null;
+    }
   }
 
   /**

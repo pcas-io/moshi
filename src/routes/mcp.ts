@@ -21,7 +21,9 @@ import { log } from "../services/logger.js";
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
 
 /** What the route needs from NATS: the tool surface plus consumer creation. */
-export type McpRouteNats = MeshNats & { ensureConsumer(inboxKey: string): Promise<void> };
+export type McpRouteNats = MeshNats & {
+  ensureConsumer(inboxKey: string, since?: string | null, opts?: { replaceLeftBehind?: boolean }): Promise<void>;
+};
 
 export interface McpRouteDeps {
   nats: McpRouteNats;
@@ -85,7 +87,13 @@ export function createMcpRoute({ nats, agents, activity, rateLimiter, presence, 
     // inbox by design (see ADMIN_NOT_AGENT_HINT), so no consumers for it.
     if (!isAdmin) {
       try {
-        await nats.ensureConsumer(inboxKey);
+        // From the agent's inbox_since: new durables start there. One that is
+        // older was a predecessor's, and is replaced, but only for an agent
+        // that came after that rule: an older one may have been reading from
+        // an inherited durable all along.
+        await nats.ensureConsumer(inboxKey, agent?.inbox_since, {
+          replaceLeftBehind: agents.isAfterInboxCutover(agent?.inbox_since),
+        });
       } catch {
         // Non-fatal — consumer creation may fail on first request, retry on next
       }

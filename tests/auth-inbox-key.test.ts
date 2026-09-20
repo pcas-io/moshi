@@ -40,9 +40,10 @@ const bearer = (token: string): RequestInit => ({
 describe("authMiddleware — inbox key on the request", () => {
   it("hands the route the key from the agent's record", async () => {
     const { app, agents } = build();
-    const { plaintextToken } = agents.create("Scout");
+    const { agent, plaintextToken } = agents.create("Scout");
     const who = await (await app.request("/mcp", bearer(plaintextToken))).json();
-    expect(who).toEqual({ name: "Scout", role: "agent", inbox_key: "scout" });
+    // … and from when on the stream is for it: where its durables start.
+    expect(who).toEqual({ name: "Scout", role: "agent", inbox_key: "scout", inbox_since: agent.inbox_since });
   });
 
   it("keeps the key and follows the name after a rename, on the same token", async () => {
@@ -51,7 +52,7 @@ describe("authMiddleware — inbox key on the request", () => {
     await app.request("/mcp", bearer(plaintextToken)); // warm the token cache
     agents.rename(agent.id, "scout-eu");
     const who = await (await app.request("/mcp", bearer(plaintextToken))).json();
-    expect(who).toEqual({ name: "scout-eu", role: "agent", inbox_key: "scout" });
+    expect(who).toEqual({ name: "scout-eu", role: "agent", inbox_key: "scout", inbox_since: agent.inbox_since });
   });
 
   it("gives the admin no inbox key: it has no inbox", async () => {

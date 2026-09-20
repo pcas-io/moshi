@@ -42,7 +42,7 @@ function setup() {
   };
   const consumer = { info: vi.fn(async () => ({ num_pending: 0, num_ack_pending: 0 })), fetch: vi.fn() };
   const js = {
-    publish: vi.fn(async () => ({ seq: 1 })),
+    publish: vi.fn(async () => ({ seq: 1, duplicate: false })),
     consumers: { get: vi.fn(async (_s: string, name: string) => { if (!durables.has(name)) throw notFound(); return consumer; }) },
   };
   const jsm = {
@@ -85,7 +85,7 @@ describe("NatsService — what opens the breaker", () => {
     t.kv.get.mockRejectedValue(noResponders());
     await expect(t.service.updatePresence("a", {})).rejects.toMatchObject({ code: "503" });
     await expect(t.service.getPresence(["a"])).rejects.toMatchObject({ code: "503" });
-    await expect(t.service.publish("mesh.broadcast", new Uint8Array(), "m")).resolves.toBeUndefined();
+    await expect(t.service.publish("mesh.broadcast", new Uint8Array(), "m")).resolves.toEqual({ seq: 1, duplicate: false });
     expect(t.js.publish).toHaveBeenCalledTimes(1);
   });
 
@@ -117,7 +117,7 @@ describe("NatsService — connection events", () => {
 
     t.feed.push("reconnect");
     await tick();
-    await expect(t.service.publish("mesh.broadcast", new Uint8Array(), "m")).resolves.toBeUndefined();
+    await expect(t.service.publish("mesh.broadcast", new Uint8Array(), "m")).resolves.toEqual({ seq: 1, duplicate: false });
     t.jsm.consumers.info.mockClear();
     await t.service.ensureConsumer("scout");
     expect(t.jsm.consumers.info).toHaveBeenCalledTimes(2); // asked again: the broker may be a fresh one
@@ -139,7 +139,7 @@ describe("NatsService — connection events", () => {
     old.service.attach({ nc: next.nc, js: next.js, jsm: next.jsm, kv: next.kv } as never);
     old.feed.push("disconnect"); // from the replaced connection
     await tick();
-    await expect(old.service.publish("mesh.broadcast", new Uint8Array(), "m")).resolves.toBeUndefined();
+    await expect(old.service.publish("mesh.broadcast", new Uint8Array(), "m")).resolves.toEqual({ seq: 1, duplicate: false });
   });
 });
 
@@ -229,3 +229,67 @@ describe("NatsService — close", () => {
     expect(done).toBe(true);
   });
 });
+
+describe("NatsService — what it hands on to the registry and to the pull", () => {
+  it("creates a new agent's durables from its inbox_since", async () => {
+    const t = setup();
+    await t.service.ensureConsumer("scout", "2026-09-20T10:00:00.000Z");
+    expect(t.jsm.consumers.add.mock.calls.map(([, cfg]) => cfg)).toEqual([
+      expect.objectContaining({ durable_name: "agent-scout", deliver_policy: "by_start_time", opt_start_time: "2026-09-20T10:00:00.000Z" }),
+      expect.objectContaining({ durable_name: "agent-scout-broadcast", deliver_policy: "by_start_time", opt_start_time: "2026-09-20T10:00:00.000Z" }),
+    ]);
+  });
+
+  it("lets the caller's drop rule see every message of a pull", async () => {
+    const t = setup();
+    await t.service.ensureConsumer("scout");
+    const bytes = new TextEncoder().encode("x");
+    let left = 1;
+    t.js.consumers.get.mockImplementation(async (_s: string, name: string) => ({
+      info: async () => ({ num_pending: name === "agent-scout" ? left : 0, num_ack_pending: 0, delivered: { stream_seq: 0 } }),
+      fetch: async () => { left = 0; return { async *[Symbol.asyncIterator]() { yield { data: bytes, seq: 1, ack: () => {} }; } }; },
+    }) as never);
+    const seen: string[] = [];
+    const pull = await t.service.pullInbox("scout", 10, { drop: (_d, side) => { seen.push(side); return true; } });
+    expect(seen).toEqual(["inbox"]);
+    expect(pull.messages).toEqual([]);
+    expect(pull.dropped).toBe(1);
+  });
+
+  it("asks for the stream's bounds while broadcasts wait, and only then", async () => {
+    const t = setup();
+    await t.service.ensureConsumer("scout");
+    let waitingBroadcasts = 0;
+    t.js.consumers.get.mockImplementation(async (_s: string, name: string) => ({
+      info: async () => ({ num_pending: name.endsWith("-broadcast") ? waitingBroadcasts : 0, num_ack_pending: 0, delivered: { stream_seq: 7 } }),
+      fetch: async () => ({ async *[Symbol.asyncIterator]() { /* nothing */ } }),
+    }) as never);
+    t.jsm.streams.info.mockResolvedValue({ created: "2026-09-01T00:00:00.000000000Z", state: { first_seq: 3, last_seq: 9, bytes: 0, messages: 0 }, config: {} } as never);
+
+    expect((await t.service.inboxPending("scout")).stream).toBeNull();
+    expect(t.jsm.streams.info).not.toHaveBeenCalled();
+
+    waitingBroadcasts = 2;
+    expect(await t.service.inboxPending("scout")).toMatchObject({
+      broadcast: 2, broadcastDeliveredSeq: 7,
+      stream: { created: "2026-09-01T00:00:00.000000000Z", firstSeq: 3, lastSeq: 9 },
+    });
+    // Cannot be had: no bounds, and the caller then subtracts nothing.
+    t.jsm.streams.info.mockRejectedValueOnce(Object.assign(new Error("TIMEOUT"), { code: "TIMEOUT" }));
+    expect((await t.service.inboxPending("scout")).stream).toBeNull();
+  });
+
+  it("replaces a left-behind durable only when it is told to", async () => {
+    const t = setup();
+    t.durables.add("agent-scout");
+    t.durables.add("agent-scout-broadcast");
+    t.jsm.consumers.info.mockImplementation(async (_s: string, name: string) => { if (!t.durables.has(name)) throw Object.assign(new Error("consumer not found"), { api_error: { err_code: 10014 } }); return { created: "2026-08-01T00:00:00.000000000Z" }; });
+    await t.service.ensureConsumer("scout", "2026-09-20T10:00:00.000Z");
+    expect(t.jsm.consumers.delete).not.toHaveBeenCalled();
+    t.feed.push("reconnect"); // forget what was ensured
+    await new Promise((r) => setTimeout(r, 0));
+    await t.service.ensureConsumer("scout", "2026-09-20T10:00:00.000Z", { replaceLeftBehind: true });
+    expect(t.jsm.consumers.delete).toHaveBeenCalledTimes(2);
+  });
+});
+
