@@ -1,5 +1,6 @@
 // Against a real JetStream broker — everything the fakes cannot show:
-// durables, redelivery, the duplicate window, KV reads, consumer cleanup.
+// durables, unacknowledged mail, the duplicate window, KV reads, consumer
+// cleanup.
 //
 // Skipped unless MOSHI_TEST_NATS_URL is set. Run it with
 //   npm run test:integration
@@ -22,6 +23,12 @@ import { RateLimiter } from "../../src/services/ratelimit";
 import { createMcpServer } from "../../src/mcp/server";
 
 const URL = process.env.MOSHI_TEST_NATS_URL;
+// The runner script sets this. Without it a missing URL means "skip"; with it
+// a missing URL is a failure — or a renamed variable would turn the CI job
+// into thirteen skipped tests and a green check.
+if (process.env.MOSHI_TEST_NATS_REQUIRED === "1" && !URL) {
+  throw new Error("MOSHI_TEST_NATS_REQUIRED is set but MOSHI_TEST_NATS_URL is empty: the suite would skip itself and report green");
+}
 const LOOPBACK = /^nats:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+$/;
 const STREAM = "MESH_MESSAGES";
 const CTX = "integration test";
@@ -48,9 +55,11 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
   });
 
   afterEach(async () => {
+    // Optional on purpose: when beforeEach failed (broker down, guard), the
+    // real error must not be buried under a TypeError from here.
     for (const n of extra.splice(0)) await n.close().catch(() => {});
-    await nats.close().catch(() => {});
-    await admin.close();
+    await nats?.close().catch(() => {});
+    await admin?.close().catch(() => {});
   });
 
   const consumers = async (): Promise<string[]> => {
@@ -90,6 +99,20 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
       await nats.ping(); // flush the acks
       expect((await nats.inboxPending("k1")).total).toBe(0);
       expect((await nats.pullInbox("k1", 10)).messages).toEqual([]);
+    });
+
+    it("still counts a message that was handed over but not acknowledged", async () => {
+      // num_ack_pending is half of the count. Without it, mail that a crashed
+      // reader pulled and never acked looks like an empty inbox until the
+      // broker redelivers it, 30 seconds later.
+      await nats.ensureConsumer("k1");
+      await nats.publish("mesh.agents.k1.inbox", message("m1", "pulled, never acked"), "m1");
+      const pull = await nats.pullInbox("k1", 10);
+      expect(pull.messages).toHaveLength(1);
+      expect((await nats.inboxPending("k1")).total).toBe(1);
+      pull.messages[0]!.ack();
+      await nats.ping();
+      expect((await nats.inboxPending("k1")).total).toBe(0);
     });
 
     it("keeps another agent's mail out of this inbox", async () => {

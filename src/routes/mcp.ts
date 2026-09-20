@@ -44,12 +44,11 @@ export function createStatelessTransport(): WebStandardStreamableHTTPServerTrans
   });
 }
 
-// /mcp gets its limit on the route itself, behind the 405 guard and behind
-// auth — not here. Since hono 4.13 bodyLimit reads a chunked body to the end
-// before it calls next(). Mounted up here it made an anonymous client that
-// opens a chunked POST and then goes quiet hold a connection (and up to
-// 512 KB) for Node's five-minute request timeout, before anyone had asked
-// who it was. Behind auth the same request gets its 401 at once.
+// The limit lives on the route, behind the 405 guard and behind auth. Mounted
+// app-wide in front of auth, as it once was, it let an anonymous client open a
+// chunked POST, go quiet, and hold a connection (and up to 512 KB) for Node's
+// five-minute request timeout: since hono 4.13 bodyLimit reads a chunked body
+// to the end before it calls next(). tests/app/wiring.test.ts pins the order.
 const mcpBodyLimit = bodyLimit({
   maxSize: 512 * 1024, // 512 KB — 256 KB payload + JSON-RPC envelope + headroom
   onError: (c) =>

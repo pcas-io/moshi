@@ -21,6 +21,9 @@ jobs:
   # throwaway broker in Docker and removes it again.
   integration:
     runs-on: ubuntu-latest
+    # The image pull has no timeout of its own; a registry incident must not
+    # hold this job, and with it every merge, for GitHub's six-hour default.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

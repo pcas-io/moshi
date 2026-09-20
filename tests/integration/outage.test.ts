@@ -24,6 +24,12 @@ import { TEST_CONFIG, ADMIN_TOKEN, MCP_HEADERS, rpc } from "../app/harness";
 
 const URL = process.env.MOSHI_TEST_NATS_URL;
 const CONTAINER = process.env.MOSHI_TEST_NATS_CONTAINER;
+
+// Under the script (and so in CI) a missing value is a failure, not a skip:
+// a suite that skips itself reports green.
+if (process.env.MOSHI_TEST_NATS_REQUIRED === "1" && (!URL || !CONTAINER)) {
+  throw new Error("MOSHI_TEST_NATS_REQUIRED is set but MOSHI_TEST_NATS_URL or MOSHI_TEST_NATS_CONTAINER is empty");
+}
 const LOOPBACK = /^nats:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+$/;
 
 const docker = (...args: string[]) => execFileSync("docker", args, { stdio: "ignore" });
