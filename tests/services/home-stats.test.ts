@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import type Database from "better-sqlite3";
 import { initDatabase } from "../../src/services/db";
 import { AgentService } from "../../src/services/agent";
@@ -124,5 +124,24 @@ describe("getHomeStats", () => {
 
     const stats = await getHomeStats(db, presence);
     expect(stats.recentMessages).toBe(2);
+  });
+});
+
+
+describe("getHomeStats — with a presence listing the caller already has", () => {
+  it("counts only the live ones, and does not read presence a second time", async () => {
+    const db = initDatabase(":memory:");
+    const agents = new AgentService(db, new ActivityService(db));
+    for (const name of ["a", "b", "c", "d"]) agents.create(name);
+    const presence = { countByState: vi.fn(), list: vi.fn() };
+    const entry = (name: string, state: string) =>
+      ({ agent: agents.getByName(name)!, presence: state, effectiveLastSeen: null }) as never;
+    const stats = await getHomeStats(db, presence as never, [
+      entry("a", "live"), entry("b", "stale"), entry("c", "live"), entry("d", "never"),
+    ]);
+    expect(stats.onlineAgents).toBe(2);
+    expect(stats.totalAgents).toBe(4);
+    expect(presence.countByState).not.toHaveBeenCalled();
+    expect(presence.list).not.toHaveBeenCalled();
   });
 });

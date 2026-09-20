@@ -121,10 +121,16 @@ describe("public routes and headers", () => {
     // Liveness is what the container healthcheck polls. If it depended on
     // NATS, a broker outage would take the dashboard off the proxy as well.
     t.natsUp.value = false;
+    const ping = vi.spyOn(t.h.nats as unknown as { ping: () => Promise<boolean> }, "ping");
+    const prepare = vi.spyOn(t.h.db, "prepare");
     const res = await t.app.request("/livez");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: "alive" });
     expect(t.touch).not.toHaveBeenCalled();
+    // "Asks nobody" literally: a liveness probe that grows a NATS or a
+    // database check brings back the outage this route exists to survive.
+    expect(ping).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   it("sends a browser without a session to the login page, and an API client a 401", async () => {
