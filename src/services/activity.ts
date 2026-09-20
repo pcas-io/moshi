@@ -75,7 +75,7 @@ function buildFilter(f: ActivityFilter): SqlFilter {
   const conditions: string[] = [];
   const bindings: unknown[] = [];
 
-  // Blank reads as "no filter", the way `listMessages` treats it: a bare
+  // Blank reads as "no filter", the way `listMessageItems` treats it: a bare
   // `?agent=` in a bookmarked URL must not empty the whole log.
   const agentName = f.agent_name?.trim();
   if (agentName) {

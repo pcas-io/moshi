@@ -9,7 +9,7 @@
 // here rather than in the page that would import them back.
 
 import type { Child, FC } from "hono/jsx";
-import type { MessageView } from "../../services/message-queries.js";
+import type { MessageListItem } from "../../services/message-queries.js";
 import type { PaginatedResult } from "../../types.js";
 import { V2Avatar, kindLabel } from "./components.js";
 import { V2_FONT_FAMILY_MONO, V2_TOKENS, kindColors } from "./tokens.js";
@@ -43,10 +43,11 @@ const EMBLEM_CELL = `display:flex;align-items:center;gap:9px;overflow:hidden`;
 
 const HEADERS = ["Time", "From", "To", "Kind", "What it was about"] as const;
 
-/** `HH:MM` for today, `DD Mon HH:MM` for anything older. */
-function fmtDayHM(iso: string): string {
+/** `HH:MM` for today, `DD Mon HH:MM` for anything older. `now` is injected:
+ *  the page and its refreshed fragment have to agree on what "today" is. */
+function fmtDayHM(iso: string, now: number): string {
   const d = new Date(iso);
-  const today = new Date();
+  const today = new Date(now);
   if (d.toDateString() === today.toDateString()) return d.toTimeString().slice(0, 5);
   return (
     d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) +
@@ -93,18 +94,30 @@ const ToCell: FC<{ to: string; role?: string | null }> = ({ to, role }) =>
   );
 
 export interface MessagesTableProps {
-  result: PaginatedResult<MessageView>;
+  /** Rows as the table shows them: no payloads, the table never shows one. */
+  result: PaginatedResult<MessageListItem>;
   /** Role drives the emblem's stripe colour; the emblem itself is keyed on the name. */
   agentRoles: Record<string, string | null>;
   /** Pagination row, built by the page so both tabs share one footer. */
   footer?: Child;
+  /** Render clock; defaults to now. */
+  now?: number;
+  /** The URL this card refreshes itself from. Without it the card is static. */
+  liveSrc?: string;
 }
 
-export const MessagesTable: FC<MessagesTableProps> = ({ result, agentRoles, footer }) => {
+/**
+ * Everything inside the messages card: the scrolling table, the empty line,
+ * the pager. One component for the page and for GET /fragments/log/messages.
+ * The entrance animation belongs to the card around it, never to this: it
+ * would replay on every refresh.
+ */
+export const MessagesTableBody: FC<Omit<MessagesTableProps, "liveSrc">> = ({ result, agentRoles, footer, now }) => {
   const rows = result.data;
+  const clock = now ?? Date.now();
   return (
-    <div class="m-rise" style={LOG_CARD_STYLE}>
-      <div style="overflow-x:auto">
+    <>
+      <div data-live-scroll="log-x" style="overflow-x:auto">
         {/* Fixed-width table: it scrolls inside the card rather than squeezing. */}
         <div style="min-width:840px">
           <div
@@ -117,9 +130,10 @@ export const MessagesTable: FC<MessagesTableProps> = ({ result, agentRoles, foot
             <div
               key={m.id}
               class="d-row"
+              data-id={m.id}
               style={`${GRID};padding:11px 20px;align-items:center;border-bottom:1px solid ${T.lineRow}`}
             >
-              <span style={TIME_CELL}>{fmtDayHM(m.created_at)}</span>
+              <span style={TIME_CELL}>{fmtDayHM(m.created_at, clock)}</span>
               <div style={EMBLEM_CELL}>
                 <V2Avatar name={m.from} role={agentRoles[m.from]} size={24} bordered />
                 <span style={`font-size:13.5px;font-weight:600;${ELLIPSIS}`}>{m.from}</span>
@@ -137,6 +151,23 @@ export const MessagesTable: FC<MessagesTableProps> = ({ result, agentRoles, foot
           it, a phone would have to scroll sideways to read it. */}
       {rows.length === 0 && <LogEmptyBlock />}
       {footer}
-    </div>
+    </>
   );
 };
+
+/** The card. With `liveSrc` it is a live container: the script swaps its
+ *  children for what the fragment returns, which is MessagesTableBody. */
+export const MessagesTable: FC<MessagesTableProps> = ({ liveSrc, ...body }) => (
+  <div
+    class="m-rise"
+    data-live={liveSrc ? "log-messages" : undefined}
+    data-live-src={liveSrc}
+    // On a later page every new message shifts all rows by one: marking
+    // "new" rows there would mark the whole page.
+    data-live-mark={liveSrc && body.result.offset === 0 ? "rows" : undefined}
+    data-live-noun={liveSrc && body.result.offset === 0 ? "message" : undefined}
+    style={LOG_CARD_STYLE}
+  >
+    <MessagesTableBody {...body} />
+  </div>
+);

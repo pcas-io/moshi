@@ -265,8 +265,14 @@ export function authMiddleware(
       };
       c.set("agent", agentCtx);
 
-      // Log auth event (best-effort, throttled to once per 30 min per agent)
-      if (activity) {
+      // What an open tab does by itself: /fragments/* is a tab asking every
+      // five seconds whether anything changed. That is neither a sign-in nor
+      // the agent being around.
+      const tabOnItsOwn = path.startsWith("/fragments/");
+
+      // Log auth event (best-effort, throttled to once per 30 min per agent).
+      // Not for a poll: an open tab would write one every half hour, for ever.
+      if (activity && !tabOnItsOwn) {
         const now = Date.now();
         const lastLog = recentLogins.get(resolvedName) ?? 0;
         if (now - lastLog > LOGIN_LOG_INTERVAL_MS) {
@@ -286,7 +292,9 @@ export function authMiddleware(
       // Single presence write-path: PresenceService.touch updates both
       // SQLite last_seen_at and NATS KV in one call. NATS failures are
       // swallowed inside the service so we never throw here.
-      if (resolvedRole === "agent") {
+      // Not for the dashboard's own polling either: it would keep an agent
+      // "live" for as long as somebody leaves a tab open.
+      if (resolvedRole === "agent" && !tabOnItsOwn) {
         try {
           await presence.touch(resolvedName);
         } catch {

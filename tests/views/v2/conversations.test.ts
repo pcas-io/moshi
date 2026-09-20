@@ -4,7 +4,12 @@
 // branch — plus the tokens and framings the redesign deleted.
 
 import { describe, it, expect } from "vitest";
-import { V2ConversationsPage } from "../../../src/views/v2/conversations";
+import {
+  V2ConversationsPage,
+  ConversationListSection,
+  ConversationThreadSection,
+  conversationCountLine,
+} from "../../../src/views/v2/conversations";
 import type { ConversationThread, MessageView } from "../../../src/services/message-queries";
 import type { PaginatedResult } from "../../../src/types";
 
@@ -19,7 +24,10 @@ async function render(props: Parameters<typeof V2ConversationsPage>[0]): Promise
   return decode(String(await Promise.resolve(V2ConversationsPage(props))));
 }
 
-const NOW = Date.now();
+// Noon of today, local time, so that "four minutes ago" is today as well.
+// With the real clock the "Today, " separator failed for the first ten
+// minutes of every day.
+const NOW = new Date().setHours(12, 0, 0, 0);
 const minutesAgo = (m: number): string => new Date(NOW - m * 60_000).toISOString();
 
 function message(over: Partial<MessageView> & Pick<MessageView, "id" | "from" | "to">): MessageView {
@@ -63,7 +71,14 @@ function page(threads: ConversationThread[], over: Partial<PaginatedResult<Conve
     offset: 0,
     ...over,
   };
-  return { result, agentRoles: { "triage-1": "triage-agent", "ops-kai": "dev-ops" } };
+  // The route opens a thread: the one named by ?id=, else the first on the
+  // page. The page itself no longer picks one.
+  return {
+    result,
+    opened: threads[0] ?? null,
+    now: NOW,
+    agentRoles: { "triage-1": "triage-agent", "ops-kai": "dev-ops" } as Record<string, string | null>,
+  };
 }
 
 describe("V2ConversationsPage — thread titles", () => {
@@ -186,7 +201,7 @@ describe("V2ConversationsPage — thread and message rendering", () => {
 
   it("selects the thread named by ?id= and marks it as current", async () => {
     const second = thread({ thread_id: "thr_2", participants: ["dex-eu", "ops-kai"] });
-    const html = await render({ ...page([thread(), second]), selectedId: "thr_2" });
+    const html = await render({ ...page([thread(), second]), opened: second });
     expect(html).toContain('href="/conversations?id=thr_2"');
     expect(html).toContain('aria-current="true"');
     // The selected row lifts out of the sunk panel with a green rail.
@@ -238,10 +253,7 @@ describe("V2ConversationsPage — own side and paging", () => {
 
 describe("V2ConversationsPage — states a class rule has to win", () => {
   it("leaves an unselected row's background unset so .d-thread:hover applies", async () => {
-    const html = await render({
-      ...page([thread(), thread({ thread_id: "thr_2" })]),
-      selectedId: "thr_1",
-    });
+    const html = await render(page([thread(), thread({ thread_id: "thr_2" })]));
     // An inline `background` outranks any class rule: the hover fill would be
     // dead on arrival. Only the selected row may state one.
     expect(html).not.toContain("cursor:pointer;background:transparent");
@@ -281,13 +293,13 @@ describe("V2ConversationsPage — the live pill is a claim", () => {
   // Nothing on this screen polls, so the pill may only appear where it is
   // still true: a thread whose last activity is inside the presence window.
   it("shows `updating live` on a thread that is still moving", async () => {
-    const fresh = new Date().toISOString();
+    const fresh = minutesAgo(0);
     const html = await render(page([thread({ last_activity: fresh })]));
     expect(html).toContain("updating live");
   });
 
   it("omits it on a dormant thread rather than pulsing at a dead one", async () => {
-    const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const old = minutesAgo(3 * 24 * 60);
     const html = await render(page([thread({ last_activity: old })]));
     expect(html).not.toContain("updating live");
   });
@@ -302,5 +314,114 @@ describe("V2ConversationsPage — the split has to know the viewport width", () 
     const html = await render(page([thread()]));
     expect(html).toContain("max-width:1400px");
     expect(html).toMatch(/max-width:1400px[^"]*width:100%/);
+  });
+});
+
+
+// ── Live sections ─────────────────────────────────────────────────
+// The list and the open thread refresh themselves. Each is rendered by one
+// component, used by the page and by its /fragments endpoint, so the two
+// cannot drift apart.
+
+async function section(node: unknown): Promise<string> {
+  return decode(String(await Promise.resolve(node)));
+}
+
+describe("V2ConversationsPage — live containers", () => {
+  it("marks the list and the open thread as live, each with the URL of its fragment", async () => {
+    const html = await render({ ...page([thread()]), query: "checkout", filterAgent: "ops-kai" });
+    expect(html).toContain('data-live="convos-list"');
+    expect(html).toContain('data-live="convos-thread"');
+    expect(html).toMatch(/data-live="convos-list"[^>]*data-live-mark="rows"/);
+    expect(html).toMatch(/data-live="convos-thread"[^>]*data-live-mark="rows"/);
+    expect(html).toMatch(/data-live="convos-list"[^>]*data-live-noun="conversation"/);
+    expect(html).toMatch(/data-live="convos-thread"[^>]*data-live-noun="message"/);
+    // One status element for all of them, outside of what gets swapped, and
+    // no aria-live on the containers: a swap would re-read every row.
+    expect(html).toMatch(/<div id="d-live-status" role="status"[^>]*><\/div>/);
+    expect(html.match(/id="d-live-status"/g)).toHaveLength(1);
+    expect(html).not.toMatch(/data-live="[^"]+"[^>]*aria-live/);
+    // The list fragment needs the same filters and the open id, for the highlight.
+    expect(html).toContain('data-live-src="/fragments/conversations/list?q=checkout&agent=ops-kai&id=thr_1"');
+    // The thread fragment pins the thread. Without the id the pane would
+    // jump to whichever thread is newest the moment another one moves.
+    expect(html).toContain('data-live-src="/fragments/conversations/thread?id=thr_1"');
+  });
+
+  it("keeps the page offset in the list fragment URL", async () => {
+    const html = await render(page([thread()], { offset: 50, total: 80 }));
+    expect(html).toContain('data-live-src="/fragments/conversations/list?offset=50&id=thr_1"');
+    // On a later page every new thread shifts all rows by one: marking "new"
+    // rows there would mark the whole page. The open thread still marks.
+    expect(/data-live="convos-list"[^>]*>/.exec(html)![0]).not.toContain("data-live-mark");
+    expect(/data-live="convos-thread"[^>]*>/.exec(html)![0]).toContain('data-live-mark="rows"');
+  });
+
+  it("gives every thread row and every message a data-id, for marking what is new", async () => {
+    const html = await render(page([thread()]));
+    expect(html).toContain('data-id="thr_1"');
+    expect(html).toContain('data-id="msg_01JB7M2K9QX4ZR"');
+    expect(html).toContain('data-id="msg_01JB7M3LAST"');
+  });
+
+  it("keeps the entrance animation outside of what gets swapped", async () => {
+    const page_ = page([thread()]);
+    const list = await section(ConversationListSection({ ...page_, openedId: "thr_1" }));
+    const pane = await section(ConversationThreadSection({ thread: page_.opened, agentRoles: page_.agentRoles, now: NOW }));
+    expect(list).not.toContain("m-rise");
+    expect(pane).not.toContain("m-rise");
+  });
+
+  it("marks the message scroller so a refresh can keep its position", async () => {
+    expect(await render(page([thread()]))).toContain('data-live-scroll="thread"');
+  });
+});
+
+describe("V2ConversationsPage — page and fragment are the same markup", () => {
+  it("contains exactly what the list section renders", async () => {
+    const props = { ...page([thread(), thread({ thread_id: "thr_2", last_activity: minutesAgo(600) })]), query: "rate" };
+    const html = await render(props);
+    const list = await section(ConversationListSection({ ...props, openedId: "thr_1" }));
+    expect(list.length).toBeGreaterThan(200);
+    expect(html).toContain(list);
+  });
+
+  it("contains exactly what the thread section renders", async () => {
+    const props = page([thread()]);
+    const html = await render(props);
+    const pane = await section(ConversationThreadSection({ thread: props.opened, agentRoles: props.agentRoles, now: NOW }));
+    expect(pane.length).toBeGreaterThan(200);
+    expect(html).toContain(pane);
+  });
+
+  it("keeps the count line outside of the list, under an id the live script can write to", async () => {
+    const props = page([thread()]);
+    const html = await render(props);
+    expect(html).toContain('id="convos-count"');
+    expect(conversationCountLine(props.result, NOW)).toBe("1 thread · 1 still moving");
+    expect(html).toContain(">1 thread · 1 still moving<");
+    const list = await section(ConversationListSection({ ...props, openedId: "thr_1" }));
+    expect(list).not.toContain("still moving");
+  });
+});
+
+describe("V2ConversationsPage — an id nobody knows", () => {
+  it("says so, instead of quietly opening some other thread", async () => {
+    const html = await render({ ...page([thread()]), opened: null, unknownId: "msg_GONE" });
+    expect(html).toContain("That conversation is not here");
+    expect(html).toContain("msg_GONE");
+    // The list is still there, nothing in it is marked as open.
+    expect(html).toContain("triage-1 and ops-kai");
+    expect(html).not.toContain('aria-current="true"');
+    // Nothing to refresh in the pane.
+    expect(html).not.toContain('data-live="convos-thread"');
+  });
+
+  it("opens a thread that is not on this page of the list", async () => {
+    const elsewhere = thread({ thread_id: "thr_old", participants: ["dex-eu", "ops-kai"] });
+    const html = await render({ ...page([thread()]), opened: elsewhere });
+    expect(html).toContain("dex-eu and ops-kai");
+    expect(html).toContain('data-live-src="/fragments/conversations/thread?id=thr_old"');
+    expect(html).not.toContain('aria-current="true"');
   });
 });

@@ -4,6 +4,7 @@ import type Database from "better-sqlite3";
 import { ok, error } from "../shared.js";
 import type { ToolContext } from "../shared.js";
 import { FIELD_LIMITS } from "../../types.js";
+import { resolveThreadRoot } from "../../services/message-queries.js";
 
 interface MessageRow {
   id: string;
@@ -33,19 +34,6 @@ function rowToMessage(row: MessageRow) {
     ttl_seconds: row.ttl_seconds,
     created_at: row.created_at,
   };
-}
-
-/**
- * Thread root for any message id: replies carry the root in
- * `correlation_id`, the root message carries none — so a reply id passed
- * to mesh_history used to return just that one message (A8). Unknown ids
- * fall back to the id itself (the root may already be rotated out).
- */
-export function resolveThreadRoot(db: Database.Database, messageId: string): string {
-  const row = db
-    .prepare("SELECT COALESCE(correlation_id, id) AS root FROM messages WHERE id = ?")
-    .get(messageId) as { root: string } | undefined;
-  return row?.root ?? messageId;
 }
 
 export function registerHistoryTools(server: McpServer, ctx: ToolContext): void {

@@ -10,6 +10,7 @@ import { raw } from "hono/html";
 import { V2_CSS, V2_TOKENS } from "./tokens.js";
 import { V2_INTERACTION_CSS } from "./components.js";
 import { COPY_SCRIPT } from "./copy-script.js";
+import { LIVE_REFRESH_CSS, LIVE_REFRESH_SCRIPT } from "./live-refresh.js";
 import { MCP_TOOL_CATALOG } from "../../mcp/catalog.js";
 
 const T = V2_TOKENS;
@@ -312,7 +313,7 @@ export const V2Layout: FC<V2LayoutProps> = ({
           href={FONT_HREF}
           rel="stylesheet"
         />
-        {raw(`<style>${V2_CSS}${V2_INTERACTION_CSS}${PALETTE_CSS}</style>`)}
+        {raw(`<style>${V2_CSS}${V2_INTERACTION_CSS}${PALETTE_CSS}${LIVE_REFRESH_CSS}</style>`)}
         <meta name="color-scheme" content="light" />
       </head>
       <body>
@@ -342,8 +343,13 @@ export const V2Layout: FC<V2LayoutProps> = ({
           </footer>
         </div>
         {raw(paletteMarkup(palette, csrfToken))}
+        {/* Where live-refresh.ts says "2 new messages". One polite status
+            element outside of every live container: the containers themselves
+            must not be live regions, a swap replaces their whole subtree. */}
+        <div id="d-live-status" role="status" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap" />
         {PALETTE_SCRIPT}
         {COPY_SCRIPT}
+        {LIVE_REFRESH_SCRIPT}
       </body>
     </html>
   );

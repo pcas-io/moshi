@@ -6,16 +6,18 @@
 // one table body per tab: `messages.tsx` and `activity.tsx`.
 //
 // All page state lives in the query string (`?tab= ?q= ?routing= ?offset=`),
-// so every control is an anchor and the back button works. No client JS.
+// so every control is an anchor and the back button works. No client JS of
+// its own: the Messages tab is a live section, refreshed by the layout's
+// live-refresh script.
 
 import type { Child, FC } from "hono/jsx";
-import type { MessageRouting, MessageView } from "../../services/message-queries.js";
+import type { MessageListItem, MessageRouting } from "../../services/message-queries.js";
 import type { Activity, PaginatedResult } from "../../types.js";
 import type { ActivityActorCount } from "../../services/activity.js";
 import { ACTIVITY_RETENTION_DAYS, LIMITS, MESSAGE_RETENTION_DAYS } from "../../types.js";
 import { V2Layout } from "./layout.js";
 import { V2_TOKENS } from "./tokens.js";
-import { MessagesTable } from "./messages.js";
+import { MessagesTable, MessagesTableBody } from "./messages.js";
 import { AuditTable, BusiestTodayAside } from "./activity.js";
 
 const T = V2_TOKENS;
@@ -48,7 +50,7 @@ export function parseLogRouting(value: string | undefined | null): LogRouting {
   return hit ? hit[0] : "all";
 }
 
-/** The pill as `listMessages` wants it: Everything means no filter. */
+/** The pill as `listMessageItems` wants it: Everything means no filter. */
 export function messageRoutingOf(routing: LogRouting): MessageRouting | undefined {
   return routing === "all" ? undefined : routing;
 }
@@ -149,7 +151,7 @@ function emptyPage<Row>(): PaginatedResult<Row> {
 export interface V2LogProps {
   tab: LogTab;
   /** The messages page. Required when `tab === "messages"`. */
-  messages?: PaginatedResult<MessageView>;
+  messages?: PaginatedResult<MessageListItem>;
   /** The audit page. Required when `tab === "audit"`. */
   events?: PaginatedResult<Activity>;
   /** Real day totals from `ActivityService.topActors`, not a page count. */
@@ -169,14 +171,54 @@ export interface V2LogProps {
   userRole?: string;
   userName?: string;
   csrfToken?: string;
+  /** Render clock; defaults to now. */
+  now?: number;
 }
+
+type LogSectionProps = Pick<V2LogProps,
+  "messages" | "query" | "routing" | "filterAgent" | "filterEntity" | "filterRange" | "agentRoles" | "now">;
+
+/** The query string both the page links and the fragment URL are built from. */
+function carriedOf(p: LogSectionProps): Pick<LogQuery, "q" | "agent" | "entity" | "range"> {
+  return { q: p.query, agent: p.filterAgent, entity: p.filterEntity, range: p.filterRange };
+}
+
+/** Where the messages card refreshes itself from: same filters, same page.
+ *  `entity` and `range` do nothing to messages, but the pager links inside
+ *  the fragment carry them, so the fragment has to know them too. */
+export function logMessagesSrc(p: LogSectionProps): string {
+  const page = logHref({ ...carriedOf(p), tab: "messages", routing: p.routing ?? "all", offset: p.messages?.offset ?? 0 });
+  const qs = new URLSearchParams(page.slice(page.indexOf("?") + 1));
+  qs.delete("tab");
+  const text = qs.toString();
+  return `/fragments/log/messages${text ? `?${text}` : ""}`;
+}
+
+/**
+ * The inside of the messages card, pager included. Rendered by the page and
+ * by GET /fragments/log/messages from the same props.
+ */
+export const LogMessagesSection: FC<LogSectionProps> = (p) => {
+  const page = p.messages ?? emptyPage<MessageListItem>();
+  const pageHref = (offset: number): string =>
+    logHref({ ...carriedOf(p), tab: "messages", routing: p.routing ?? "all", offset });
+  return (
+    <MessagesTableBody
+      result={page}
+      agentRoles={p.agentRoles}
+      now={p.now}
+      footer={<LogFooter page={page} href={pageHref} />}
+    />
+  );
+};
 
 export const V2LogPage: FC<V2LogProps> = ({
   tab, messages, events, topActors = [], query, routing = "all",
-  filterAgent, filterEntity, filterRange, agentRoles, userRole, userName, csrfToken,
+  filterAgent, filterEntity, filterRange, agentRoles, userRole, userName, csrfToken, now,
 }) => {
   const carried = { q: query, agent: filterAgent, entity: filterEntity, range: filterRange };
   const pageHref = (offset: number): string => logHref({ ...carried, tab, routing, offset });
+  const section: LogSectionProps = { messages, query, routing, filterAgent, filterEntity, filterRange, agentRoles, now };
 
   return (
     <V2Layout title="Log" active="LOG" userRole={userRole} userName={userName} csrfToken={csrfToken}>
@@ -230,9 +272,11 @@ export const V2LogPage: FC<V2LogProps> = ({
 
       {tab === "messages" ? (
         <MessagesTable
-          result={messages ?? emptyPage<MessageView>()}
+          result={messages ?? emptyPage<MessageListItem>()}
           agentRoles={agentRoles}
-          footer={<LogFooter page={messages ?? emptyPage<MessageView>()} href={pageHref} />}
+          now={now}
+          liveSrc={logMessagesSrc(section)}
+          footer={<LogFooter page={messages ?? emptyPage<MessageListItem>()} href={pageHref} />}
         />
       ) : (
         <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
