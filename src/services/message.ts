@@ -89,10 +89,17 @@ export function deserializeMessage(data: Uint8Array): Message {
  * Kept separate from `sendAndPersistMessage` so the caller in tooling code
  * can reuse just the DB layer (e.g. tests, backfill scripts).
  */
-export function persistMessage(db: Database.Database, msg: Message): void {
+export interface StoredWith {
+  /** JetStream sequence from the publish ack. */
+  streamSeq?: number | null;
+  /** The sender's inbox key: who sent it, whatever it is called later. */
+  fromKey?: string | null;
+}
+
+export function persistMessage(db: Database.Database, msg: Message, stored: StoredWith = {}): void {
   db.prepare(
-    `INSERT INTO messages (id, from_agent, to_agent, type, payload, context, correlation_id, reply_to, priority, ttl_seconds, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (id, from_agent, to_agent, type, payload, context, correlation_id, reply_to, priority, ttl_seconds, created_at, stream_seq, from_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.from,
@@ -105,6 +112,8 @@ export function persistMessage(db: Database.Database, msg: Message): void {
     msg.priority,
     msg.ttl_seconds,
     msg.created_at,
+    stored.streamSeq ?? null,
+    stored.fromKey || null,
   );
 }
 
@@ -113,8 +122,59 @@ export function persistMessage(db: Database.Database, msg: Message): void {
  * real `NatsService.publish` signature so a live service can be passed
  * directly, while tests can use a plain object with a `publish` spy.
  */
+/** What the broker acknowledged: the stream sequence the message got. */
+export interface PublishAck {
+  seq: number;
+  /** The broker had this msgID already (duplicate window) and stored nothing new. */
+  duplicate?: boolean;
+}
+
 export interface NatsPublisher {
-  publish(subject: string, data: Uint8Array, msgId: string): Promise<void>;
+  publish(subject: string, data: Uint8Array, msgId: string): Promise<PublishAck | void>;
+}
+
+/** How long the stream keeps a message. After that it is gone from every
+ *  consumer's count, while the history row lives on for 30 days. */
+export const STREAM_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The stream the broker is counting in: when it was created, and which
+ *  sequences it holds right now. */
+export interface StreamBounds {
+  created: string;
+  firstSeq: number;
+  lastSeq: number;
+}
+
+/**
+ * How many of the sender's own broadcasts are still ahead of its broadcast
+ * consumer. The broker counts them as pending for their sender.
+ *
+ * A row only counts when its message is in the stream the broker is counting
+ * in: stored after that stream was created, inside the sequences it holds,
+ * and younger than it keeps a message. SQLite and the stream are two volumes.
+ * When the stream is lost and recreated its sequences start at 1 again, while
+ * the rows keep their old, higher numbers for 30 days: subtracting those hid
+ * real broadcasts from an agent whose loop only reads when the count is above
+ * zero.
+ */
+export function ownBroadcastsBehind(
+  db: Database.Database,
+  fromKey: string,
+  deliveredSeq: number,
+  stream: StreamBounds,
+  now: number = Date.now(),
+): number {
+  if (!fromKey) return 0;
+  const oldest = new Date(now - STREAM_MAX_AGE_MS).toISOString();
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM messages
+      WHERE to_agent = 'broadcast' AND from_key = ?
+        AND stream_seq > ? AND stream_seq >= ? AND stream_seq <= ?
+        AND created_at > ? AND created_at >= ?`,
+    )
+    .get(fromKey, deliveredSeq, stream.firstSeq, stream.lastSeq, oldest, stream.created) as { n: number };
+  return row.n;
 }
 
 export interface SendResult {
@@ -160,10 +220,13 @@ export async function sendAndPersistMessage(
   db: Database.Database,
   msg: Message,
   subject: string,
+  /** The sender's inbox key, stored with the row. */
+  fromKey?: string | null,
 ): Promise<SendResult> {
   // 1. NATS publish FIRST — this IS the delivery act.
+  let ack: PublishAck | void;
   try {
-    await nats.publish(subject, serializeMessage(msg), msg.id);
+    ack = await nats.publish(subject, serializeMessage(msg), msg.id);
   } catch (err) {
     log("error", "nats publish failed in sendAndPersistMessage", {
       msg_id: msg.id,
@@ -185,7 +248,7 @@ export async function sendAndPersistMessage(
   // ("CRITICAL" prefix) so the gap is visible, but return delivered=true
   // because the caller should see a successful send.
   try {
-    persistMessage(db, msg);
+    persistMessage(db, msg, { streamSeq: ack?.seq ?? null, fromKey });
   } catch (err) {
     log("error", "CRITICAL: message delivered but history insert failed", {
       msg_id: msg.id,

@@ -35,7 +35,7 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     "moshi enables async communication between AI agents via message passing.",
     "Use mesh_send to send messages to other agents. The context field is REQUIRED (max 2048 chars) — describe your current project, task, and status. Payload max is 256 KB. type defaults to 'info'.",
     "Use mesh_receive to check for new messages. Reading acknowledges them. Evaluate the context field of each received message before acting — make sure you are working in the right context.",
-    `Every reply carries inbox_pending (messages waiting for you) — only call mesh_receive when it is > 0. Payloads longer than ${DEFAULT_PREVIEW_CHARS} chars arrive truncated (payload_truncated=true); mesh_get(message_id) returns the full text.`,
+    `Every reply carries inbox_pending (messages waiting for you; your own broadcasts are not among them) — only call mesh_receive when it is > 0. Payloads longer than ${DEFAULT_PREVIEW_CHARS} chars arrive truncated (payload_truncated=true); mesh_get(message_id) returns the full text.`,
     "Use mesh_reply to respond to a specific message (threading is automatic).",
     "Use mesh_status to see which agents are online and what they are working on.",
     "Use mesh_register once per session to announce your role, capabilities, and current task.",

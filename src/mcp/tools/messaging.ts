@@ -18,9 +18,10 @@ import {
   sendAndPersistMessage,
 } from "../../services/message.js";
 import type { SendResult } from "../../services/message.js";
+import type { InboxSide } from "../../services/inbox.js";
 import { log } from "../../services/logger.js";
 import { inboxKeyOf } from "../../services/agent.js";
-import { ok, error, adminError, pendingCount } from "../shared.js";
+import { ok, error, adminError, pendingCount, waitingFor } from "../shared.js";
 import type { ToolContext } from "../shared.js";
 
 const TYPE_LIST = RECOMMENDED_MESSAGE_TYPES.join(", ");
@@ -146,7 +147,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       // DB — no phantom-send. If the DB insert fails after NATS succeeds
       // the message is still delivered and we loud-log the history gap.
       const subject = targetAgent ? inboxSubject(targetAgent) : BROADCAST_SUBJECT;
-      const result = await sendAndPersistMessage(nats, db, msg, subject);
+      const result = await sendAndPersistMessage(nats, db, msg, subject, inboxKey);
       if (!result.delivered) return error(undeliveredText("message", msg.id, result.error));
 
       activity.logAsync({
@@ -190,11 +191,54 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       const limit = params.limit ?? 10;
       const previewChars = params.preview_chars ?? DEFAULT_PREVIEW_CHARS;
 
+      // Not everything in the two consumers is a message for this agent.
+      // What is not gets acked inside the pull and does not take a place in
+      // `limit`, so the agent never reads "No new messages" next to an
+      // inbox_pending above zero.
+      const kept = new Map<Uint8Array, Message>();
+      let expired = 0;
+      const senderNow = db.prepare("SELECT from_agent, from_key FROM messages WHERE id = ?");
+      // Whose a broadcast is: by the sender's inbox key, which the history
+      // row carries. A name proves little: it can be given to another agent
+      // after a delete, and a rename rewrites only part of the history. Rows
+      // from before keys were stored, and messages without a row (a publish
+      // that landed while the history insert failed), fall back to the name.
+      const isOwn = (msg: Message): boolean => {
+        const row = senderNow.get(msg.id) as { from_agent: string; from_key: string | null } | undefined;
+        if (row?.from_key) return row.from_key === inboxKey;
+        return (row?.from_agent ?? msg.from).toLowerCase() === agentName.toLowerCase();
+      };
+      const drop = (data: Uint8Array, side: InboxSide): boolean => {
+        let msg: Message;
+        try {
+          msg = deserializeMessage(data);
+        } catch {
+          return true; // unparseable
+        }
+        // Parses, but is no message (a hand-made publish of `null` or `42`).
+        if (msg === null || typeof msg !== "object" || typeof msg.id !== "string" || typeof msg.created_at !== "string") return true;
+        try {
+          // Own before expired: an agent's own short-lived broadcast is not
+          // "mail that expired before you read it".
+          if (side === "broadcast" && isOwn(msg)) return true;
+          if (isMessageExpired(msg)) {
+            expired++;
+            return true; // past its delivery deadline
+          }
+        } catch (err) {
+          // Cannot judge it (the history lookup failed): hand it out. A rule
+          // that throws would abandon the whole batch unacked.
+          log("warn", "drop rule failed in mesh_receive, keeping the message", { agent: agentName, msg_id: msg.id, err: String(err) });
+        }
+        kept.set(data, msg);
+        return false;
+      };
+
       // C4: NATS unavailability degrades gracefully — empty inbox plus a
       // hint so the caller knows to retry.
       let pull: Awaited<ReturnType<typeof nats.pullInbox>>;
       try {
-        pull = await nats.pullInbox(inboxKey, limit);
+        pull = await nats.pullInbox(inboxKey, limit, { drop });
       } catch (err) {
         log("warn", "nats pull failed in mesh_receive", {
           agent: agentName,
@@ -207,28 +251,60 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       let truncated = 0;
 
       for (const pm of pull.messages) {
-        let msg: Message;
-        try {
-          msg = deserializeMessage(pm.data);
-        } catch {
-          pm.ack(); // unparseable — drop
-          continue;
+        // Parsed already when `drop` looked at it. Never trust that alone: a
+        // message that is acked here and not returned is lost.
+        let msg = kept.get(pm.data);
+        if (!msg) {
+          try {
+            msg = deserializeMessage(pm.data);
+          } catch {
+            pm.ack(); // unparseable — drop
+            continue;
+          }
         }
         pm.ack();
-        if (isMessageExpired(msg)) continue; // past its delivery deadline
         const view = previewMessage(msg, previewChars);
         if (view.payload_truncated) truncated++;
         messages.push(view);
       }
 
+      // The count every other reply carries, from the pull's own numbers:
+      // asking the broker again right now would still count what was just
+      // acked (an ack is not processed the moment it is sent). The messages
+      // above are acked: whatever fails from here on, they are returned.
+      let stillWaiting: number | null = null;
+      try {
+        stillWaiting = waitingFor(ctx, {
+          total: pull.remaining,
+          broadcast: pull.remainingBroadcast,
+          broadcastDeliveredSeq: pull.broadcastDeliveredSeq,
+          stream: pull.stream,
+        });
+      } catch (err) {
+        log("warn", "inbox pending count failed in mesh_receive", { agent: agentName, err: String(err) });
+      }
+      const expiredNote = expired > 0 ? { expired_dropped: expired } : {};
+
       if (messages.length === 0) {
-        return ok({ messages: [], inbox_pending: pull.remaining, hint: "No new messages." });
+        return ok({
+          messages: [],
+          inbox_pending: stillWaiting,
+          ...expiredNote,
+          hint: expired > 0
+            ? `No new messages. ${expired} message(s) had expired before you read them (ttl_seconds) and were dropped.`
+            : "No new messages.",
+        });
       }
 
       // The JetStream copy froze the names at send time. A rename rewrites
       // the history, so take from/to from there: an agent that answers a
       // renamed sender by name would otherwise be told it does not exist.
-      const current = currentNames(db, messages.map((m) => m.id));
+      let current = new Map<string, NameRow>();
+      try {
+        current = currentNames(db, messages.map((m) => m.id));
+      } catch (err) {
+        log("warn", "name lookup failed in mesh_receive, names as sent", { agent: agentName, err: String(err) });
+      }
       for (const m of messages) {
         const names = current.get(m.id);
         if (names) {
@@ -240,7 +316,8 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       return ok({
         messages,
         count: messages.length,
-        inbox_pending: pull.remaining,
+        inbox_pending: stillWaiting,
+        ...expiredNote,
         ...(truncated > 0
           ? { hint: `${truncated} payload(s) truncated at preview_chars=${previewChars} — call mesh_get(message_id) for the full text.` }
           : {}),
@@ -305,7 +382,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
 
       // Dual-write: NATS first (delivery), DB second (history) — same
       // reliability semantics as mesh_send, see Mesh-ADR-006.
-      const result = await sendAndPersistMessage(nats, db, msg, inboxSubject(recipient));
+      const result = await sendAndPersistMessage(nats, db, msg, inboxSubject(recipient), inboxKey);
       if (!result.delivered) return error(undeliveredText("reply", msg.id, result.error));
 
       activity.logAsync({
