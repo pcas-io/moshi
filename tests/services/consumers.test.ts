@@ -67,6 +67,25 @@ describe("ConsumerRegistry.ensure", () => {
     expect(admin.add).toHaveBeenCalledTimes(2);
   });
 
+  it("does not remember a key that was forgotten while its ensure was still running", async () => {
+    // A revoke lands during an agent's first ensure: what the ensure has just
+    // confirmed is exactly what the revoke deletes.
+    const { admin, registry } = setup();
+    let release!: () => void;
+    admin.info.mockImplementationOnce(() => new Promise((_, reject) => { release = () => reject(notFound()); }));
+    const running = registry.ensure("scout");
+    registry.forget("scout");
+    release();
+    await running;
+    expect(registry.has("scout")).toBe(false);
+    admin.info.mockClear();
+    await registry.ensure("scout");
+    expect(admin.info).toHaveBeenCalled(); // asked the broker again
+
+    expect(registry.has("scout")).toBe(true);
+    expect(registry.has("SCOUT")).toBe(true);
+  });
+
   it("asks again after forget(key) and after clear()", async () => {
     const { admin, registry } = setup();
     await registry.ensure("scout");

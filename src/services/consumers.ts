@@ -26,6 +26,7 @@ export interface ConsumerAdmin {
 export class ConsumerRegistry {
   private readonly ensured = new Set<string>();
   private readonly inFlight = new Map<string, Promise<void>>();
+  private generation = 0;
 
   constructor(private readonly admin: ConsumerAdmin) {}
 
@@ -37,22 +38,33 @@ export class ConsumerRegistry {
     const running = this.inFlight.get(key);
     if (running) return running;
 
+    const generation = this.generation;
     const work = (async () => {
       await this.ensureOne(inboxConsumerName(key), `mesh.agents.${key}.inbox`);
       await this.ensureOne(broadcastConsumerName(key), "mesh.broadcast");
-      this.ensured.add(key);
+      // forget() or clear() while this ran: what was just confirmed may be
+      // the very thing that got deleted. Do not remember it.
+      if (generation === this.generation) this.ensured.add(key);
     })().finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, work);
     return work;
   }
 
+  /** Already ensured? Lets the caller skip the broker, and the breaker,
+   *  for a question that memory answers. */
+  has(inboxKey: string): boolean {
+    return this.ensured.has(inboxKey.toLowerCase());
+  }
+
   /** The durables of this key were deleted (revoke, delete). */
   forget(inboxKey: string): void {
+    this.generation++;
     this.ensured.delete(inboxKey.toLowerCase());
   }
 
   /** Nothing is certain any more (reconnect: the broker may be a new one). */
   clear(): void {
+    this.generation++;
     this.ensured.clear();
   }
 
