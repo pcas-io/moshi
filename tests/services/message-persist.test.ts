@@ -134,6 +134,24 @@ describe("sendAndPersistMessage — NATS-first dual-write order (ADR-006)", () =
     expect(row).toBeUndefined();
   });
 
+  it("says 'delivery unknown' for a publish that timed out, and keeps 'unavailable' for one that was never sent", async () => {
+    // A timeout is not a "no". The bytes may sit in the socket and be stored
+    // the moment the broker answers again. Telling the sender "not delivered"
+    // makes it send a second copy.
+    const send = (err: unknown) => sendAndPersistMessage(
+      { publish: vi.fn(async () => { throw err; }) }, db,
+      createMessage({ from: "alpha", to: "beta", type: "info", payload: "hi", context: "test" }),
+      "mesh.agents.beta.inbox",
+    );
+    const timedOut = await send(Object.assign(new Error("TIMEOUT"), { code: "TIMEOUT" }));
+    expect(timedOut).toMatchObject({ delivered: false, persisted: false, error: "delivery_unknown" });
+
+    const refused = await send(Object.assign(new Error("broker unavailable"), { name: "BrokerUnavailableError" }));
+    expect(refused).toMatchObject({ delivered: false, persisted: false, error: "nats_unavailable" });
+    const closed = await send(Object.assign(new Error("CONNECTION_CLOSED"), { code: "CONNECTION_CLOSED" }));
+    expect(closed.error).toBe("nats_unavailable");
+  });
+
   it("returns delivered=true and persisted=false when DB insert fails after NATS success", async () => {
     const nats = {
       publish: vi.fn(async () => {

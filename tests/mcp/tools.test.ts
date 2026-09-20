@@ -258,6 +258,27 @@ describe("MCP tools — mesh_reply checks the recipient", () => {
   });
 });
 
+describe("MCP tools — a send whose outcome is unknown", () => {
+  it("tells the sender so, names the id, and warns about the second copy", async () => {
+    const h = createHarness();
+    h.agents.create("alpha");
+    h.agents.create("beta");
+    const alpha = await h.connect("alpha");
+    h.nats.publish = async () => { throw Object.assign(new Error("TIMEOUT"), { code: "TIMEOUT" }); };
+    const res = await callTool(alpha, "mesh_send", { to: "beta", payload: "x", context: CTX });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("nats_unavailable"); // the word clients key on
+    expect(res.text).toContain("could not be confirmed");
+    expect(res.text).toMatch(/msg_[0-9A-Z]+/);
+    expect(res.text).toContain("twice");
+
+    h.nats.publish = async () => { throw Object.assign(new Error("broker unavailable"), { name: "BrokerUnavailableError" }); };
+    const refused = await callTool(alpha, "mesh_send", { to: "beta", payload: "x", context: CTX });
+    expect(refused.text).toContain("not delivered");
+    expect(refused.text).not.toContain("could not be confirmed");
+  });
+});
+
 describe("MCP tools — field bounds", () => {
   // Only the 512 KB body limit capped these. A 500 KB `working_on` is echoed
   // to every agent in every mesh_status reply and rendered on every page load.

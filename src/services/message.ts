@@ -127,8 +127,19 @@ export interface SendResult {
    * scenario and is logged loudly (level=error, "CRITICAL" prefix).
    */
   persisted: boolean;
-  /** Error code when `delivered=false`. Currently only `"nats_unavailable"`. */
-  error?: "nats_unavailable";
+  /**
+   * Why `delivered=false`.
+   * - `"nats_unavailable"`: the message was not sent (breaker open, no
+   *   connection). Sending it again is safe.
+   * - `"delivery_unknown"`: the publish timed out. The broker may have
+   *   stored it anyway; a second send can arrive as a second copy.
+   */
+  error?: "nats_unavailable" | "delivery_unknown";
+}
+
+/** A timed-out publish is the one failure whose outcome nobody knows. */
+function outcomeUnknown(err: unknown): boolean {
+  return (err as { code?: unknown })?.code === "TIMEOUT";
 }
 
 /**
@@ -157,8 +168,13 @@ export async function sendAndPersistMessage(
       to: msg.to,
       subject,
       err: String(err),
+      outcome: outcomeUnknown(err) ? "unknown" : "not sent",
     });
-    return { delivered: false, persisted: false, error: "nats_unavailable" };
+    return {
+      delivered: false,
+      persisted: false,
+      error: outcomeUnknown(err) ? "delivery_unknown" : "nats_unavailable",
+    };
   }
 
   // 2. DB insert SECOND — read-replica for history. A failure here means

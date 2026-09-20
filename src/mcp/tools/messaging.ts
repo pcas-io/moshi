@@ -17,6 +17,7 @@ import {
   deserializeMessage,
   sendAndPersistMessage,
 } from "../../services/message.js";
+import type { SendResult } from "../../services/message.js";
 import { log } from "../../services/logger.js";
 import { inboxKeyOf } from "../../services/agent.js";
 import { ok, error, adminError, pendingCount } from "../shared.js";
@@ -70,6 +71,19 @@ export function previewMessage(msg: Message, previewChars: number) {
     payload_length: length,
     payload_truncated: truncated,
   };
+}
+
+/**
+ * What the sender is told when a send did not go through. Both texts start
+ * with `nats_unavailable`, the word clients key on. They differ in what is
+ * safe to do next.
+ */
+function undeliveredText(what: "message" | "reply", id: string, reason: SendResult["error"]): string {
+  if (reason === "delivery_unknown") {
+    return `nats_unavailable: delivery of ${what} ${id} could not be confirmed — the broker did not answer in time. ` +
+      "It may still arrive. If you send it again, the recipient can get it twice.";
+  }
+  return `nats_unavailable: ${what} not delivered. Retry in a few seconds.`;
 }
 
 export function registerMessagingTools(server: McpServer, ctx: ToolContext): void {
@@ -133,11 +147,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       // the message is still delivered and we loud-log the history gap.
       const subject = targetAgent ? inboxSubject(targetAgent) : BROADCAST_SUBJECT;
       const result = await sendAndPersistMessage(nats, db, msg, subject);
-      if (!result.delivered) {
-        return error(
-          `nats_unavailable: message not delivered. Retry in a few seconds.`,
-        );
-      }
+      if (!result.delivered) return error(undeliveredText("message", msg.id, result.error));
 
       activity.logAsync({
         action: "message_sent",
@@ -296,11 +306,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       // Dual-write: NATS first (delivery), DB second (history) — same
       // reliability semantics as mesh_send, see Mesh-ADR-006.
       const result = await sendAndPersistMessage(nats, db, msg, inboxSubject(recipient));
-      if (!result.delivered) {
-        return error(
-          `nats_unavailable: reply not delivered. Retry in a few seconds.`,
-        );
-      }
+      if (!result.delivered) return error(undeliveredText("reply", msg.id, result.error));
 
       activity.logAsync({
         action: "message_sent",
