@@ -18,7 +18,7 @@ RUN set -eux; \
 # The compiler lives here and only here: better-sqlite3 builds its native
 # module when no prebuilt binary fits. Nothing of this stage but node_modules
 # reaches the runtime image.
-FROM node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS deps
+FROM node:26-alpine@sha256:dbaa92e5758cbbcf85d65d5403fdb530fe3442cbe8c6dbfb7ef23365450d5070 AS deps
 RUN apk add --no-cache python3 make g++
 WORKDIR /app
 COPY package*.json ./
@@ -26,7 +26,7 @@ RUN npm ci --omit=dev
 
 # ── Stage 3: runtime ───────────────────────────────────────────────
 # No compiler, no dev dependencies, and the service does not run as root.
-FROM node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85
+FROM node:26-alpine@sha256:dbaa92e5758cbbcf85d65d5403fdb530fe3442cbe8c6dbfb7ef23365450d5070
 RUN apk add --no-cache su-exec
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
