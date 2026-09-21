@@ -11,7 +11,8 @@ TypeScript, Hono, @hono/node-server, @modelcontextprotocol/sdk, nats.js, better-
 - `npm run dev` — Dev server with hot reload (needs NATS running)
 - `npm test` — Run tests (the integration suite skips itself)
 - `npm run test:integration` — `tests/integration` against a throwaway NATS in Docker. Never point `MOSHI_TEST_NATS_URL` at a broker that holds data: every test deletes the stream first
-- `npx tsc --noEmit` — Type check
+- `npx tsc --noEmit` — Type check (`npm run typecheck:tests` does the same for `tests/` and `scripts/`)
+- `npm run verify:deploy` — is what runs what was merged? Compares `/health` commit AND version with git, and asks the remote where the branch is now
 - `docker compose up` — Full stack (mesh + NATS)
 
 ## Architecture
@@ -81,6 +82,9 @@ ULID IDs, SHA-256 token hashing, timing-safe comparison.
 - Swap rules in the script: not while `:focus-visible` is inside or a selection REACHES into the container (`range.intersectsNode`, every range; a caret does not count). Row ids live in a prototype-free object. `data-live-follow="bottom"` keeps a scroller at the bottom until the reader scrolls up. New rows are announced in `#d-live-status` (`role=status`, in the layout); live containers never get `aria-live`, a swap replaces their whole subtree.
 - The message stream only triggers, it never renders: an event makes the script fetch the same fragments the timer fetches, so page, fragment and stream cannot disagree. Never put a payload, a sender or a context into an event. At most 50 connections (`SSE_MAX_CONNECTIONS`), 503 beyond; `EventSource` does not retry a non-200 by itself (that includes the proxy's 503 during a deploy), so the script reconnects (30 s, doubling to 5 min). Timer: 5 s without a stream, 60 s with one, 10 s while a lost one reconnects; only a CHANGE of stream state moves the timers, because the browser reports an error on every failed retry. A hidden tab closes its stream: it would hold one of six HTTP/1.1 connections per origin. The route answers GET only: hono runs a GET handler for HEAD and drops the body uncancelled, so a subscription made there stays for ever (50 x `curl -I` took every place). No connection lives for ever either: 256 events waiting for a reader that does not read, or 30 minutes, end it; the session is only checked when a stream opens. `/sse/*` and `/fragments/*` never refresh an agent's presence. The `updating live` pill is rendered `hidden` on a wrapper (an inline `display` beats `[hidden]`) and shown by the script while the stream is open; this replaces the design handoff's rule that the pill follows the thread's last activity.
 - Thread order is `created_at, rowid`. Party order (first sender, first recipient, then whoever joins) decides titles and bubble sides; list and open thread share `partiesInOrder`. Never cut a payload in SQL before `previewPayload` has parsed it.
+
+- The version is `package.json`'s, the commit comes from the environment (`src/version.ts`): Coolify's per-deploy `SOURCE_COMMIT`, or `MOSHI_COMMIT` for a build elsewhere. Never reference `SOURCE_COMMIT` in `docker-compose.yml` or the `Dockerfile` and never store it in Coolify, or `/health` reports one commit for ever (`tests/version.test.ts` guards the files).
+- `tsx` is the production runtime: the image runs the TypeScript sources through it. A toolchain update therefore gets a real-process check, not only the suite: vitest does not run through tsx.
 
 ## Commits
 Conventional Commits: feat:, fix:, chore:, docs:, refactor:
