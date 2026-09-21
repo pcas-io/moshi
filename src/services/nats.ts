@@ -8,6 +8,7 @@ import type {
   JetStreamClient,
   JetStreamManager,
   KV,
+  StreamConfig,
 } from "nats";
 import { log } from "./logger.js";
 import {
@@ -19,6 +20,8 @@ import {
 } from "./inbox.js";
 import { CircuitBreaker, BrokerUnavailableError } from "./circuit-breaker.js";
 import { ConsumerRegistry } from "./consumers.js";
+import { reconcileStream } from "./stream-config.js";
+import type { WantedStream } from "./stream-config.js";
 import type { EnsureOptions } from "./consumers.js";
 import type {
   ConsumerSource,
@@ -58,6 +61,18 @@ const PUBLISH_TIMEOUT_MS = 4000;
 const CONNECT_TIMEOUT_MS = 5000;
 // close() must end: drain() against a broker that does not answer never does.
 const DRAIN_TIMEOUT_MS = 3000;
+
+/** What the stream is supposed to be. connect() makes the broker agree. */
+const STREAM: WantedStream = {
+  name: STREAM_NAME,
+  subjects: ["mesh.agents.>", "mesh.broadcast"],
+  retention: RetentionPolicy.Limits,
+  storage: StorageType.File,
+  max_age: MAX_AGE_NS,
+  max_bytes: MAX_BYTES,
+  duplicate_window: DUPLICATE_WINDOW_NS,
+  num_replicas: 1,
+};
 // After an outage error, fail fast for this long before probing again.
 const BREAKER_COOL_DOWN_MS = 5000;
 // /health must answer even when the broker does not.
@@ -121,6 +136,7 @@ export class NatsService {
         info: (name) => this.jsm.consumers.info(STREAM_NAME, name),
         add: (config) => this.jsm.consumers.add(STREAM_NAME, config),
         delete: (name) => this.jsm.consumers.delete(STREAM_NAME, name),
+        update: (name, config) => this.jsm.consumers.update(STREAM_NAME, name, config),
       },
       { clockToleranceMs: opts.consumerClockToleranceMs },
     );
@@ -158,22 +174,17 @@ export class NatsService {
     const jsm = await nc.jetstreamManager({ timeout: JS_TIMEOUT_MS });
     const js = nc.jetstream({ timeout: JS_TIMEOUT_MS });
 
-    // Ensure stream exists
-    try {
-      await jsm.streams.info(STREAM_NAME);
-    } catch {
-      // Stream doesn't exist — create it
-      await jsm.streams.add({
-        name: STREAM_NAME,
-        subjects: ["mesh.agents.>", "mesh.broadcast"],
-        retention: RetentionPolicy.Limits,
-        max_age: MAX_AGE_NS,
-        max_bytes: MAX_BYTES,
-        storage: StorageType.File,
-        num_replicas: 1,
-        duplicate_window: DUPLICATE_WINDOW_NS,
-      });
-    }
+    // The stream: created when missing, brought in line when it differs.
+    // Only "not found" is answered with a create (src/services/stream-config.ts).
+    await reconcileStream(
+      {
+        info: (name) => jsm.streams.info(name) as unknown as Promise<{ config: Record<string, unknown>; state?: { messages?: number; bytes?: number; first_ts?: string } }>,
+        add: (config) => jsm.streams.add(config as unknown as Partial<StreamConfig>),
+        update: (name, config) => jsm.streams.update(name, config as unknown as Partial<StreamConfig>),
+      },
+      STREAM,
+      log,
+    );
 
     // Ensure KV bucket exists (creates if not present)
     const kv = await js.views.kv(KV_BUCKET, { ttl: KV_TTL_MS });

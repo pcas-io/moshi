@@ -10,7 +10,7 @@
 // pointed at a broker that holds anything. It only accepts loopback.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { connect as natsConnect } from "nats";
+import { connect as natsConnect, AckPolicy, DeliverPolicy } from "nats";
 import type { NatsConnection, JetStreamManager } from "nats";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -69,6 +69,69 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
   };
   const message = (id: string, payload: string) =>
     enc.encode(JSON.stringify({ id, from: "x", to: "y", type: "info", payload, context: CTX, created_at: new Date().toISOString(), ttl_seconds: 3600 }));
+
+  describe("configuration is code: what the broker has is brought in line", () => {
+    it("updates a stream that an older version made, and keeps what is in it", async () => {
+      await nats.publish("mesh.agents.k1.inbox", message("m1", "kept"), "m1");
+      await nats.close();
+      // What May's code would have left behind: one hour, one subject.
+      const before = await jsm.streams.info(STREAM);
+      await jsm.streams.update(STREAM, { ...before.config, max_age: 3600 * 1e9, subjects: ["mesh.agents.>"] });
+
+      nats = new NatsService(URL!);
+      await nats.connect();
+      const after = await jsm.streams.info(STREAM);
+      expect(after.config.max_age).toBe(7 * 24 * 3600 * 1e9);
+      expect([...after.config.subjects].sort()).toEqual(["mesh.agents.>", "mesh.broadcast"]);
+      expect(after.state.messages).toBe(1);
+      expect(after.created).toBe(before.created); // updated, not recreated
+    });
+
+    it("does the same on the path production takes: a durable that starts at a time, ensured with the agent's inbox_since", async () => {
+      const since = new Date(Date.now() - 60_000).toISOString();
+      for (const [name, subject] of [["agent-k2", "mesh.agents.k2.inbox"], ["agent-k2-broadcast", "mesh.broadcast"]] as const) {
+        await jsm.consumers.add(STREAM, {
+          durable_name: name, filter_subject: subject, ack_policy: AckPolicy.Explicit,
+          deliver_policy: DeliverPolicy.StartTime, opt_start_time: since, ack_wait: 10 * 1e9, max_deliver: -1,
+        });
+      }
+      await nats.publish("mesh.agents.k2.inbox", message("m1", "read already"), "m1");
+      const consumer = await admin.jetstream().consumers.get(STREAM, "agent-k2");
+      for await (const m of await consumer.fetch({ max_messages: 1, expires: 1000 })) m.ack();
+      const before = await jsm.consumers.info(STREAM, "agent-k2");
+
+      await nats.ensureConsumer("k2", since, { replaceLeftBehind: true });
+      const after = await jsm.consumers.info(STREAM, "agent-k2");
+      expect(after.config.ack_wait).toBe(30 * 1e9);
+      expect(after.config.max_deliver).toBe(5);
+      expect(after.created).toBe(before.created); // updated, not replaced
+      expect(after.delivered.stream_seq).toBe(before.delivered.stream_seq);
+      expect(after.config.opt_start_time).toBe(before.config.opt_start_time);
+      expect(after.num_pending + after.num_ack_pending).toBe(0);
+    });
+
+    it("updates a durable's settings in place: nothing is replayed", async () => {
+      await jsm.consumers.add(STREAM, {
+        durable_name: "agent-k1", filter_subject: "mesh.agents.k1.inbox", ack_policy: AckPolicy.Explicit,
+        ack_wait: 10 * 1e9, max_deliver: -1,
+      });
+      await jsm.consumers.add(STREAM, {
+        durable_name: "agent-k1-broadcast", filter_subject: "mesh.broadcast", ack_policy: AckPolicy.Explicit,
+        ack_wait: 10 * 1e9, max_deliver: -1,
+      });
+      await nats.publish("mesh.agents.k1.inbox", message("m1", "read already"), "m1");
+      const consumer = await admin.jetstream().consumers.get(STREAM, "agent-k1");
+      const read = await consumer.fetch({ max_messages: 1, expires: 1000 });
+      for await (const m of read) m.ack();
+
+      await nats.ensureConsumer("k1");
+      const info = await jsm.consumers.info(STREAM, "agent-k1");
+      expect(info.config.ack_wait).toBe(30 * 1e9);
+      expect(info.config.max_deliver).toBe(5);
+      expect(info.num_pending + info.num_ack_pending).toBe(0);
+      expect((await jsm.consumers.info(STREAM, "agent-k1-broadcast")).config.max_deliver).toBe(5);
+    });
+  });
 
   describe("NatsService", () => {
     it("knows which broker it talks to", () => {
