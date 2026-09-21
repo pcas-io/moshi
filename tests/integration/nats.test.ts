@@ -48,10 +48,14 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
     admin = await natsConnect({ servers: URL });
     jsm = await admin.jetstreamManager();
     for (const name of [STREAM, "KV_mesh-presence"]) {
+      // Emptied first, then deleted: on NATS 2.12 a stream that is deleted and
+      // created again at once can come back with what the old one held.
+      try { await jsm.streams.purge(name); } catch { /* not there yet */ }
       try { await jsm.streams.delete(name); } catch { /* not there yet */ }
     }
     nats = new NatsService(URL!);
     await nats.connect();
+    run = Math.random().toString(36).slice(2, 10);
   });
 
   afterEach(async () => {
@@ -67,12 +71,19 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
     for await (const c of jsm.consumers.list(STREAM)) names.push(c.name);
     return names.sort();
   };
+  // A message id of this test's own. Every test starts with a fresh stream,
+  // but on NATS 2.12 the broker's duplicate window outlived the stream: the
+  // same "m1" published in the next test was dropped as a duplicate (or the
+  // previous test's message came back). 2.14 did not do that; production runs
+  // 2.12, so that is what this suite runs against.
+  let run = "";
+  const id = (name: string) => `${name}-${run}`;
   const message = (id: string, payload: string) =>
     enc.encode(JSON.stringify({ id, from: "x", to: "y", type: "info", payload, context: CTX, created_at: new Date().toISOString(), ttl_seconds: 3600 }));
 
   describe("configuration is code: what the broker has is brought in line", () => {
     it("updates a stream that an older version made, and keeps what is in it", async () => {
-      await nats.publish("mesh.agents.k1.inbox", message("m1", "kept"), "m1");
+      await nats.publish("mesh.agents.k1.inbox", message(id("m1"), "kept"), id("m1"));
       await nats.close();
       // What May's code would have left behind: one hour, one subject.
       const before = await jsm.streams.info(STREAM);
@@ -95,7 +106,7 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
           deliver_policy: DeliverPolicy.StartTime, opt_start_time: since, ack_wait: 10 * 1e9, max_deliver: -1,
         });
       }
-      await nats.publish("mesh.agents.k2.inbox", message("m1", "read already"), "m1");
+      await nats.publish("mesh.agents.k2.inbox", message(id("m1"), "read already"), id("m1"));
       const consumer = await admin.jetstream().consumers.get(STREAM, "agent-k2");
       for await (const m of await consumer.fetch({ max_messages: 1, expires: 1000 })) m.ack();
       const before = await jsm.consumers.info(STREAM, "agent-k2");
@@ -119,7 +130,7 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
         durable_name: "agent-k1-broadcast", filter_subject: "mesh.broadcast", ack_policy: AckPolicy.Explicit,
         ack_wait: 10 * 1e9, max_deliver: -1,
       });
-      await nats.publish("mesh.agents.k1.inbox", message("m1", "read already"), "m1");
+      await nats.publish("mesh.agents.k1.inbox", message(id("m1"), "read already"), id("m1"));
       const consumer = await admin.jetstream().consumers.get(STREAM, "agent-k1");
       const read = await consumer.fetch({ max_messages: 1, expires: 1000 });
       for await (const m of read) m.ack();
@@ -139,7 +150,7 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
     });
 
     it("connects a second time without recreating what is there", async () => {
-      await nats.publish("mesh.agents.k1.inbox", message("m1", "kept"), "m1");
+      await nats.publish("mesh.agents.k1.inbox", message(id("m1"), "kept"), id("m1"));
       const second = new NatsService(URL!);
       extra.push(second);
       await second.connect();
@@ -157,7 +168,7 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
 
     it("counts a waiting message, hands it over once, and the count drops after the ack", async () => {
       await nats.ensureConsumer("k1");
-      await nats.publish("mesh.agents.k1.inbox", message("m1", "hello"), "m1");
+      await nats.publish("mesh.agents.k1.inbox", message(id("m1"), "hello"), id("m1"));
       expect(await nats.inboxPending("k1")).toMatchObject({ inbox: 1, broadcast: 0, total: 1 });
 
       const pull = await nats.pullInbox("k1", 10);
@@ -173,7 +184,7 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
       // reader pulled and never acked looks like an empty inbox until the
       // broker redelivers it, 30 seconds later.
       await nats.ensureConsumer("k1");
-      await nats.publish("mesh.agents.k1.inbox", message("m1", "pulled, never acked"), "m1");
+      await nats.publish("mesh.agents.k1.inbox", message(id("m1"), "pulled, never acked"), id("m1"));
       const pull = await nats.pullInbox("k1", 10);
       expect(pull.messages).toHaveLength(1);
       expect((await nats.inboxPending("k1")).total).toBe(1);
@@ -185,7 +196,7 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
     it("keeps another agent's mail out of this inbox", async () => {
       await nats.ensureConsumer("k1");
       await nats.ensureConsumer("k2");
-      await nats.publish("mesh.agents.k2.inbox", message("m1", "for k2"), "m1");
+      await nats.publish("mesh.agents.k2.inbox", message(id("m1"), "for k2"), id("m1"));
       expect((await nats.inboxPending("k1")).total).toBe(0);
       expect((await nats.inboxPending("k2")).total).toBe(1);
     });

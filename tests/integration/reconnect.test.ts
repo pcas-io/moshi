@@ -46,6 +46,9 @@ describe.skipIf(!URL || !CONTAINER)("a broker that goes away and comes back", ()
     const admin = await natsConnect({ servers: URL });
     const jsm = await admin.jetstreamManager();
     for (const name of ["MESH_MESSAGES", "KV_mesh-presence"]) {
+      // Emptied first, then deleted: on NATS 2.12 a stream that is deleted and
+      // created again at once can come back with what the old one held.
+      try { await jsm.streams.purge(name); } catch { /* not there yet */ }
       try { await jsm.streams.delete(name); } catch { /* not there yet */ }
     }
     await admin.close();
