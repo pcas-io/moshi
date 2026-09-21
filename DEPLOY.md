@@ -92,6 +92,102 @@ Named volumes `moshi-data` (SQLite at `/data/moshi.db`) and `nats-data`
 **internal only** (never exposed); the `moshi` service is the only NATS
 client by design.
 
+### Backups
+
+The service holds the only copy of the history, so it copies its database:
+
+- **Daily**, inside the hourly maintenance sweep: `VACUUM INTO`
+  `/data/backups/moshi-YYYY-MM-DD.db` (UTC). An online copy, no pause, no
+  free pages in it. The newest **7** stay. A copy that fails its integrity
+  check is thrown away and tried again an hour later.
+- **Before a migration**: when a start finds pending migrations on a
+  database that has been in use, it first writes
+  `moshi-before-<first migration>-<timestamp>.db`. One per migration (a
+  service that keeps restarting on a failing migration does not write a new
+  one each time), the newest 3 stay. If that copy cannot be written the
+  migration still runs, and the log says so at level `error`.
+- `BACKUP_DIR` moves them, `BACKUP_KEEP` changes the 7 (`0` switches both
+  kinds off). Both are passed through by `docker-compose.yml`; empty means
+  the default. A `BACKUP_DIR` on a volume of its own is handed to the service
+  user by the entrypoint (the directory, not what is in it). Log line:
+  `database backup written`.
+- A copy holds agents, token HASHES and the whole history. Plaintext tokens
+  from the old `oauth_tokens` table are taken out of every copy.
+
+They sit on the same volume as the database. That covers a bad migration, a
+bad delete and a bad deploy. It does not cover losing the volume or the host:
+an offsite copy is a separate step and not set up.
+
+**Restore drill** (done once on 2026-09-20 against a local copy; repeat it
+after changes to the schema or to this section):
+
+```bash
+# 1. get a copy out (Coolify terminal of the moshi container, or docker cp on the host)
+docker cp <moshi-container>:/data/backups/moshi-2026-09-20.db ./restore.db
+# 2. does it open, and is it whole? (no sqlite3 needed: the repo has better-sqlite3)
+node -e "const d=require('better-sqlite3')('restore.db',{readonly:true});console.log(d.pragma('integrity_check',{simple:true}),d.prepare('SELECT (SELECT COUNT(*) FROM agents) agents,(SELECT COUNT(*) FROM messages) messages,(SELECT MAX(name) FROM _migrations) last_migration').get())"
+# 3. start the service on it, without a broker, and look at it
+MESH_ADMIN_TOKEN=<any 32+ chars> DATABASE_PATH=$PWD/restore.db BACKUP_KEEP=0 NATS_URL=nats://127.0.0.1:1 PORT=3999 npx tsx src/index.tsx
+#    http://127.0.0.1:3999/agents and /conversations: same agents, same threads as production
+```
+
+To restore for real: stop the `moshi` service, put the copy in place of
+`/data/moshi.db` (remove `moshi.db-wal` and `moshi.db-shm` next to it), make
+it the service user's (`chown 1000:1000`, or let the entrypoint do it at the
+next start), start the service. Agent tokens are in the database, so they are the ones from the
+day of the copy. What sits in NATS and was not read yet is unaffected.
+
+### The image, and stopping it
+
+The runtime image has no compiler and no dev dependencies, and the service
+(PID 1) runs as `node`, not as root. The container STARTS as root for one
+step: the data volume of an installation older than this image belongs to
+root, and `docker/entrypoint.sh` hands it over before it drops to `node`.
+It only ever touches the directory of `DATABASE_PATH` (absolute, outside
+`/app`) and `BACKUP_DIR`. `docker exec` still starts as root, because the
+image names no `USER` yet; that follows once every volume has been handed
+over. Port 80 as `node` works because Docker lets a container's
+unprivileged users bind low ports (20.10 and later); where it does not, the
+entrypoint says so. Base images are pinned by digest; Dependabot proposes
+the bumps.
+
+`docker stop` (and every deploy) sends SIGTERM. The service then ends the
+open event streams and takes no new ones, answers everything with
+`Connection: close`, stops accepting connections, gives requests in flight
+up to 10 s, drains the broker connection, folds the write-ahead log into the
+database and exits 0. A SIGTERM during start-up ends the process at once.
+`stop_grace_period: 30s` in the compose file is longer than all of that can
+take, and a test keeps it so.
+
+### The broker
+
+`docker-compose.yml` pins the NATS image to a version: **2.12.6**, which is
+what production ran when the pin was made (`nats connected … server_version`
+in the log says what runs). The floating tag had moved on to 2.15 by then.
+Upgrading is a decision: bump the compose file and
+`scripts/test-integration.sh` together, one minor version at a time, with a
+copy of the `nats-data` volume, and never go back below what has run: a
+JetStream store written by a newer server is not guaranteed to be readable
+by an older one.
+
+At every connect the stream is brought in line with the code
+(`src/services/stream-config.ts`): subjects, retention, limits, duplicate
+window. A smaller limit makes the broker delete what no longer fits at once;
+the log says so at level `error` before the update goes out.
+
+### Rotating the admin token
+
+1. Put the OLD token into `MESH_ADMIN_TOKEN_PREVIOUS`, the new one into
+   `MESH_ADMIN_TOKEN`, deploy. Both work now, as a Bearer and for signing in.
+2. Move whatever used the old one.
+3. Empty `MESH_ADMIN_TOKEN_PREVIOUS`, deploy. The old token and every
+   dashboard session made with it are gone.
+
+The previous token is held to the same rules as the current one: at least 32
+characters, and different from the cookie and OAuth secrets. Production
+refuses to start when two of its secrets are the same value, or when
+`NODE_ENV` is anything but `production`, `development` or `test`.
+
 ## 5. Deploy + verify
 
 Deploy. First, is what runs what was merged?
