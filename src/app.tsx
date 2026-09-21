@@ -22,6 +22,7 @@ import type { NatsPingable } from "./services/health.js";
 import { checkHealth } from "./services/health.js";
 import { log } from "./services/logger.js";
 import { authMiddleware, safeNextPath } from "./auth.js";
+import { closeConnectionsWhileDraining } from "./services/shutdown.js";
 import { mcpPostOnly } from "./mcp/http-guard.js";
 import { securityHeaders } from "./middleware/security-headers.js";
 import { createSessionRoutes, issueLoginCsrf } from "./routes/session.js";
@@ -54,6 +55,9 @@ export interface AppDeps {
 
 export function createApp({ config, db, nats, agents, activity, presence, rateLimiter, now }: AppDeps): Hono<HonoEnv> {
   const app = new Hono<HonoEnv>();
+
+  // From SIGTERM on, every answer ends its connection (src/services/shutdown.ts).
+  app.use("*", closeConnectionsWhileDraining());
 
   // --- Global error handler (C5) ---
   // Catches any uncaught error in a route handler, logs it as structured
