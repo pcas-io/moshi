@@ -1,0 +1,20 @@
+name: Daily
+# Once a day, whether anybody pushed or not. Two tests that compared against a
+# fixed date went red on a calendar day in September 2026 and nobody saw it
+# for a week, because nothing ran.
+#
+# In a file of its own on purpose: GitHub disables a scheduled workflow in a
+# public repository after 60 days without activity. When that happens to this
+# file, ci.yml and the required checks are untouched. Re-enable with:
+#   gh workflow enable daily.yml
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
