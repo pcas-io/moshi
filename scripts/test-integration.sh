@@ -9,9 +9,9 @@
 #   MOSHI_TEST_NATS_IMAGE=nats:2-alpine npm run test:integration   # another version
 set -eu
 
-# A pin, not a mirror: docker-compose.yml still uses the floating nats:2-alpine
-# (2.14.6 on 2026-09-19). Bump this together with the compose file.
-IMAGE="${MOSHI_TEST_NATS_IMAGE:-nats:2.14.6-alpine}"
+# The version docker-compose.yml runs. tests/deploy-files.test.ts keeps the two
+# together: bump both.
+IMAGE="${MOSHI_TEST_NATS_IMAGE:-nats:2.12.6-alpine}"
 NAME="moshi-it-nats-$$"
 
 # No --rm and a fixed port: the reconnect test stops and starts this very
