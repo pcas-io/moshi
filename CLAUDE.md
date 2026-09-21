@@ -34,7 +34,9 @@ TypeScript, Hono, @hono/node-server, @modelcontextprotocol/sdk, nats.js, better-
 - `src/oauth-codes.ts` — authorization codes: random, stored as a hash, the token sealed (AES-256-GCM, key from code + `OAUTH_SECRET`), the PKCE challenge stored with the row
 - `src/mcp/http-guard.ts` — `/mcp` is POST-only (405 for everything else), mounted before auth
 - `src/middleware/security-headers.ts` — security headers, `Cache-Control: no-store` unless a route set its own
-- `src/services/maintenance.ts` — hourly retention + expired OAuth rows (was: only at process start)
+- `src/services/maintenance.ts` — hourly retention + expired OAuth rows (was: only at process start), and the daily backup
+- `src/services/backup.ts`, `src/services/shutdown.ts`, `src/services/stream-config.ts` — database copies, ordered shutdown, stream configuration as code
+- `docker/entrypoint.sh` — hands a root-owned data volume to `node`, then drops root for good
 - `src/views/v2/role-index.ts` — name → role map without a prototype
 
 ## Patterns
@@ -84,7 +86,13 @@ ULID IDs, SHA-256 token hashing, timing-safe comparison.
 - Thread order is `created_at, rowid`. Party order (first sender, first recipient, then whoever joins) decides titles and bubble sides; list and open thread share `partiesInOrder`. Never cut a payload in SQL before `previewPayload` has parsed it.
 
 - The version is `package.json`'s, the commit comes from the environment (`src/version.ts`): Coolify's per-deploy `SOURCE_COMMIT`, or `MOSHI_COMMIT` for a build elsewhere. Never reference `SOURCE_COMMIT` in `docker-compose.yml` or the `Dockerfile` and never store it in Coolify, or `/health` reports one commit for ever (`tests/version.test.ts` guards the files).
-- `tsx` is the production runtime: the image runs the TypeScript sources through it. A toolchain update therefore gets a real-process check, not only the suite: vitest does not run through tsx.
+- `tsx` is the production runtime and a production dependency: the image runs `node --import ./docker/early-signals.mjs --import tsx src/index.tsx`, one process, PID 1. A toolchain update therefore gets a real-process check, not only the suite: vitest does not run through tsx. The preload holds the ONE signal listener from the first moment; `src/index.tsx` swaps the function it delegates to and never re-registers a listener (libuv addresses a queued signal to the handle that was there).
+- Migrations run one per transaction, and the `_migrations` row is part of it (`src/services/db.ts`). A file may bring its own `BEGIN; … COMMIT;` pair, the runner takes it off; any other transaction statement in a file is refused before anything runs. `PRAGMA foreign_keys` does nothing inside a transaction: a table rebuild with keys off needs a runner change first.
+- The stream and the durables are configuration in code: `reconcileStream` at every connect, `alignSettings` when a durable is ensured. Only "not found" is answered with a create (by the broker's code when it sent one, never by a text that merely contains the words), never a timeout. A durable is updated in place, never recreated for a setting: a recreate replays the inbox. A REFUSED update (the broker answered, with an `api_error`) is logged and the thing stays as it is; an outage still goes up. The broker version is pinned to what production runs, never below it.
+- Shutdown is an ordered list of bounded steps (`src/services/shutdown.ts`): maintenance, event streams, HTTP (10 s for requests in flight), NATS, database. The step timeouts are constants THERE (`SHUTDOWN_STEP_TIMEOUTS_MS`), and `tests/deploy-files.test.ts` keeps the compose file's `stop_grace_period` above their sum. From the first step on the process is draining: every answer says `Connection: close` (read at response time), new event streams get 503. A new long-lived connection type has to end AND refuse itself there, or it holds `server.close()` for the full grace period on every deploy.
+- Backups are `VACUUM INTO` copies on the SAME volume (`src/services/backup.ts`): daily, and one before each pending migration. Every writer uses a temp name of its own (two containers share the volume during a deploy), pruning goes by the time in the name, and nothing is touched that the module did not name itself. The job list of the hourly sweep is `src/services/maintenance-tasks.ts`, so a test can see it; the copy comes last.
+- `docker/entrypoint.sh` may only hand over an absolute directory outside `/app` (`tests/docker-entrypoint.test.ts` runs it with stand-in commands). `dirname` of a relative `DATABASE_PATH` is `.`, which is the application.
+- When you stop a local test server, kill the PID you started. `pkill -f src/index.tsx` also kills the servers of every review agent working next to you.
 
 ## Commits
 Conventional Commits: feat:, fix:, chore:, docs:, refactor:

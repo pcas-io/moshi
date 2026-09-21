@@ -1,0 +1,17 @@
+# The Dockerfile copies what it needs by name. This keeps the rest out of the
+# build context: faster, and nothing local (databases, env files) travels.
+.git
+.github
+node_modules
+dist
+tests
+docs
+scripts
+*.db
+*.db-wal
+*.db-shm
+backups
+*.db.tmp-*
+.env
+.env.*
+!.env.example

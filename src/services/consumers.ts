@@ -46,6 +46,8 @@ export interface ConsumerAdmin {
   info(name: string): Promise<{ created?: string } | unknown>;
   add(config: Partial<ConsumerConfig>): Promise<unknown>;
   delete(name: string): Promise<unknown>;
+  /** Optional: without it an existing durable keeps the settings it has. */
+  update?(name: string, config: Partial<ConsumerConfig>): Promise<unknown>;
 }
 
 export interface EnsureOptions {
@@ -105,10 +107,35 @@ export class ConsumerRegistry {
     this.ensured.clear();
   }
 
+  /** Durables were create-only: one made by an older version kept its ack
+   *  wait and redelivery limit for good. Updated in place, never recreated:
+   *  a recreate would replay the inbox. */
+  private async alignSettings(durable: string, config: Partial<ConsumerConfig> | undefined): Promise<void> {
+    if (!config || !this.admin.update) return;
+    if (config.ack_wait === ACK_WAIT_NS && config.max_deliver === MAX_DELIVER) return;
+    log("warn", "durable settings differ, updating", {
+      durable, ack_wait: { from: config.ack_wait, to: ACK_WAIT_NS }, max_deliver: { from: config.max_deliver, to: MAX_DELIVER },
+    });
+    try {
+      await this.admin.update(durable, { ...config, ack_wait: ACK_WAIT_NS, max_deliver: MAX_DELIVER });
+    } catch (err) {
+      // The broker answered, and the answer is no (a hand-made durable with a
+      // backoff list, say). It works as it is: keep it, say so, go on. Thrown
+      // on, this failed every request of that agent, never created its second
+      // durable, and was never logged. An outage has no api_error and still
+      // goes up.
+      if (typeof (err as { api_error?: { err_code?: number } } | null)?.api_error?.err_code !== "number" || isConsumerNotFound(err)) throw err;
+      log("error", "the broker refused the durable update; the durable stays as it is", { durable, err: String((err as Error).message) });
+    }
+  }
+
   private async ensureOne(durable: string, filterSubject: string, since: string | null, replace: boolean): Promise<void> {
     try {
-      const info = (await this.admin.info(durable)) as { created?: string } | undefined;
-      if (!replace || !isLeftBehind(info?.created, since, this.clockToleranceMs)) return;
+      const info = (await this.admin.info(durable)) as { created?: string; config?: Partial<ConsumerConfig> } | undefined;
+      if (!replace || !isLeftBehind(info?.created, since, this.clockToleranceMs)) {
+        await this.alignSettings(durable, info?.config);
+        return;
+      }
       log("warn", "replacing a durable that is older than its agent", { durable, created: info?.created, inbox_since: since });
       await this.admin.delete(durable);
     } catch (err) {

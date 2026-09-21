@@ -1,6 +1,11 @@
 services:
   moshi:
     build: .
+    restart: unless-stopped
+    # SIGTERM starts an ordered shutdown: requests in flight get up to 10 s,
+    # then the broker connection is drained and the database closed
+    # (src/services/shutdown.ts). Docker's default of 10 s would cut that short.
+    stop_grace_period: 30s
     environment:
       - NODE_ENV=production
       - NATS_URL=nats://nats:4222
@@ -15,6 +20,10 @@ services:
       # is served over plain http, e.g. a LAN host without TLS.
       - MESH_COOKIE_SECURE=${MESH_COOKIE_SECURE:-}
       - DATABASE_PATH=/data/moshi.db
+      # Daily copies of the database. Empty means the defaults: next to the
+      # database (/data/backups), seven of them. BACKUP_KEEP=0 switches them off.
+      - BACKUP_DIR=${BACKUP_DIR:-}
+      - BACKUP_KEEP=${BACKUP_KEEP:-}
       - PORT=80
     volumes:
       - moshi-data:/data
@@ -33,7 +42,14 @@ services:
       retries: 3
 
   nats:
-    image: nats:2-alpine
+    # A version, not a floating tag. 2.12.6 is what production ran when this
+    # was pinned (its log said so; the tag `2-alpine` had moved on to 2.15 by
+    # then, and the host was still using the image it had pulled in spring).
+    # scripts/test-integration.sh tests against the same version, and
+    # tests/deploy-files.test.ts keeps the two together. Upgrading is a
+    # decision: bump both, one minor at a time, with a copy of nats-data.
+    image: nats:2.12.6-alpine
+    restart: unless-stopped
     command: ["-js", "-sd", "/data", "-m", "8222"]
     volumes:
       - nats-data:/data

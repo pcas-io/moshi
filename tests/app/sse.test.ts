@@ -13,7 +13,7 @@ import {
   _resetMessageEventsForTest,
 } from "../../src/services/message-events";
 import { Hono } from "hono";
-import { SSE_HEARTBEAT_MS, SSE_MAX_CONNECTIONS, SSE_MAX_LIFETIME_MS, SSE_MAX_QUEUED, createSseRoutes } from "../../src/routes/sse";
+import { SSE_HEARTBEAT_MS, SSE_MAX_CONNECTIONS, SSE_MAX_LIFETIME_MS, SSE_MAX_QUEUED, createSseRoutes, endAllStreams, _resetSseForTest } from "../../src/routes/sse";
 import { publishMessageEvent } from "../../src/services/message-events";
 import { createMessage } from "../../src/services/message";
 
@@ -192,7 +192,7 @@ describe("GET /sse/messages — keeping a connection alive, and not for ever", (
   const event = () => publishMessageEvent(createMessage({ from: "a", to: "b", type: "info", payload: "p", context: "c" }));
   const timers = () => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
 
-  beforeEach(() => { _resetMessageEventsForTest(); });
+  beforeEach(() => { _resetMessageEventsForTest(); _resetSseForTest(); });
 
   it("pings under Cloudflare's hundred seconds, as a comment that fires no event", async () => {
     expect(SSE_HEARTBEAT_MS).toBe(25_000);
@@ -203,6 +203,37 @@ describe("GET /sse/messages — keeping a connection alive, and not for ever", (
     expect(text).not.toMatch(/^(event|data):/m);
     await reader.cancel();
     expect(listenerCount()).toBe(0);
+  });
+
+  it("ends every open stream when the service shuts down, so close() does not wait for a tab", async () => {
+    const app = new Hono().route("/", createSseRoutes({ heartbeatMs: 60_000 }));
+    const readers = [];
+    for (let i = 0; i < 3; i++) {
+      const reader = (await app.request("/sse/messages")).body!.getReader();
+      await readUntil(reader, /: open\n\n/);
+      readers.push(reader);
+    }
+    expect(listenerCount()).toBe(3);
+    expect(endAllStreams()).toBe(3);
+    for (const reader of readers) {
+      for (;;) { if ((await reader.read()).done) break; }
+    }
+    expect(listenerCount()).toBe(0);
+    expect(endAllStreams()).toBe(0);
+  });
+
+  it("takes no new stream once it has ended them: one opened during the grace period held the shutdown for all of it", async () => {
+    const app = new Hono().route("/", createSseRoutes({ heartbeatMs: 60_000 }));
+    endAllStreams();
+    const late = await app.request("/sse/messages");
+    expect(late.status).toBe(503);
+    expect(late.headers.get("retry-after")).toBe("30");
+    expect(late.headers.get("cache-control")).toBe("no-store");
+    expect(listenerCount()).toBe(0);
+    _resetSseForTest();
+    const again = await app.request("/sse/messages");
+    expect(again.status).toBe(200);
+    await again.body!.cancel();
   });
 
   it("leaves no timer behind when the tab goes away between two pings", async () => {

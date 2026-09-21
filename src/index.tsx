@@ -4,14 +4,17 @@
 
 import { serve } from "@hono/node-server";
 import { initDatabase } from "./services/db.js";
+import { maintenanceTasks, BACKUP_TASK } from "./services/maintenance-tasks.js";
+import { createShutdown, closeHttpServer, beginDraining, HTTP_GRACE_MS, SHUTDOWN_STEP_TIMEOUTS_MS } from "./services/shutdown.js";
+import { endAllStreams } from "./routes/sse.js";
+import type { Server as HttpServer } from "node:http";
 import { NatsService } from "./services/nats.js";
 import { AgentService } from "./services/agent.js";
 import { ActivityService } from "./services/activity.js";
 import { RateLimiter } from "./services/ratelimit.js";
 import { PresenceService } from "./services/presence.js";
 import { startMaintenance } from "./services/maintenance.js";
-import { cleanupExpiredOAuthCodes, purgeLegacyOAuthTokens } from "./oauth-codes.js";
-import { RATE_LIMIT_PER_MINUTE, VERSION, MESSAGE_RETENTION_DAYS, ACTIVITY_RETENTION_DAYS } from "./types.js";
+import { RATE_LIMIT_PER_MINUTE, VERSION } from "./types.js";
 import { loadConfig, isConfigError } from "./config.js";
 import { log } from "./services/logger.js";
 import { createApp } from "./app.js";
@@ -32,7 +35,11 @@ if (isConfigError(configResult)) {
 const config = configResult;
 
 // --- Initialize services ---
-const db = initDatabase(config.databasePath);
+const db = initDatabase(config.databasePath, {
+  // A copy of the database as it was, before pending migrations touch it.
+  backupDir: config.backupKeep > 0 ? config.backupDir : null,
+  onLog: (level, msg, extra) => log(level, msg, extra),
+});
 const nats = new NatsService(config.natsUrl);
 const activity = new ActivityService(db);
 // C8: AgentService gets a NatsCleanup handle (interface-shimmed — the
@@ -73,19 +80,17 @@ const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
 
 // --- Start server + graceful shutdown ---
 async function start() {
+  const backupDir = config.backupKeep > 0 ? config.backupDir : null;
   // Retention and expired-credential cleanup: now, then hourly. It used to
   // run only here, so "30 days" really meant "until the next restart".
   const stopMaintenance = startMaintenance(
-    [
-      { name: "oauth_codes", run: () => cleanupExpiredOAuthCodes(db) },
-      // Plaintext rows of a rolled-back release. See migrations/0009.
-      { name: "oauth_tokens (legacy)", run: () => purgeLegacyOAuthTokens(db) },
-      { name: "messages", run: () => activity.rotateMessages(MESSAGE_RETENTION_DAYS) },
-      { name: "activity_log", run: () => activity.rotate(ACTIVITY_RETENTION_DAYS) },
-    ],
+    maintenanceTasks({ db, activity, backupDir, backupKeep: config.backupKeep }),
     {
       intervalMs: MAINTENANCE_INTERVAL_MS,
-      onResult: (name, count) => log("info", "maintenance removed expired rows", { table: name, count }),
+      onResult: (name, count) =>
+        name === BACKUP_TASK
+          ? log("info", "database backup written", { dir: backupDir, keep: config.backupKeep })
+          : log("info", "maintenance removed expired rows", { table: name, count }),
       onError: (name, err) => log("error", "maintenance task failed", { table: name, err: String(err) }),
     },
   );
@@ -125,29 +130,41 @@ async function start() {
     }
   })();
 
-  let shuttingDown = false;
-  const shutdown = async () => {
-    if (shuttingDown) return; // SIGTERM and SIGINT, or the same signal twice
-    shuttingDown = true;
-    log("info", "shutting down");
-    stopping = true;
-    // Every step runs, whatever the one before it did: a rejected close()
-    // used to skip db.close() and process.exit(0), and the process then sat
-    // there until Docker killed it.
-    try {
-      stopMaintenance();
-      server.close();
-      await nats.close();
-    } catch (err) {
-      log("error", "shutdown step failed", { err: String(err) });
-    } finally {
-      try { db.close(); } catch { /* already closed */ }
-      process.exit(0);
-    }
-  };
+  // In order, each step bounded, none skipped (src/services/shutdown.ts).
+  // The sum stays under the 30 s the compose file gives the container.
+  const shutdown = createShutdown({
+    log: (level, msg, extra) => log(level, msg, extra),
+    exit: (code) => process.exit(code),
+    steps: [
+      { name: "maintenance", timeoutMs: SHUTDOWN_STEP_TIMEOUTS_MS.maintenance, run: () => { stopping = true; stopMaintenance(); } },
+      // Open tabs first, or each of them holds the server's close() for the full grace period.
+      { name: "event-streams", timeoutMs: SHUTDOWN_STEP_TIMEOUTS_MS.eventStreams, run: () => { beginDraining(); endAllStreams(); } },
+      // No new requests; the ones being answered get their answer.
+      { name: "http", timeoutMs: SHUTDOWN_STEP_TIMEOUTS_MS.http, run: () => closeHttpServer(server as HttpServer, HTTP_GRACE_MS) },
+      { name: "nats", timeoutMs: SHUTDOWN_STEP_TIMEOUTS_MS.nats, run: () => nats.close() },
+      {
+        name: "database", timeoutMs: SHUTDOWN_STEP_TIMEOUTS_MS.database,
+        run: () => {
+          // Fold the write-ahead log into the file: what is on the volume
+          // afterwards is the whole database, in one piece.
+          try { db.pragma("wal_checkpoint(TRUNCATE)"); } catch { /* read-only or busy: close() still checkpoints */ }
+          db.close();
+        },
+      },
+    ],
+  });
 
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  // In the image a preload (docker/early-signals.mjs) has been listening since
+  // before this file was compiled, and it is handed the real shutdown here.
+  // Its listener is never removed and re-added: libuv addresses a queued
+  // signal to the handle that was there when it arrived.
+  const early = (globalThis as { __moshiStop?: { handle: (signal: string) => void } }).__moshiStop;
+  if (early) {
+    early.handle = (signal) => void shutdown(signal);
+  } else {
+    process.on("SIGTERM", () => void shutdown("SIGTERM"));
+    process.on("SIGINT", () => void shutdown("SIGINT"));
+  }
 }
 
 start().catch((err) => {

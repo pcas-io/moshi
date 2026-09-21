@@ -1,6 +1,11 @@
 node_modules/
 dist/
 *.db
+*.db-wal
+*.db-shm
+# Copies the service writes next to its database (src/services/backup.ts)
+backups/
+*.db.tmp-*
 .env
 
 # Local dev overrides (publishes mesh port to host, etc.)

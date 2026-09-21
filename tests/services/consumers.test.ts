@@ -198,3 +198,87 @@ describe("ConsumerRegistry.ensure — where a new durable starts, and whose an o
     ]);
   });
 });
+
+// Durables were create-only as well: one made by an older version kept its
+// ack wait and its redelivery limit for good.
+describe("ConsumerRegistry.ensure — an existing durable is brought in line", () => {
+  const ACK_WAIT_NS = 30 * 1_000_000_000;
+
+  function withConfig(config: Record<string, unknown>) {
+    const admin = {
+      info: vi.fn(async (name: string) => ({ created: "2026-01-01T00:00:00Z", config: { durable_name: name, filter_subject: "kept", ...config } })),
+      add: vi.fn(async () => ({})),
+      delete: vi.fn(async () => true),
+      update: vi.fn(async () => ({})),
+    };
+    return { admin, registry: new ConsumerRegistry(admin) };
+  }
+
+  it("leaves a durable alone that has today's settings", async () => {
+    const { admin, registry } = withConfig({ ack_wait: ACK_WAIT_NS, max_deliver: 5 });
+    await registry.ensure("alpha");
+    expect(admin.update).not.toHaveBeenCalled();
+    expect(admin.add).not.toHaveBeenCalled();
+  });
+
+  it("updates ack wait and redelivery limit, keeps everything else, and never deletes for that", async () => {
+    const { admin, registry } = withConfig({ ack_wait: 10 * 1_000_000_000, max_deliver: -1, deliver_policy: "by_start_time" });
+    await registry.ensure("alpha");
+    expect(admin.update).toHaveBeenCalledTimes(2);
+    expect(admin.update).toHaveBeenCalledWith("agent-alpha", {
+      durable_name: "agent-alpha", filter_subject: "kept", deliver_policy: "by_start_time", ack_wait: ACK_WAIT_NS, max_deliver: 5,
+    });
+    expect(admin.delete).not.toHaveBeenCalled();
+    expect(admin.add).not.toHaveBeenCalled();
+  });
+
+  it("does not remember a key whose durable could not be updated", async () => {
+    const { admin, registry } = withConfig({ ack_wait: 1, max_deliver: 5 });
+    admin.update.mockRejectedValueOnce(timeout());
+    await expect(registry.ensure("alpha")).rejects.toThrow("TIMEOUT");
+    expect(registry.has("alpha")).toBe(false);
+  });
+
+  it("works with a broker handle that cannot update: the durable stays as it is", async () => {
+    const { admin, registry } = withConfig({ ack_wait: 1, max_deliver: 5 });
+    const { update: _unused, ...readOnly } = admin;
+    await new ConsumerRegistry(readOnly).ensure("alpha");
+    expect(admin.add).not.toHaveBeenCalled();
+    void registry;
+  });
+
+  it("sees a redelivery limit that drifted on its own", async () => {
+    const { admin, registry } = withConfig({ ack_wait: ACK_WAIT_NS, max_deliver: -1 });
+    await registry.ensure("alpha");
+    expect(admin.update).toHaveBeenCalledWith("agent-alpha", expect.objectContaining({ max_deliver: 5 }));
+  });
+
+  it("does it on the path every new agent takes: since and replaceLeftBehind, durable not left behind", async () => {
+    const { admin, registry } = withConfig({ ack_wait: 1, max_deliver: 5 });
+    await registry.ensure("alpha", "2025-01-01T00:00:00.000Z", { replaceLeftBehind: true }); // durable from 2026: younger than the agent
+    expect(admin.update).toHaveBeenCalledTimes(2);
+    expect(admin.delete).not.toHaveBeenCalled();
+  });
+
+  it("keeps a durable the broker refuses to update, says so once, and still ensures the other one", async () => {
+    const lines: { lvl: string; msg: string }[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((l) => { try { lines.push(JSON.parse(String(l))); } catch { /* not a log line */ } });
+    try {
+      const refused = Object.assign(new Error("max deliver is required to be > length of backoff values"), { api_error: { err_code: 10116, code: 400 } });
+      const known = new Set(["agent-alpha"]);
+      const admin = {
+        info: vi.fn(async (name: string) => { if (!known.has(name)) throw notFound(); return { created: "2026-01-01T00:00:00Z", config: { durable_name: name, ack_wait: 1, max_deliver: 8 } }; }),
+        add: vi.fn(async (c: { durable_name?: string }) => { known.add(c.durable_name!); return {}; }),
+        delete: vi.fn(async () => true),
+        update: vi.fn(async () => { throw refused; }),
+      };
+      const registry = new ConsumerRegistry(admin);
+      await registry.ensure("alpha");
+      expect(admin.add).toHaveBeenCalledWith(expect.objectContaining({ durable_name: "agent-alpha-broadcast" }));
+      expect(registry.has("alpha")).toBe(true);
+      expect(lines.filter((l) => l.lvl === "error" && /refused/.test(l.msg))).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

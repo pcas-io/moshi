@@ -194,3 +194,86 @@ describe("loadConfig", () => {
     });
   });
 });
+
+// --- Betrieb B: a typo must not pick the development fallbacks, and three
+// secrets that are one secret are not three secrets. ---
+describe("loadConfig — stricter validation", () => {
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+  const C = "c".repeat(40);
+  const prod = (over: Record<string, string | undefined> = {}) =>
+    loadConfig({ NODE_ENV: "production", MESH_ADMIN_TOKEN: A, MESH_COOKIE_SECRET: B, OAUTH_SECRET: C, ...over });
+  const errorsOf = (r: ReturnType<typeof loadConfig>) => (isConfigError(r) ? r.errors.join(" | ") : "");
+
+  it("knows three environments and refuses everything else instead of falling back to development", () => {
+    for (const ok of ["production", "development", "test", undefined, ""]) {
+      expect(isConfigError(loadConfig({ NODE_ENV: ok, MESH_ADMIN_TOKEN: A, MESH_COOKIE_SECRET: B, OAUTH_SECRET: C })), String(ok)).toBe(false);
+    }
+    for (const typo of ["prod", "Production", "PRODUCTION", "production ", "staging", "live"]) {
+      const r = loadConfig({ NODE_ENV: typo, MESH_ADMIN_TOKEN: A, MESH_COOKIE_SECRET: B, OAUTH_SECRET: C });
+      expect(errorsOf(r), typo).toContain("NODE_ENV");
+    }
+  });
+
+  it("refuses production secrets that are the same secret", () => {
+    expect(errorsOf(prod({ MESH_COOKIE_SECRET: A }))).toContain("MESH_COOKIE_SECRET");
+    expect(errorsOf(prod({ OAUTH_SECRET: A }))).toContain("OAUTH_SECRET");
+    expect(errorsOf(prod({ OAUTH_SECRET: B }))).toMatch(/OAUTH_SECRET.*MESH_COOKIE_SECRET|MESH_COOKIE_SECRET.*OAUTH_SECRET/);
+    expect(isConfigError(prod())).toBe(false);
+  });
+
+  it("never prints a secret in an error", () => {
+    const r = prod({ MESH_COOKIE_SECRET: A, OAUTH_SECRET: A, MESH_ADMIN_TOKEN_PREVIOUS: "short-previous" });
+    expect(errorsOf(r)).not.toContain(A);
+    expect(errorsOf(r)).not.toContain("short-previous");
+  });
+
+  it("holds the previous admin token to the same length: it is an admin credential too", () => {
+    expect(errorsOf(prod({ MESH_ADMIN_TOKEN_PREVIOUS: "x" }))).toContain("MESH_ADMIN_TOKEN_PREVIOUS");
+    expect(errorsOf(loadConfig({ MESH_ADMIN_TOKEN: A, MESH_ADMIN_TOKEN_PREVIOUS: "x".repeat(31) }))).toContain("MESH_ADMIN_TOKEN_PREVIOUS");
+    const ok = prod({ MESH_ADMIN_TOKEN_PREVIOUS: "p".repeat(40) });
+    expect(isConfigError(ok)).toBe(false);
+    if (!isConfigError(ok)) expect(ok.meshAdminTokenPrevious).toBe("p".repeat(40));
+  });
+
+  it("reads an empty previous token as none: that is what the compose file passes when it is not set", () => {
+    for (const blank of ["", "   "]) {
+      const r = prod({ MESH_ADMIN_TOKEN_PREVIOUS: blank });
+      expect(isConfigError(r)).toBe(false);
+      if (!isConfigError(r)) expect(r.meshAdminTokenPrevious).toBeUndefined();
+    }
+  });
+
+  it("refuses a previous token that is one of the other secrets", () => {
+    expect(errorsOf(prod({ MESH_ADMIN_TOKEN_PREVIOUS: B }))).toContain("MESH_ADMIN_TOKEN_PREVIOUS");
+    expect(errorsOf(prod({ MESH_ADMIN_TOKEN_PREVIOUS: C }))).toContain("MESH_ADMIN_TOKEN_PREVIOUS");
+  });
+
+  it("puts the backups next to the database, seven of them, unless told otherwise", () => {
+    const r = loadConfig({ MESH_ADMIN_TOKEN: A, DATABASE_PATH: "/data/moshi.db" });
+    if (isConfigError(r)) throw new Error(errorsOf(r));
+    expect(r.backupDir).toBe("/data/backups");
+    expect(r.backupKeep).toBe(7);
+
+    const custom = loadConfig({ MESH_ADMIN_TOKEN: A, DATABASE_PATH: "/data/moshi.db", BACKUP_DIR: "/mnt/copies", BACKUP_KEEP: "14" });
+    if (isConfigError(custom)) throw new Error(errorsOf(custom));
+    expect(custom.backupDir).toBe("/mnt/copies");
+    expect(custom.backupKeep).toBe(14);
+
+    const off = loadConfig({ MESH_ADMIN_TOKEN: A, BACKUP_KEEP: "0" });
+    if (isConfigError(off)) throw new Error(errorsOf(off));
+    expect(off.backupKeep).toBe(0);
+  });
+
+  it("has no backup directory for a database that is not a file", () => {
+    const r = loadConfig({ MESH_ADMIN_TOKEN: A, DATABASE_PATH: ":memory:" });
+    if (isConfigError(r)) throw new Error(errorsOf(r));
+    expect(r.backupDir).toBeNull();
+  });
+
+  it("refuses a BACKUP_KEEP it cannot read", () => {
+    for (const bad of ["-1", "seven", "7.5", "366", "1e2"]) {
+      expect(errorsOf(loadConfig({ MESH_ADMIN_TOKEN: A, BACKUP_KEEP: bad })), bad).toContain("BACKUP_KEEP");
+    }
+  });
+});

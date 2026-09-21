@@ -24,6 +24,8 @@ export const TEST_CONFIG: Config = {
   isProduction: false,
   cookieSecure: false,
   commit: "unknown",
+  backupDir: null,
+  backupKeep: 0,
 };
 
 export interface TestApp {

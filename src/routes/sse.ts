@@ -46,6 +46,27 @@ export const SSE_MAX_QUEUED = 256;
 export const SSE_MAX_LIFETIME_MS = 30 * 60_000;
 export const SSE_PATH = "/sse/messages";
 
+// Every open stream's way out, so a shutdown can end them all. Without it an
+// open tab would hold the HTTP server's close() until its grace period ran
+// out, on every deploy.
+const openStreams = new Set<() => void>();
+let closedForGood = false;
+
+/** Ends every open stream and takes no new one: the process is going away.
+ *  A stream opened during the grace period held the shutdown for all of it.
+ *  The tabs reconnect, to whoever serves then. */
+export function endAllStreams(): number {
+  closedForGood = true;
+  const n = openStreams.size;
+  for (const end of [...openStreams]) end();
+  return n;
+}
+
+export function _resetSseForTest(): void {
+  closedForGood = false;
+  openStreams.clear();
+}
+
 export function createSseRoutes(
   { heartbeatMs = SSE_HEARTBEAT_MS, maxLifetimeMs = SSE_MAX_LIFETIME_MS }: { heartbeatMs?: number; maxLifetimeMs?: number } = {},
 ): Hono<HonoEnv> {
@@ -53,6 +74,9 @@ export function createSseRoutes(
 
   sse.all(SSE_PATH, (c) => {
     if (c.req.method !== "GET") return c.body(null, 405, { Allow: "GET" });
+    if (closedForGood) {
+      return c.json({ error: "shutting_down" }, 503, { "Retry-After": "30", "Cache-Control": "no-store", Connection: "close" });
+    }
     if (listenerCount() >= SSE_MAX_CONNECTIONS) {
       return c.json({ error: "too_many_streams" }, 503, { "Retry-After": "30", "Cache-Control": "no-store" });
     }
@@ -62,7 +86,8 @@ export function createSseRoutes(
       let wake: (() => void) | null = null;
       let queued = 0;
       let over = false;
-      const end = () => { over = true; wake?.(); };
+      const end = () => { over = true; openStreams.delete(end); wake?.(); };
+      openStreams.add(end);
       const unsubscribe = subscribeMessageEvents((msg) => {
         if (over) return;
         if (queued >= SSE_MAX_QUEUED) { end(); return; } // nobody is reading
@@ -87,6 +112,7 @@ export function createSseRoutes(
         await stream.write(": ping\n\n");
       }
       unsubscribe();
+      openStreams.delete(end);
       // Returning closes the response; with a reader that does not read, the
       // waiting writes are dropped with it.
       if (over && !stream.aborted) stream.abort();
