@@ -72,6 +72,7 @@ const homeProps: V2HomeProps = {
 const AGENT_ROWS: V2AgentsAgent[] = HOME_AGENTS.map((a, i) => ({
   id: a.id,
   name: a.name,
+  inbox_key: a.name,
   role: a.role,
   capabilities: i % 2 === 0 ? ["typescript", "sql"] : [],
   is_active: a.name !== "scout",
@@ -147,7 +148,7 @@ await dump("04-home-empty", V2HomePage({
 await dump("05-agents", V2AgentsPage({ agents: AGENT_ROWS, csrfToken: "preview-csrf", userRole: "admin", userName: "admin", inspectId: "2" }));
 await dump("06-agents-token", V2AgentsPage({ agents: AGENT_ROWS, csrfToken: "preview-csrf", userRole: "admin", userName: "admin", newToken: "bt_7f3c9a1e5d2b8460af12" }));
 await dump("07-agents-empty", V2AgentsPage({ agents: [], csrfToken: "preview-csrf", userRole: "admin", userName: "admin" }));
-await dump("08-conversations", V2ConversationsPage({ result: page([thread({}), thread({ thread_id: "t2", participants: ["pm-mira", "broadcast"], last_activity: iso(3000) })]), ...shared }));
+await dump("08-conversations", V2ConversationsPage({ opened: null, result: page([thread({}), thread({ thread_id: "t2", participants: ["pm-mira", "broadcast"], last_activity: iso(3000) })]), ...shared }));
 await dump("09-log-messages", V2LogPage({ tab: "messages", messages: page(MESSAGES), routing: "all", ...shared }));
 await dump("10-log-audit", V2LogPage({
   tab: "audit", events: page(EVENTS),

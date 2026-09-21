@@ -6,6 +6,9 @@ import { ADMIN_NOT_AGENT_HINT } from "../../src/mcp/shared";
 import { DEFAULT_PREVIEW_CHARS, FIELD_LIMITS } from "../../src/types";
 import { AGENT_NAME_RE } from "../../src/services/agent";
 
+/** `messages` of a mesh_receive reply, typed for the assertions below. */
+const messagesOf = (reply: { json: Record<string, unknown> }) => reply.json.messages as { payload: string }[];
+
 const CTX = "test context";
 
 describe("MCP tools — agent identity", () => {
@@ -188,10 +191,10 @@ describe("MCP tools — inbox_pending counts messages for you, and nothing else"
     await callTool(beta, "mesh_send", { to: "broadcast", payload: "theirs 2", context: CTX });
     await callTool(beta, "mesh_send", { to: "broadcast", payload: "theirs 3", context: CTX });
     const first = await callTool(alpha, "mesh_receive", { limit: 2 });
-    expect(first.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["theirs 1", "theirs 2"]);
+    expect(messagesOf(first).map((m) => m.payload)).toEqual(["theirs 1", "theirs 2"]);
     expect(first.json.inbox_pending).toBe(1);
     const second = await callTool(alpha, "mesh_receive", {});
-    expect(second.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["theirs 3"]);
+    expect(messagesOf(second).map((m) => m.payload)).toEqual(["theirs 3"]);
     expect(second.json.inbox_pending).toBe(0);
   });
 
@@ -200,7 +203,7 @@ describe("MCP tools — inbox_pending counts messages for you, and nothing else"
     await callTool(alpha, "mesh_send", { to: "broadcast", payload: "mine", context: CTX });
     await callTool(beta, "mesh_send", { to: "broadcast", payload: "theirs 2", context: CTX });
     const got = await callTool(alpha, "mesh_receive", { limit: 1 });
-    expect(got.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["theirs 1"]);
+    expect(messagesOf(got).map((m) => m.payload)).toEqual(["theirs 1"]);
     expect(got.json.inbox_pending).toBe(1); // "theirs 2"; "mine" is still in the consumer, and does not count
   });
 
@@ -219,7 +222,7 @@ describe("MCP tools — inbox_pending counts messages for you, and nothing else"
     await callTool(beta, "mesh_send", { to: "broadcast", payload: "theirs", context: CTX });
     expect((await callTool(alpha, "mesh_status", {})).json.inbox_pending).toBe(2); // 3 waiting, at most the 1 broadcast can be "mine"
     const got = await callTool(alpha, "mesh_receive", { limit: 1 });
-    expect(got.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["direct 1"]);
+    expect(messagesOf(got).map((m) => m.payload)).toEqual(["direct 1"]);
     expect(got.json.inbox_pending).toBe(1); // 2 left, the clamp is by the broadcast side, not by the total
   });
 
@@ -319,7 +322,7 @@ describe("MCP tools — inbox_pending counts messages for you, and nothing else"
     h.nats.enqueue("alpha", expired("msg_old2"));
     await callTool(beta, "mesh_send", { to: "alpha", payload: "in time", context: CTX });
     const got = await callTool(alpha, "mesh_receive", { limit: 1 });
-    expect(got.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["in time"]);
+    expect(messagesOf(got).map((m) => m.payload)).toEqual(["in time"]);
     expect(got.json.inbox_pending).toBe(0);
     expect(got.json.expired_dropped).toBe(2);
   });
@@ -343,14 +346,14 @@ describe("MCP tools — inbox_pending counts messages for you, and nothing else"
     };
     await callTool(beta, "mesh_send", { to: "alpha", payload: "must arrive", context: CTX });
     const got = await callTool(alpha, "mesh_receive", {});
-    expect(got.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["must arrive"]);
+    expect(messagesOf(got).map((m) => m.payload)).toEqual(["must arrive"]);
   });
 
   it("does not take a direct message from yourself for a broadcast of yours", async () => {
     await callTool(alpha, "mesh_send", { to: "alpha", payload: "note to self", context: CTX });
     expect((await callTool(alpha, "mesh_status", {})).json.inbox_pending).toBe(1);
     const got = await callTool(alpha, "mesh_receive", {});
-    expect(got.json.messages.map((m: { payload: string }) => m.payload)).toEqual(["note to self"]);
+    expect(messagesOf(got).map((m) => m.payload)).toEqual(["note to self"]);
   });
 });
 
