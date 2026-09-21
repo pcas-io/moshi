@@ -12,7 +12,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type Database from "better-sqlite3";
 import type { Env, AppVariables } from "./types.js";
-import { VERSION } from "./types.js";
+import { VERSION, versionLabel } from "./version.js";
 import type { Config } from "./config.js";
 import type { AgentService } from "./services/agent.js";
 import type { ActivityService } from "./services/activity.js";
@@ -104,7 +104,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   // 405 guard and behind auth — see the note at the top of this file.
 
   // --- Security headers (incl. no-store for everything dynamic) ---
-  app.use("*", securityHeaders(VERSION));
+  app.use("*", securityHeaders(versionLabel(config.commit)));
 
   // --- /mcp is POST-only ---
   // In front of the auth middleware on purpose: a GET must not even cost a
@@ -125,7 +125,9 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
     const h = await checkHealth(db, nats);
     return c.json(
       // sse_connections: open dashboard streams, of SSE_MAX_CONNECTIONS.
-      { status: h.status, nats: h.nats, db: h.db, sse_connections: listenerCount() },
+      // version + commit: what is deployed, readable from outside. Compare
+      // them with git, never trust them alone (scripts/verify-deploy.mjs).
+      { status: h.status, version: VERSION, commit: config.commit, nats: h.nats, db: h.db, sse_connections: listenerCount() },
       h.httpStatus,
     );
   });

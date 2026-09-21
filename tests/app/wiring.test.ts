@@ -3,6 +3,7 @@
 // could import the app: a 405 guard that has to sit in front of auth, and a
 // body limit that has to sit behind it.
 
+import { readFileSync } from "fs";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestApp, signIn, csrfFor, ADMIN_TOKEN, MCP_HEADERS, rpc } from "./harness";
 import type { TestApp } from "./harness";
@@ -187,7 +188,9 @@ describe("public routes and headers", () => {
   it("reports health without auth, and 503 when NATS is down", async () => {
     const up = await t.app.request("/health");
     expect(up.status).toBe(200);
-    expect(await up.json()).toEqual({ status: "ok", nats: "connected", db: "ok", sse_connections: 0 });
+    // The exact shape: nothing else belongs on a public endpoint.
+    const pkg = JSON.parse(readFileSync("package.json", "utf-8")) as { version: string };
+    expect(await up.json()).toEqual({ status: "ok", version: pkg.version, commit: "unknown", nats: "connected", db: "ok", sse_connections: 0 });
     t.natsUp.value = false;
     const down = await t.app.request("/health");
     expect(down.status).toBe(503);
@@ -269,6 +272,32 @@ describe("public routes and headers", () => {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
     expect(res.status).toBe(413);
+  });
+});
+
+describe("what is running", () => {
+  const SHA = "dd7c1ee0a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
+  it("says so on /health: version and commit, also while the broker is away", async () => {
+    const app = createTestApp({ commit: SHA });
+    const pkg = JSON.parse(readFileSync("package.json", "utf-8")) as { version: string };
+    const up = await app.app.request("/health");
+    expect(up.status).toBe(200);
+    expect(await up.json()).toMatchObject({ status: "ok", version: pkg.version, commit: SHA });
+
+    app.natsUp.value = false;
+    const down = await app.app.request("/health");
+    expect(down.status).toBe(503);
+    expect(await down.json()).toMatchObject({ status: "degraded", version: pkg.version, commit: SHA });
+  });
+
+  it("names the build in X-Mesh-Version on every response", async () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf-8")) as { version: string };
+    const built = createTestApp({ commit: SHA });
+    expect((await built.app.request("/livez")).headers.get("x-mesh-version")).toBe(`${pkg.version}+dd7c1ee`);
+    expect((await built.app.request("/nope")).headers.get("x-mesh-version")).toBe(`${pkg.version}+dd7c1ee`);
+    const local = createTestApp({ commit: "unknown" });
+    expect((await local.app.request("/livez")).headers.get("x-mesh-version")).toBe(pkg.version);
   });
 });
 

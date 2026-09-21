@@ -293,3 +293,17 @@ describe("NatsService — what it hands on to the registry and to the pull", () 
   });
 });
 
+// Which broker is running? docker-compose.yml named a floating tag, the
+// broker is internal, and nothing said what it resolved to: "live runs 2.14.6"
+// stood in a task for a day and came from a local container.
+describe("NatsService — which broker", () => {
+  it("reports the version the broker announced, and nothing before there is a connection", () => {
+    expect(new NatsService("nats://unused.invalid:4222").serverVersion()).toBeNull();
+    const { service, nc } = setup();
+    expect(service.serverVersion()).toBeNull(); // this fake announces nothing
+    (nc as unknown as { info: unknown }).info = { version: "2.14.6", server_name: "n1" };
+    expect(service.serverVersion()).toBe("2.14.6");
+    (nc as unknown as { info: unknown }).info = { version: 42 };
+    expect(service.serverVersion()).toBeNull();
+  });
+});

@@ -13,6 +13,8 @@
 // - In development, allow fallbacks with a loud warning.
 // - Pure function: testable in isolation by passing a mock env.
 
+import { resolveCommit } from "./version.js";
+
 export interface Config {
   meshAdminToken: string;
   meshAdminTokenPrevious?: string;
@@ -22,6 +24,8 @@ export interface Config {
   databasePath: string;
   port: number;
   isProduction: boolean;
+  /** The deployed commit, or "unknown". See `resolveCommit`. */
+  commit: string;
   /** `Secure` on the session cookie. Follows `isProduction` unless
    *  MESH_COOKIE_SECURE says otherwise. */
   cookieSecure: boolean;
@@ -113,6 +117,7 @@ export function loadConfig(
     port,
     isProduction,
     cookieSecure,
+    commit: resolveCommit(env),
   };
 }
 
