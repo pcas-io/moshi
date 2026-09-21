@@ -23,5 +23,12 @@ COPY src ./src
 COPY migrations ./migrations
 COPY public ./public
 COPY --from=gobuild /cli-dist ./cli-dist
+# The commit of a build outside Coolify (CI: --build-arg MOSHI_COMMIT=<sha>).
+# Last on purpose: a new value must not invalidate the layers above.
+# On Coolify this stays empty and the app reads the per-deploy SOURCE_COMMIT
+# from its environment. Never add SOURCE_COMMIT here or in docker-compose.yml
+# (src/version.ts says why).
+ARG MOSHI_COMMIT=""
+ENV MOSHI_COMMIT=${MOSHI_COMMIT}
 EXPOSE 3000
 CMD ["npx", "tsx", "src/index.tsx"]

@@ -94,7 +94,31 @@ client by design.
 
 ## 5. Deploy + verify
 
-Deploy. Expected:
+Deploy. First, is what runs what was merged?
+
+```bash
+npm run verify:deploy        # https://moshi.enki.run against origin/main
+```
+
+It asks the git remote where `main` is now, so a local `origin/main` that is
+one merge behind is reported (`CANNOT TELL … Run: git fetch origin`) and
+never confirmed.
+
+`VERIFIED` (exit 0) means `/health.commit` equals `origin/main` AND
+`/health.version` equals `package.json` at that commit. `MISMATCH` (exit 1):
+something else is running, usually the previous deploy, so wait for Coolify
+and ask again. `CANNOT TELL` (exit 2): `/health` names no commit. Then
+Coolify's per-deploy `SOURCE_COMMIT` is not reaching the container.
+
+> **Never** write `SOURCE_COMMIT` into `docker-compose.yml`, the `Dockerfile`
+> or Coolify's stored variables. Coolify provides it per deploy through the
+> `.env` it attaches to every service, and only while no stored variable of
+> that name exists. A `${SOURCE_COMMIT}` reference in the compose file makes
+> Coolify store one, and from then on `/health` reports that commit for ever.
+> `tests/version.test.ts` guards both files. To check Coolify:
+> `GET /api/v1/applications/<uuid>/envs` and look for the key.
+
+Then:
 
 - `https://moshi.enki.run/health` → `ok`. This is readiness: it answers 503 with `"nats":"disconnected"` while the broker is away. The dashboard keeps working then, MCP tools answer `nats_unavailable`, and the app reconnects on its own. `sse_connections` is the number of open dashboard streams (`GET /sse/messages`, at most 50).
 - The message stream, the way a browser asks for it (a bare `curl -N` sends no `Accept-Encoding` and bypasses the proxy's compress middleware):
@@ -117,9 +141,44 @@ Deploy. Expected:
 
 ## CI / redeploy
 
-`.github/workflows/ci.yml` runs `npm test` + `tsc --noEmit` on every push
-to `main`. Enable Coolify's auto-deploy webhook for push-to-deploy.
-Rollback = redeploy a previous commit from the Coolify deployments list.
+`.github/workflows/ci.yml` runs on every pull request and on every push to
+`main`. `.github/workflows/daily.yml` calls it once a day, so a test that
+depends on the date fails within a day, not within a week. GitHub disables a
+scheduled workflow in a public repository after 60 days without activity;
+that is why the schedule has a file of its own (`gh workflow enable
+daily.yml` brings it back, and the checks of pull requests never stop):
+
+| Job | What |
+|---|---|
+| `test` | `npm test` |
+| `typecheck` | `tsc --noEmit`, then the same for `tests/` and the TypeScript in `scripts/` |
+| `integration` | `tests/integration` against a real NATS in Docker |
+| `cli` | Go CLI: `gofmt`, `go vet` for linux, darwin and windows, `go test`, build |
+| `docker` | builds the image, starts it in production mode, checks `/health` names version and commit |
+| `audit` | `npm audit` at level high, production and all dependencies |
+
+`test`, `typecheck` and `integration` are required for a merge. A merge to
+`main` deploys: a GitHub webhook triggers Coolify. Rollback = redeploy a
+previous commit from the Coolify deployments list.
+
+Dependabot opens grouped pull requests on Mondays (npm, Go, Docker base
+images, the broker image in `docker-compose.yml`, GitHub Actions). Security updates come on their own.
+
+`npm audit fix` and `npm update` crash in npm 11 (seen with 11.4: `Cannot
+read properties of null (reading 'edgesOut')`, arborist resolving vitest's
+peer set). Until that is fixed: `npx npm@latest update <packages>`, then
+`npm ci` with the regular npm and the full suite.
+
+### Releasing
+
+The version is `package.json`'s. After the merge that bumps it:
+
+```bash
+git fetch origin && git tag -s v1.1.0 origin/main -m "moshi 1.1.0" && git push origin v1.1.0
+```
+
+`CHANGELOG.md` links compare views between tags, so a version without its
+tag is a dead link.
 
 Rolling back across migration `0009_oauth_codes.sql` works: it empties the
 old `oauth_tokens` table and keeps it, because the release before it cannot

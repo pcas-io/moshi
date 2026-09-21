@@ -9,7 +9,8 @@ export interface Env {
 }
 
 // === Constants ===
-export const VERSION = "1.0.0";
+// package.json is the one place the version is written down (src/version.ts).
+export { VERSION } from "./version.js";
 
 export const MESSAGE_PRIORITIES = ["low", "normal", "high"] as const;
 export type MessagePriority = (typeof MESSAGE_PRIORITIES)[number];

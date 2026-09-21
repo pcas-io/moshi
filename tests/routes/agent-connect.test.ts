@@ -26,7 +26,8 @@ const NON_ADMIN: RequestAgent = { name: "dex-eu", role: "agent" };
 
 function agentRow(over: Partial<Agent> = {}): Agent {
   return {
-    id: "01HZAGENT", name: "dex-eu", role: null, capabilities: null,
+    id: "01HZAGENT", name: "dex-eu", inbox_key: "dex-eu", name_since: "2026-09-12T10:00:00.000Z",
+    inbox_since: "2026-09-12T10:00:00.000Z", role: null, capabilities: null,
     token_hash: "hash", is_active: 1, avatar: null, working_on: null,
     last_seen_at: null, created_at: "2026-09-12T10:00:00.000Z",
     updated_at: "2026-09-12T10:00:00.000Z", ...over,

@@ -97,6 +97,7 @@ async function start() {
   const server = serve({ fetch: app.fetch, port: config.port });
   log("info", "moshi listening", {
     version: VERSION,
+    commit: config.commit,
     port: config.port,
     production: config.isProduction,
     cookie_secure: config.cookieSecure,
@@ -109,7 +110,7 @@ async function start() {
     for (let attempt = 1; !stopping; attempt++) {
       try {
         await nats.connect();
-        log("info", "nats connected", { url: config.natsUrl, attempts: attempt });
+        log("info", "nats connected", { url: config.natsUrl, attempts: attempt, server_version: nats.serverVersion() });
         return;
       } catch (err) {
         const waitMs = Math.min(30_000, 2000 * attempt);

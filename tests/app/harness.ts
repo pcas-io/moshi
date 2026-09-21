@@ -23,6 +23,7 @@ export const TEST_CONFIG: Config = {
   port: 0,
   isProduction: false,
   cookieSecure: false,
+  commit: "unknown",
 };
 
 export interface TestApp {

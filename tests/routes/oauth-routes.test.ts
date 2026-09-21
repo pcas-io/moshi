@@ -122,7 +122,7 @@ describe("POST /oauth/token — malformed bodies", () => {
   it("completes the exchange in the shape the MCP SDK sends it", async () => {
     const { app, agents } = setup();
     const { plaintextToken } = agents.create("scout");
-    const exchange = async (contentType: string, body: (code: string) => BodyInit) => {
+    const exchange = async (contentType: string, body: (code: string) => URLSearchParams | string) => {
       const auth = await app.request("/oauth/authorize", authorize({ token: plaintextToken }));
       const code = new URL(auth.headers.get("location")!).searchParams.get("code")!;
       return app.request("/oauth/token", { method: "POST", body: body(code), headers: { "Content-Type": contentType } });

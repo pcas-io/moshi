@@ -328,23 +328,25 @@ describe("signing out cannot be forced from outside", () => {
   it("asks instead of acting when the browser says the form came from elsewhere, even with a good token", async () => {
     const t = createTestApp();
     const { cookie } = await signIn(t.app, ADMIN_TOKEN);
-    for (const headers of [
+    const fromElsewhere: Record<string, string>[] = [
       { "Sec-Fetch-Site": "cross-site" },
       { "Sec-Fetch-Site": "same-site" },
       { Origin: "https://evil.example", Host: "moshi.example" },
       { Origin: "null", Host: "moshi.example" },
-    ]) {
+    ];
+    for (const headers of fromElsewhere) {
       const res = await t.app.request("/logout", formPost({ csrf: csrfFor(cookie) }, { Cookie: cookie, ...headers }));
       expect(res.status, JSON.stringify(headers)).toBe(403);
       expect(sessionLine(res), JSON.stringify(headers)).toBe("");
     }
-    for (const headers of [
+    const fromHere: Record<string, string>[] = [
       { "Sec-Fetch-Site": "same-origin" },
       { "Sec-Fetch-Site": "none" },
       { Origin: "https://moshi.example", Host: "moshi.example" },
       { Origin: "http://127.0.0.1:3000", Host: "127.0.0.1:3000" },
       {},
-    ]) {
+    ];
+    for (const headers of fromHere) {
       const { cookie: fresh } = await signIn(t.app, ADMIN_TOKEN);
       const res = await t.app.request("/logout", formPost({ csrf: csrfFor(fresh) }, { Cookie: fresh, ...headers }));
       expect(res.status, JSON.stringify(headers)).toBe(302);

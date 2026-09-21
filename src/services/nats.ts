@@ -212,6 +212,8 @@ export class NatsService {
           if (s.type === "reconnect") {
             this.consumers.clear();
             this.breaker.markUp();
+            // It may be another broker than before: a new container, a new version.
+            log("info", "nats reconnected", { server_version: this.serverVersion() });
           }
         }
       } catch {
@@ -386,6 +388,14 @@ export class NatsService {
       isKvOutage,
     );
     return result;
+  }
+
+  /** The version the connected broker announced (INFO), or null. For the
+   *  log: the broker is internal, and an image tag says what was asked for,
+   *  not what runs. */
+  serverVersion(): string | null {
+    const version = (this.nc as { info?: { version?: unknown } } | undefined)?.info?.version;
+    return typeof version === "string" && version.length > 0 ? version : null;
   }
 
   /** Is the broker answering? Bounded: `nc.flush()` alone waits for a broker

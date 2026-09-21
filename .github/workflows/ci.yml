@@ -4,13 +4,30 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+  # The daily run lives in daily.yml and calls this file. GitHub disables a
+  # SCHEDULED workflow in a public repository after 60 days without activity,
+  # and it disables the whole file: with the cron in here, the required checks
+  # of every pull request would stop with it.
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Only a pull request's superseded runs are cancelled. Every other run gets a
+# group of its own: a shared group keeps ONE pending run and drops the rest,
+# so a push to main could have pushed the daily run out of the queue.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -25,8 +42,8 @@ jobs:
     # hold this job, and with it every merge, for GitHub's six-hour default.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -35,11 +52,85 @@ jobs:
 
   typecheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npx tsc --noEmit
+      # tsconfig.json leaves tests/ out, and vitest strips types without
+      # checking them. Eleven errors had gathered there, two of them in a
+      # script that no longer ran.
+      - run: npm run typecheck:tests
+
+  # Production dependencies must be clean; the dev toolchain is reported at
+  # the same level. Not a required check: an advisory published overnight
+  # must not block an unrelated merge, but it must be seen.
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: all dependencies
+        run: npm audit --audit-level=high
+
+  # The Go CLI. It builds for six targets in the image; vet has to pass on
+  # each OS family, because tty_unix.go and tty_windows.go are never compiled
+  # together.
+  cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet (linux, darwin, windows)
+        run: |
+          GOOS=linux   go vet ./...
+          GOOS=darwin  go vet ./...
+          GOOS=windows go vet ./...
+      - run: go test ./...
+      - name: build (linux, darwin, windows)
+        run: |
+          GOOS=linux   GOARCH=amd64 go build -o /tmp/moshi-linux .
+          GOOS=darwin  GOARCH=arm64 go build -o /tmp/moshi-darwin .
+          GOOS=windows GOARCH=amd64 go build -o /tmp/moshi-windows.exe .
+
+  # Builds the image Coolify would build, starts it, and asks it what it is.
+  # No broker: /health answers 503 "degraded" without one, and still has to
+  # name its version and its commit.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: moshi:ci
+          build-args: |
+            MOSHI_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: the image says what it is
+        run: sh scripts/image-smoke.sh moshi:ci "${{ github.sha }}"

@@ -71,6 +71,10 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
     enc.encode(JSON.stringify({ id, from: "x", to: "y", type: "info", payload, context: CTX, created_at: new Date().toISOString(), ttl_seconds: 3600 }));
 
   describe("NatsService", () => {
+    it("knows which broker it talks to", () => {
+      expect(nats.serverVersion()).toMatch(/^\d+\.\d+\.\d+/);
+    });
+
     it("connects a second time without recreating what is there", async () => {
       await nats.publish("mesh.agents.k1.inbox", message("m1", "kept"), "m1");
       const second = new NatsService(URL!);
