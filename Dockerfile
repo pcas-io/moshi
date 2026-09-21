@@ -1,6 +1,6 @@
 # ── Stage 1: cross-compile the static Go CLI binaries ──────────────
 # Served by the app at /cli/* so users install without a repo checkout.
-FROM golang:1.26-alpine AS gobuild
+FROM golang:1.27-alpine AS gobuild
 WORKDIR /src/cli
 COPY cli/ ./
 RUN set -eux; \
@@ -12,7 +12,7 @@ RUN set -eux; \
     CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -ldflags="-s -w" -o /cli-dist/moshi-windows-arm64.exe .
 
 # ── Stage 2: app runtime ───────────────────────────────────────────
-FROM node:22-alpine
+FROM node:26-alpine
 RUN apk add --no-cache wget python3 make g++
 WORKDIR /app
 COPY package*.json ./
