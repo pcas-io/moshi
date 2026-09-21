@@ -14,6 +14,9 @@
 // - Pure function: testable in isolation by passing a mock env.
 
 import { resolveCommit } from "./version.js";
+import { dirname, join } from "node:path";
+
+const NODE_ENVS = ["production", "development", "test"];
 
 export interface Config {
   meshAdminToken: string;
@@ -26,6 +29,10 @@ export interface Config {
   isProduction: boolean;
   /** The deployed commit, or "unknown". See `resolveCommit`. */
   commit: string;
+  /** Where the daily copies of the database go; null when it is not a file. */
+  backupDir: string | null;
+  /** How many daily copies stay. 0 switches backups off. */
+  backupKeep: number;
   /** `Secure` on the session cookie. Follows `isProduction` unless
    *  MESH_COOKIE_SECURE says otherwise. */
   cookieSecure: boolean;
@@ -49,7 +56,13 @@ export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Config | ConfigError {
   const errors: string[] = [];
-  const isProduction = env.NODE_ENV === "production";
+  // Three names, nothing else. "prod" or "Production" used to mean
+  // development: no required secrets, no Secure cookie, and nobody told.
+  const nodeEnv = env.NODE_ENV ?? "";
+  if (nodeEnv !== "" && !NODE_ENVS.includes(nodeEnv)) {
+    errors.push(`NODE_ENV must be one of ${NODE_ENVS.join(", ")}, or unset (got "${nodeEnv}")`);
+  }
+  const isProduction = nodeEnv === "production";
 
   // Admin token is required in all modes. Must be at least 32 chars
   // to prevent the empty-token bypass (C2).
@@ -83,6 +96,47 @@ export function loadConfig(
     }
   }
 
+  // The previous admin token is an admin credential for as long as it is
+  // set, so it is held to the same length. Empty means "not set": that is
+  // what `${MESH_ADMIN_TOKEN_PREVIOUS:-}` in the compose file passes.
+  const previousRaw = (env.MESH_ADMIN_TOKEN_PREVIOUS ?? "").trim();
+  const meshAdminTokenPrevious = previousRaw === "" ? undefined : previousRaw;
+  if (meshAdminTokenPrevious !== undefined && meshAdminTokenPrevious.length < 32) {
+    errors.push(`MESH_ADMIN_TOKEN_PREVIOUS must be at least 32 characters when set (got ${meshAdminTokenPrevious.length})`);
+  }
+
+  // Three secrets that are one secret are not three secrets: whoever reads a
+  // session cookie's signing key would hold the admin token. Names only in
+  // the message, never a value.
+  if (isProduction) {
+    const secrets: [string, string | undefined][] = [
+      ["MESH_ADMIN_TOKEN", meshAdminToken],
+      ["MESH_COOKIE_SECRET", meshCookieSecret],
+      ["OAUTH_SECRET", oauthSecret],
+      ["MESH_ADMIN_TOKEN_PREVIOUS", meshAdminTokenPrevious],
+    ];
+    for (let i = 0; i < secrets.length; i++) {
+      for (let j = i + 1; j < secrets.length; j++) {
+        const [a, va] = secrets[i];
+        const [b, vb] = secrets[j];
+        // Rotating the admin token to its own value is pointless, not unsafe.
+        if (a === "MESH_ADMIN_TOKEN" && b === "MESH_ADMIN_TOKEN_PREVIOUS") continue;
+        if (va && vb && va === vb) errors.push(`${b} must not have the same value as ${a}`);
+      }
+    }
+  }
+
+  // Backups: next to the database unless told otherwise. 0 switches them off.
+  const databasePath = env.DATABASE_PATH ?? "./mesh.db";
+  const isFileDatabase = databasePath !== ":memory:" && databasePath !== "";
+  const backupDir = (env.BACKUP_DIR ?? "").trim() || (isFileDatabase ? join(dirname(databasePath), "backups") : null);
+  const backupKeepRaw = (env.BACKUP_KEEP ?? "").trim();
+  let backupKeep = 7;
+  if (backupKeepRaw !== "") {
+    if (/^\d{1,3}$/.test(backupKeepRaw) && Number(backupKeepRaw) <= 365) backupKeep = Number(backupKeepRaw);
+    else errors.push(`BACKUP_KEEP must be a whole number from 0 to 365 (got "${backupKeepRaw}")`);
+  }
+
   // Port parsing
   const portStr = env.PORT ?? "3000";
   const port = parseInt(portStr, 10);
@@ -109,11 +163,13 @@ export function loadConfig(
 
   return {
     meshAdminToken,
-    meshAdminTokenPrevious: env.MESH_ADMIN_TOKEN_PREVIOUS,
+    meshAdminTokenPrevious,
     meshCookieSecret,
     oauthSecret,
     natsUrl: env.NATS_URL ?? "nats://localhost:4222",
-    databasePath: env.DATABASE_PATH ?? "./mesh.db",
+    databasePath,
+    backupDir: isFileDatabase ? backupDir : null,
+    backupKeep,
     port,
     isProduction,
     cookieSecure,

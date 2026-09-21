@@ -368,7 +368,9 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
     }
 
     const adminToken = process.env.MESH_ADMIN_TOKEN ?? "";
-    const adminTokenPrev = process.env.MESH_ADMIN_TOKEN_PREVIOUS;
+    // Trimmed, and empty means none, exactly as src/config.ts reads it: the
+    // compose file passes an empty string when no rotation is under way.
+    const adminTokenPrev = (process.env.MESH_ADMIN_TOKEN_PREVIOUS ?? "").trim() || undefined;
 
     // A missing field is just a wrong token: this route is public, and it
     // used to answer an absent `token` with an HTTP 500.
