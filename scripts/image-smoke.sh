@@ -54,5 +54,7 @@ node -e '
 
 # Who the SERVICE runs as: the owner of PID 1. `docker exec id` would report
 # the user exec starts as, which says nothing about the service.
-echo "image-smoke: the service (PID 1) runs as $(docker exec "$NAME" stat -c '%U (%u)' /proc/1)"
+RUNS_AS="$(docker exec "$NAME" stat -c '%U' /proc/1)"
+echo "image-smoke: the service (PID 1) runs as $RUNS_AS"
+[ "$RUNS_AS" = "node" ] || { echo "image-smoke: the service must not run as $RUNS_AS" >&2; exit 1; }
 echo "image-smoke: ok"
