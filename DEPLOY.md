@@ -148,7 +148,8 @@ It only ever touches the directory of `DATABASE_PATH` (absolute, outside
 image names no `USER` yet; that follows once every volume has been handed
 over. Port 80 as `node` works because Docker lets a container's
 unprivileged users bind low ports (20.10 and later); where it does not, the
-entrypoint says so. Base images are pinned by digest; Dependabot proposes
+entrypoint says so and keeps the service running as root, as it was before,
+instead of letting it crash on `EACCES`. Base images are pinned by digest; Dependabot proposes
 the bumps.
 
 `docker stop` (and every deploy) sends SIGTERM. The service then ends the

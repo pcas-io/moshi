@@ -62,6 +62,21 @@ describe("docker/entrypoint.sh", () => {
     expect(run({ DATABASE_PATH: "/data/moshi.db", BACKUP_DIR: "/app/backups" }).chowns).toEqual(["chown -R node:node /data"]);
   });
 
+  it("stays root, loudly, where an unprivileged user cannot bind the port: an outage is worse than yesterday's state", () => {
+    // Docker 20.10 and later let a container's users bind low ports. Where
+    // that is not so, `node` on port 80 is EACCES and a restart loop.
+    const floor = join(bin, "floor");
+    writeFileSync(floor, "1024\n");
+    const blocked = run({ DATABASE_PATH: "/data/moshi.db", PORT: "80", MOSHI_PORT_FLOOR_FILE: floor });
+    expect(blocked.exec).toEqual([]);
+    expect(blocked.out).toMatch(/PORT=80.*1024.*as root/s);
+    expect(blocked.code).not.toBe(0); // the stand-in "node server" does not exist: what matters is that it was exec'd directly
+    // A port above the floor, or a floor of 0, drops root as usual.
+    expect(run({ DATABASE_PATH: "/data/moshi.db", PORT: "3000", MOSHI_PORT_FLOOR_FILE: floor }).exec).toEqual(["su-exec node node server"]);
+    writeFileSync(floor, "0\n");
+    expect(run({ DATABASE_PATH: "/data/moshi.db", PORT: "80", MOSHI_PORT_FLOOR_FILE: floor }).exec).toEqual(["su-exec node node server"]);
+  });
+
   it("changes nothing when it was not started as root", () => {
     const r = run({ DATABASE_PATH: "/data/moshi.db", FAKE_UID: "1000" });
     expect(r.chowns).toEqual([]);

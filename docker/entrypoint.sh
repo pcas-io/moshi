@@ -56,12 +56,14 @@ if [ "$(id -u)" = "0" ]; then
     esac
   fi
 
-  # Port 80 as an unprivileged user works because Docker sets this to 0 in the
-  # container (20.10 and later). Where it does not, say so instead of crashing
-  # with EACCES three lines into the log.
-  FLOOR="$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || echo 0)"
+  # Port 80 as an unprivileged user works because Docker sets this floor to 0
+  # in the container (20.10 and later). Where it does not, `node` on port 80
+  # is EACCES and a restart loop, which is worse than what ran until now. So
+  # there, and only there, the service keeps running as root, and says so.
+  FLOOR="$(cat "${MOSHI_PORT_FLOOR_FILE:-/proc/sys/net/ipv4/ip_unprivileged_port_start}" 2>/dev/null || echo 0)"
   if [ "${PORT:-3000}" -lt "$FLOOR" ] 2>/dev/null; then
-    echo "entrypoint: PORT=${PORT} is below this container's unprivileged port floor ($FLOOR): set PORT to $FLOOR or higher, or run with --sysctl net.ipv4.ip_unprivileged_port_start=0" >&2
+    echo "entrypoint: WARNING: PORT=${PORT} is below this container's unprivileged port floor ($FLOOR). Running as root, as before. Set PORT to $FLOOR or higher, or run with --sysctl net.ipv4.ip_unprivileged_port_start=0, to run as node." >&2
+    exec "$@"
   fi
 
   exec su-exec node "$@"
