@@ -14,9 +14,9 @@ function statusFeed() {
   const waiting: ((v: IteratorResult<{ type: string; data?: string }>) => void)[] = [];
   const queued: { type: string }[] = [];
   return {
-    push(type: string) {
+    push(type: string, data?: unknown) {
       const next = waiting.shift();
-      if (next) next({ value: { type }, done: false }); else queued.push({ type });
+      if (next) next({ value: { type, data } as never, done: false }); else queued.push({ type, data } as never);
     },
     iterator: {
       [Symbol.asyncIterator]() { return this; },
@@ -305,5 +305,65 @@ describe("NatsService — which broker", () => {
     expect(service.serverVersion()).toBe("2.14.6");
     (nc as unknown as { info: unknown }).info = { version: 42 };
     expect(service.serverVersion()).toBeNull();
+  });
+});
+
+// nats.js reports every ping it sends as a status event: one "pingTimer" every
+// 20 seconds, 4320 lines a day, and the one line that matters (disconnect)
+// somewhere in between.
+describe("NatsService — what the log says about the connection", () => {
+  it("is silent about pings, and at warn level about losing the broker", async () => {
+    const lines: { lvl: string; msg: string; event?: string }[] = [];
+    const take = (line: unknown) => { try { lines.push(JSON.parse(String(line))); } catch { /* not a log line */ } };
+    const spies = [vi.spyOn(console, "log").mockImplementation(take), vi.spyOn(console, "error").mockImplementation(take), vi.spyOn(console, "warn").mockImplementation(take)];
+    try {
+      const { feed } = setup();
+      for (const type of ["pingTimer", "pingTimer", "disconnect", "reconnecting", "pingTimer", "reconnect", "staleConnection", "update", "ldm"]) feed.push(type);
+      await tick(); await tick();
+      const events = lines.filter((l) => l.msg === "nats status event");
+      expect(events.map((l) => l.event)).toEqual(["disconnect", "reconnecting", "reconnect", "staleConnection", "update", "ldm"]);
+      expect(events.find((l) => l.event === "disconnect")!.lvl).toBe("warn");
+      expect(events.find((l) => l.event === "staleConnection")!.lvl).toBe("warn");
+      expect(events.find((l) => l.event === "reconnect")!.lvl).toBe("info");
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it("an outage over night is a handful of lines, not fourteen thousand: the first attempt to reconnect, then every thirtieth", async () => {
+    const lines: { lvl: string; msg: string; event?: string; attempt?: number }[] = [];
+    const take = (line: unknown) => { try { lines.push(JSON.parse(String(line))); } catch { /* not a log line */ } };
+    const spies = [vi.spyOn(console, "log").mockImplementation(take), vi.spyOn(console, "error").mockImplementation(take), vi.spyOn(console, "warn").mockImplementation(take)];
+    try {
+      const { feed } = setup();
+      feed.push("disconnect");
+      for (let i = 0; i < 65; i++) feed.push("reconnecting");
+      feed.push("reconnect");
+      feed.push("disconnect");
+      for (let i = 0; i < 2; i++) feed.push("reconnecting");
+      for (let i = 0; i < 80; i++) await tick();
+      const attempts = lines.filter((l) => l.msg === "nats status event" && l.event === "reconnecting").map((l) => l.attempt);
+      // Counted anew after every reconnect.
+      expect(attempts).toEqual([1, 30, 60, 1]);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it("a protocol error is a warning, and an event that carries an object is readable", async () => {
+    const lines: { lvl: string; msg: string; event?: string; data?: string }[] = [];
+    const take = (line: unknown) => { try { lines.push(JSON.parse(String(line))); } catch { /* not a log line */ } };
+    const spies = [vi.spyOn(console, "log").mockImplementation(take), vi.spyOn(console, "error").mockImplementation(take), vi.spyOn(console, "warn").mockImplementation(take)];
+    try {
+      const { feed } = setup();
+      feed.push("error", "NATS_PROTOCOL_ERR");
+      feed.push("update", { added: ["nats://10.0.0.2:4222"], deleted: [] });
+      await tick(); await tick(); await tick();
+      const events = lines.filter((l) => l.msg === "nats status event");
+      expect(events.find((l) => l.event === "error")).toMatchObject({ lvl: "warn", data: "NATS_PROTOCOL_ERR" });
+      expect(events.find((l) => l.event === "update")!.data).toBe('{"added":["nats://10.0.0.2:4222"],"deleted":[]}');
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 });
