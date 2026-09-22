@@ -95,10 +95,11 @@ strings intact.
 
 | Tool | Description |
 |------|-------------|
-| `mesh_send` | Nachricht an Agent oder Broadcast senden. `context` ist Pflicht, `type` optional (default `info`). |
+| `mesh_send` | Nachricht an Agent oder Broadcast senden. `context` ist Pflicht, `type` optional (default `info`). Die Antwort nennt `expires_at`. `message_id` wiederholt einen eigenen Sendeversuch (siehe Zustellung). |
 | `mesh_receive` | Inbox abholen. Pull-basiert (MCP ist Request/Response); Lesen quittiert. Payloads > `preview_chars` (default 4000) kommen gekuerzt mit `payload_truncated: true`. |
-| `mesh_get` | Eine Nachricht mit vollstaendiger Payload (nach gekuerzter Preview). |
-| `mesh_reply` | Auf Nachricht antworten. Threading automatisch via correlation_id, `type` optional (default `reply`). |
+| `mesh_inbox` | Die letzten Eingaenge aus der Historie ansehen, ohne etwas zu quittieren. Jede Nachricht traegt `read_at`: wann `mesh_receive` sie ausgehaendigt hat, sonst `null`; `expired: true`, wenn sie ungelesen abgelaufen ist. `unread` zaehlt, was `mesh_receive` noch aushaendigen kann, `never_handed_out` auch das Abgelaufene. Filter `unread_only`. |
+| `mesh_get` | Eine Nachricht mit vollstaendiger Payload (nach gekuerzter Preview). Sagt auch, ob sie gelesen wurde: `read_at` bei direkten Nachrichten, `read_by` bei Broadcasts. |
+| `mesh_reply` | Auf Nachricht antworten. Threading automatisch via correlation_id, `type` optional (default `reply`). Eine Antwort auf die eigene Nachricht geht an deren Empfaenger, bei einem Broadcast wieder an alle. `resend_id` wiederholt einen eigenen Versuch. |
 | `mesh_status` | Alle Agents mit Online-Status, Rolle, Avatar, Working-on. |
 | `mesh_register` | Rolle, Capabilities, aktuelle Aufgabe setzen. |
 | `mesh_history` | Kompletten Thread abrufen — jede Message-ID des Threads reicht (Root oder Reply). |
@@ -109,9 +110,19 @@ Jede Tool-Antwort enthaelt `inbox_pending`: wie viele Nachrichten fuer den Aufru
 
 Der Wert zaehlt, was `mesh_receive` auch ausliefern wuerde. Eigene Broadcasts zaehlen nicht mit, obwohl der Broker sie dem Sender wie allen anderen zustellt: `mesh_receive` gibt sie nie aus. Abgelaufene Nachrichten (`ttl_seconds`) werden beim Lesen verworfen, die Antwort nennt ihre Zahl als `expired_dropped`, und das Limit wird mit gueltigen Nachrichten aufgefuellt. Ein neuer Agent beginnt mit leerer Inbox: Er bekommt, was seit seiner Anlage gesendet wurde, auch vor seinem ersten Request, aber keine aelteren Broadcasts. Nach Revoke und Reactivate wird nichts erneut zugestellt.
 
+### Zustellung
+
+- **Lesen quittiert, bevor die Antwort ankommt.** Geht die Antwort von `mesh_receive` verloren, ist die Nachricht aus dem Broker weg. `mesh_inbox` zeigt sie weiter, mit `read_at`. Aufgenommen wird, was seit Migration 0010 gespeichert wurde.
+- **Frist.** `mesh_send` und `mesh_reply` nennen `expires_at`. Laeuft eine direkte Nachricht ungelesen ab, bekommt das Audit-Log eine Zeile `message_expired`: wenn der Empfaenger sie beim Abholen verwirft, sonst durch die stuendliche Wartung. Der Sender sieht es in `mesh_get` an `read_at: null`.
+- **Ausgang unbekannt.** Antwortet der Broker auf ein Publish nicht rechtzeitig, nennt die Fehlermeldung die ID. Mit `message_id="msg_…"` (bei `mesh_reply`: `resend_id`) noch einmal senden: Der Broker erkennt die ID fuenf Minuten lang wieder, danach verwirft `mesh_receive` die zweite Kopie beim Empfaenger. Der Empfaenger bekommt sie einmal, die Historie genau eine Zeile. Wiederholen kann nur der Sender selbst, und nur dieselbe Nachricht: jeder Versuch wird vor dem Senden festgehalten, und die Wiederholung wird an diesem Protokoll geprueft.
+- **Historie nicht geschrieben.** Ist die Nachricht zugestellt, die Zeile in SQLite aber fehlgeschlagen, meldet die Antwort `history_gap: true`. Dieselbe Wiederholung schreibt die Zeile nach.
+- **Aufgegeben.** Haendigt ein Durable eine Nachricht fuenfmal aus, ohne dass sie quittiert wird, stellt der Broker sie nicht mehr zu. Das Audit-Log bekommt eine Zeile `message_dead_letter`; `mesh_inbox` zeigt die Nachricht weiter.
+- **Audit-Aktionen des Zustellkerns:** `message_sent` (gesendet), `message_stored` (eine Wiederholung hat nur die fehlende Historienzeile nachgetragen), `message_expired`, `message_dead_letter`, `read_not_recorded`.
+- **Einmal pro Leser.** Was einem Agenten schon ausgehaendigt wurde, gibt `mesh_receive` kein zweites Mal aus, auch wenn der Broker nach einem verlorenen Ack erneut zustellt.
+
 ### Admin-Token ist kein Agent
 
-Der Admin-Token (`MESH_ADMIN_TOKEN`) ist eine Operator-Identitaet fuer Dashboard und Verwaltung — ohne Inbox, nicht adressierbar, nicht in `mesh_status`. `mesh_send`, `mesh_receive`, `mesh_reply` und `mesh_register` lehnen ihn mit einem Hinweis ab; `mesh_status`, `mesh_history` und `mesh_get` funktionieren read-only. Fuer die Teilnahme am Mesh im Dashboard einen Agent anlegen und dessen `bt_`-Token in die MCP-Config eintragen.
+Der Admin-Token (`MESH_ADMIN_TOKEN`) ist eine Operator-Identitaet fuer Dashboard und Verwaltung — ohne Inbox, nicht adressierbar, nicht in `mesh_status`. `mesh_send`, `mesh_receive`, `mesh_inbox`, `mesh_reply` und `mesh_register` lehnen ihn mit einem Hinweis ab; `mesh_status`, `mesh_history` und `mesh_get` funktionieren read-only. Fuer die Teilnahme am Mesh im Dashboard einen Agent anlegen und dessen `bt_`-Token in die MCP-Config eintragen.
 
 ### Context-Feld
 
@@ -124,6 +135,8 @@ Jede Nachricht braucht ein `context`-Feld das beschreibt woran der Sender arbeit
 ### Threading
 
 Antworten via `mesh_reply` werden automatisch zu Threads verknuepft. `mesh_history` zeigt den kompletten Thread — mit der Root-ID oder einer beliebigen Reply-ID.
+
+`correlation_id` in `mesh_send` muss einen bestehenden Thread benennen: die ID einer beliebigen Nachricht des Threads oder dessen `correlation_id`. Die ID einer Antwort wird auf den Thread umgeschrieben, zu dem sie gehoert. Eine frei erfundene ID wird abgelehnt; ohne `correlation_id` beginnt ein neuer Thread. Threads, die vor dieser Regel frei benannt wurden, lassen sich weiter fortsetzen.
 
 ## moshi
 
@@ -228,7 +241,7 @@ moshi-windows-amd64.exe status
 |-------|------|
 | Payload pro Message | 256 KB |
 | Context pro Message | 2048 Zeichen |
-| Messages pro Agent/Minute | 60 (Token-Bucket) |
+| Messages pro Agent/Minute | 60 als Token-Bucket: 60 auf einmal, danach eine pro Sekunde. Zaehlt `mesh_send`, `mesh_reply` und `mesh_register`; abgebucht wird erst, wenn die Anfrage gueltig ist |
 | Max Agents | 100 |
 | Message-History | 30 Tage (SQLite), 7 Tage (NATS) |
 | Presence TTL | 10 Minuten (auto-update bei MCP-Interaktion) |
