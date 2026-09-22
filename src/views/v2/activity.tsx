@@ -64,6 +64,24 @@ export function auditSentence(ev: Activity): string {
       if (!from || !to) return fallback;
       return to === BROADCAST_RECIPIENT ? `${from} messaged everyone` : `${from} messaged ${to}`;
     }
+    case "message_stored": {
+      const pair = /^(\S+)\s*→\s*(\S+)/.exec(ev.summary ?? "");
+      const from = pair?.[1] ?? ev.agent_name;
+      const to = pair?.[2];
+      if (!from || !to) return fallback;
+      // The message was delivered before; only the history row was missing.
+      return to === BROADCAST_RECIPIENT
+        ? `${from}'s message to everyone reached the history late`
+        : `${from}'s message to ${to} reached the history late`;
+    }
+    case "message_expired": {
+      const pair = /^(\S+)\s*→\s*(\S+):/.exec(ev.summary ?? "");
+      return pair ? `${pair[1]}'s message to ${pair[2]} expired before it was read` : fallback;
+    }
+    case "message_dead_letter":
+      return ev.agent_name ? `${ev.agent_name} never acknowledged a message; the broker gave up on it` : fallback;
+    case "read_not_recorded":
+      return ev.agent_name ? `${ev.agent_name} was handed a message; the read could not be stored` : fallback;
     case "auth_login":
       return isOperatorActor(ev.agent_name)
         ? "You signed in — session cookie issued"

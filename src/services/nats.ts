@@ -21,6 +21,8 @@ import {
 import { CircuitBreaker, BrokerUnavailableError } from "./circuit-breaker.js";
 import { ConsumerRegistry } from "./consumers.js";
 import { reconcileStream } from "./stream-config.js";
+import { DEAD_LETTER_SUBJECT, parseDeadLetter } from "./dead-letter.js";
+import type { DeadLetter } from "./dead-letter.js";
 import type { WantedStream } from "./stream-config.js";
 import type { EnsureOptions } from "./consumers.js";
 import type {
@@ -129,8 +131,10 @@ export class NatsService {
    *  a restart in between leaves the durables to the next delete. */
   private readonly pendingDeletes = new Set<string>();
 
-  /** `consumerClockToleranceMs`: see ConsumerRegistry. Only tests change it. */
-  constructor(private url: string, opts: { consumerClockToleranceMs?: number } = {}) {
+  private deadLetterListener: ((letter: DeadLetter, streamCreated: string | null) => void) | null = null;
+
+  /** All three: see ConsumerRegistry. Only tests change them. */
+  constructor(private url: string, opts: { consumerClockToleranceMs?: number; consumerAckWaitMs?: number; consumerMaxDeliver?: number } = {}) {
     this.consumers = new ConsumerRegistry(
       {
         info: (name) => this.jsm.consumers.info(STREAM_NAME, name),
@@ -138,7 +142,7 @@ export class NatsService {
         delete: (name) => this.jsm.consumers.delete(STREAM_NAME, name),
         update: (name, config) => this.jsm.consumers.update(STREAM_NAME, name, config),
       },
-      { clockToleranceMs: opts.consumerClockToleranceMs },
+      { clockToleranceMs: opts.consumerClockToleranceMs, ackWaitMs: opts.consumerAckWaitMs, maxDeliver: opts.consumerMaxDeliver },
     );
   }
 
@@ -247,7 +251,50 @@ export class NatsService {
       }
     })();
 
+    this.watchDeadLetters(nc);
     this.breaker.markUp();
+  }
+
+  /** Who is told about a message the broker has given up on. One listener,
+   *  set once at start-up; it survives reconnects and new connections. */
+  onDeadLetter(listener: (letter: DeadLetter, streamCreated: string | null) => void): void {
+    this.deadLetterListener = listener;
+  }
+
+  /**
+   * The broker says once, on an advisory subject, that a durable has handed a
+   * message out `max_deliver` times without an ack and will not again. A plain
+   * subscription: nats.js restores it after a reconnect. It is a notice and
+   * nothing depends on it, so a connection that may not subscribe still goes
+   * into service, and a listener that throws does not end the listening.
+   */
+  private watchDeadLetters(nc: NatsConnection): void {
+    let sub: AsyncIterable<{ data: Uint8Array }>;
+    try {
+      sub = nc.subscribe(DEAD_LETTER_SUBJECT);
+    } catch (err) {
+      log("warn", "cannot listen for max-deliveries advisories", { err: String(err) });
+      return;
+    }
+    (async () => {
+      try {
+        for await (const m of sub) {
+          const letter = parseDeadLetter(m.data);
+          if (!letter) continue;
+          log("warn", "a message reached its delivery limit unacknowledged", { ...letter });
+          // Which stream the sequence belongs to: after a lost volume the
+          // numbers start again, and an old history row must not be named.
+          const created = (await this.streamBounds())?.created ?? null;
+          try {
+            this.deadLetterListener?.(letter, created);
+          } catch (err) {
+            log("error", "dead-letter listener failed", { err: String(err) });
+          }
+        }
+      } catch {
+        // Subscription closed with the connection.
+      }
+    })();
   }
 
   /** Resolves with the stream sequence the broker stored the message under. */

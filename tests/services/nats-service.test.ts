@@ -33,7 +33,25 @@ function setup() {
   const feed = statusFeed();
   const durables = new Set<string>();
   let closed = false;
+  const subscriptions: { subject: string; deliver: (data: Uint8Array) => void; end: () => void }[] = [];
   const nc = {
+    subscribe: vi.fn((subject: string) => {
+      const pending: Uint8Array[] = [];
+      let wake: (() => void) | null = null;
+      let ended = false;
+      subscriptions.push({
+        subject,
+        deliver: (data) => { pending.push(data); wake?.(); },
+        end: () => { ended = true; wake?.(); },
+      });
+      return (async function* () {
+        for (;;) {
+          while (pending.length > 0) yield { data: pending.shift()!, subject };
+          if (ended) return;
+          await new Promise<void>((resolve) => { wake = resolve; });
+        }
+      })();
+    }),
     status: () => feed.iterator,
     flush: vi.fn(async () => {}),
     isClosed: () => closed,
@@ -56,7 +74,7 @@ function setup() {
   const kv = { put: vi.fn(async () => 1), get: vi.fn(async () => null) };
   const service = new NatsService("nats://unused.invalid:4222");
   service.attach({ nc, js, jsm, kv } as never);
-  return { service, feed, nc, js, jsm, kv, durables, close: () => { closed = true; } };
+  return { service, feed, nc, js, jsm, kv, durables, subscriptions, close: () => { closed = true; } };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -365,5 +383,46 @@ describe("NatsService — what the log says about the connection", () => {
     } finally {
       for (const spy of spies) spy.mockRestore();
     }
+  });
+});
+
+describe("NatsService — messages the broker has given up on", () => {
+  const enc = new TextEncoder();
+  const advisory = (consumer: string, seq: number) =>
+    enc.encode(JSON.stringify({ stream: "MESH_MESSAGES", consumer, stream_seq: seq, deliveries: 5 }));
+
+  it("listens for them on every connection it takes into service", () => {
+    const t = setup();
+    expect(t.subscriptions.map((s) => s.subject)).toEqual(["$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.MESH_MESSAGES.*"]);
+  });
+
+  it("hands each one to the listener, parsed, and drops what is none", async () => {
+    const t = setup();
+    const seen: unknown[] = [];
+    t.service.onDeadLetter((letter) => seen.push(letter));
+    t.subscriptions[0].deliver(enc.encode("not json"));
+    t.subscriptions[0].deliver(advisory("agent-beta", 7));
+    await tick();
+    expect(seen).toEqual([{ consumer: "agent-beta", streamSeq: 7, deliveries: 5 }]);
+  });
+
+  it("a listener that throws does not end the listening", async () => {
+    const t = setup();
+    const seen: number[] = [];
+    t.service.onDeadLetter((letter) => {
+      seen.push(letter.streamSeq);
+      if (letter.streamSeq === 1) throw new Error("audit log is full");
+    });
+    t.subscriptions[0].deliver(advisory("agent-beta", 1));
+    t.subscriptions[0].deliver(advisory("agent-beta", 2));
+    await tick();
+    expect(seen).toEqual([1, 2]);
+  });
+
+  it("a connection that cannot subscribe still goes into service", () => {
+    const t = setup();
+    const next = setup();
+    next.nc.subscribe.mockImplementationOnce(() => { throw new Error("permissions violation"); });
+    expect(() => t.service.attach({ nc: next.nc, js: next.js, jsm: next.jsm, kv: next.kv } as never)).not.toThrow();
   });
 });

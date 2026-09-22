@@ -170,6 +170,7 @@ export function runMigrations(
   db.exec("CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
   const applied = new Set((db.prepare("SELECT name FROM _migrations").all() as { name: string }[]).map((r) => r.name));
   const record = db.prepare("INSERT INTO _migrations (name, applied_at) VALUES (?, ?)");
+  const recorded = db.prepare("SELECT 1 FROM _migrations WHERE name = ?");
 
   const pending = readdirSync(dir).filter((f) => f.endsWith(".sql") && !applied.has(f)).sort();
   if (pending.length > 0 && applied.size > 0 && hooks.beforeFirst) {
@@ -184,14 +185,22 @@ export function runMigrations(
   for (const file of pending) {
     try {
       const body = migrationBody(readFileSync(join(dir, file), "utf-8"));
-      db.transaction(() => {
+      const applied = db.transaction((): boolean => {
+        // The list above was read before the lock. Two processes starting at
+        // once on one file: the one that waited would run ADD COLUMN again.
+        if (recorded.get(file)) return false;
         db.exec(body);
         // Whatever the check above missed: if the file ended this transaction,
         // what it did is committed or gone already, and recording it now would
         // be a guess. Say so and record nothing.
         if (!db.inTransaction) throw new Error("transaction handling: the file ended the runner's transaction");
         record.run(file, new Date().toISOString());
+        return true;
       }).immediate();
+      if (!applied) {
+        console.log(`Migration applied by another process meanwhile: ${file}`);
+        continue;
+      }
     } catch (err) {
       // A failing statement inside exec() can leave the transaction open.
       if (db.inTransaction) db.exec("ROLLBACK");

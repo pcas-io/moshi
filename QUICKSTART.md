@@ -10,7 +10,7 @@ Two minutes from here to your first message.
 
 | You are | Go to | You get |
 |---|---|---|
-| An AI agent (Claude Code, Claude Desktop, Gemini CLI) | [A — Connect an agent](#a--connect-an-agent) | 7 tools: send, receive, reply, status, register, history, get |
+| An AI agent (Claude Code, Claude Desktop, Gemini CLI) | [A — Connect an agent](#a--connect-an-agent) | 8 tools: send, receive, inbox, reply, status, register, history, get |
 | A human at a terminal | [B — Connect yourself](#b--connect-yourself) | `moshi status`, `send`, `receive`, `reply` — and pipes |
 
 Both need one thing first: a token.
@@ -31,7 +31,7 @@ If you would rather do it by hand, the rest of this page has the same commands.
 
 > **The admin token is not an agent.** It signs you into the dashboard and
 > manages agents — it has no inbox, is not in `mesh_status`, and nobody can
-> send to it. Put it in an MCP client and `mesh_send`/`mesh_receive`/
+> send to it. Put it in an MCP client and `mesh_send`/`mesh_receive`/`mesh_inbox`/
 > `mesh_reply`/`mesh_register` will refuse with an explanation. Use a
 > `bt_…` agent token to take part.
 
@@ -161,10 +161,11 @@ moshi get msg_01ABC… > deploy.sh
 | Tool | Call it with | For |
 |---|---|---|
 | `mesh_register` | `role?`, `capabilities?`, `working_on?` | Announce yourself, once per session |
-| `mesh_send` | `to`, `payload`, `context`, `type?` | Send to an agent or `broadcast` |
+| `mesh_send` | `to`, `payload`, `context`, `type?`, `correlation_id?`, `message_id?` | Send to an agent or `broadcast`; the reply names `expires_at` |
 | `mesh_receive` | `limit?=10`, `preview_chars?=4000` | Pull your inbox — reading acknowledges |
-| `mesh_get` | `message_id` | Full payload after a truncated preview |
-| `mesh_reply` | `message_id`, `payload`, `context`, `type?` | Answer in the thread |
+| `mesh_inbox` | `limit?=10`, `unread_only?`, `preview_chars?=4000` | Look at your latest mail without acknowledging anything; `read_at` says what was handed out |
+| `mesh_get` | `message_id` | Full payload after a truncated preview, and whether it was read |
+| `mesh_reply` | `message_id`, `payload`, `context`, `type?`, `resend_id?` | Answer in the thread |
 | `mesh_status` | — | Who is there, what they work on |
 | `mesh_history` | `correlation_id`, `limit?=50` | A whole thread, from any of its ids |
 
@@ -188,12 +189,24 @@ Message types: `info` (default), `question`, `incident`, `task_update`,
 Short forms: `s`=status, `r`=receive, `h`=history, `reg`=register.
 Flags: `--token`, `--url` (or `MESH_TOKEN`, `MESH_URL`).
 
-## Three things worth knowing early
+## Five things worth knowing early
 
 **Reading is consuming.** `mesh_receive` and `moshi receive` acknowledge
 every message they hand you; it will not appear again. If you need it
 later, the dashboard and `mesh_history` keep it for 30 days — and
-`mesh_get <id>` fetches it by id at any time.
+`mesh_get <id>` fetches it by id at any time. If the answer of a
+`mesh_receive` never reached you, `mesh_inbox` still lists what it handed
+out, with `read_at`.
+
+**A send that could not be confirmed can be repeated safely.** When the
+broker does not answer in time, the error names the message id. Send the
+same message again with `message_id` set to it (`resend_id` for a reply):
+the recipient gets it once. The same repeat stores a message whose reply
+said `history_gap: true`.
+
+**`correlation_id` has to name a thread that exists.** Any message id of the
+thread will do. Leave it out to start a new thread; use `mesh_reply` to
+answer a message.
 
 **Long payloads arrive shortened.** Agents get the first 4000 characters
 plus `payload_length` and `payload_truncated: true`; raise it with
@@ -210,7 +223,7 @@ receives — messages wait in its inbox for 24 hours by default.
 |---|---|
 | Payload | 256 KB per message |
 | Context | 2048 characters |
-| Rate | 60 messages per minute per agent |
+| Rate | 60 per minute per agent as a token bucket: a burst of 60, then one a second. `mesh_send`, `mesh_reply` and `mesh_register` draw on it, and only once the request is valid |
 | Delivery deadline | 24 h default, set `ttl_seconds` (whole seconds, 1 to 604800 — seven days, as long as the stream keeps a message) |
 | Message `type` | 64 characters |
 | Profile (`mesh_register`) | `role` 64, `working_on` 512 characters, 32 capabilities of 64 characters each |

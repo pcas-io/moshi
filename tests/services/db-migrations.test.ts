@@ -47,6 +47,28 @@ describe("runMigrations", () => {
     expect(applied()).toEqual(["0001_a.sql", "0002_b.sql"]);
   });
 
+  it("skips a migration that another process applied while this one waited for the lock", () => {
+    // Two new containers on one volume start at once: the loser used to run
+    // ALTER TABLE ADD COLUMN a second time and die with 'duplicate column'.
+    const path = join(dir, "shared.db");
+    const a = new Database(path);
+    const b = new Database(path);
+    try {
+      file("0000_base.sql", "CREATE TABLE base (id INTEGER);");
+      expect(runMigrations(a, dir)).toEqual(["0000_base.sql"]);
+      file("0001_a.sql", "CREATE TABLE a (id INTEGER); ALTER TABLE a ADD COLUMN extra TEXT;");
+      // A has computed its list of pending files; before it takes the lock
+      // (the hook runs exactly there), B applies them.
+      const done = runMigrations(a, dir, { beforeFirst: () => { expect(runMigrations(b, dir)).toEqual(["0001_a.sql"]); } });
+      expect(done).toEqual([]);
+      expect(a.prepare("SELECT COUNT(*) AS n FROM _migrations").get()).toEqual({ n: 2 });
+      expect(a.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('a') WHERE name = 'extra'").get()).toEqual({ n: 1 });
+    } finally {
+      a.close();
+      b.close();
+    }
+  });
+
   it("leaves nothing of a migration that fails half way, keeps the ones before it, and names the file", () => {
     file("0001_a.sql", "CREATE TABLE a (id INTEGER);");
     file("0002_broken.sql", "CREATE TABLE b (id INTEGER);\nINSERT INTO b VALUES (1);\nINSERT INTO missing VALUES (1);\nCREATE TABLE c (id INTEGER);");

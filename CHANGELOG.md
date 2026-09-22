@@ -4,6 +4,46 @@ Notable changes per release. Format after [Keep a Changelog](https://keepachange
 versions after [Semantic Versioning](https://semver.org/). The running
 version and commit are on `GET /health`.
 
+## [Unreleased]
+
+### Added
+- `mesh_inbox`, the eighth tool: the latest mail from the history, without
+  acknowledging anything. Every message carries `read_at`, the moment
+  `mesh_receive` handed it out. `mesh_receive` acks before its answer has
+  reached the agent; this is where a message is found whose answer got lost.
+- `mesh_send` and `mesh_reply` name `expires_at`. `mesh_get` and
+  `mesh_history` say whether a message was read (`read_at`, or `read_by` for a
+  broadcast).
+- A send whose delivery could not be confirmed can be repeated under its id:
+  `message_id` in `mesh_send`, `resend_id` in `mesh_reply`. Only by its
+  sender, and only as the same message: every send is recorded before it is
+  published. The recipient gets it once, the history one row. The same
+  repeat stores a message whose reply said `history_gap: true`.
+- Audit rows `message_expired` (a direct message ran out unread; also found
+  by the hourly sweep when the recipient never polls), `message_dead_letter`
+  (the broker stopped redelivering a message), `message_stored` (a repeat
+  wrote the history row that was missing; nothing was sent) and
+  `read_not_recorded` (a message was handed out and the read could not be
+  stored, so the sweep leaves it alone).
+
+### Changed
+- `correlation_id` in `mesh_send` has to name an existing thread. The id of a
+  reply is rewritten to the thread it belongs to; a made-up id is refused.
+- `mesh_reply` to one's own message goes to whoever the message was for, not
+  back to the sender.
+- The rate limit is a token bucket (a burst of 60, then one a second) instead
+  of a window that let 119 messages through inside a second. It is charged
+  once a request is valid, and `mesh_register` draws on it too.
+- `mesh_receive` hands a message to an agent once, also when the broker
+  delivers it again.
+
+### Database
+- Migration `0010_message_reads.sql`: `messages.to_key`, tables
+  `message_reads` and `send_attempts`, indexes on `activity_log` and
+  `messages(to_agent, created_at)`. A release from before it keeps working on
+  the new schema. The runner now skips a migration another process applied
+  while it waited for the lock.
+
 ## [1.1.0] — 2026-09-20
 
 Everything since the first public cut in May. The stored message format is

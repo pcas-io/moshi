@@ -168,10 +168,9 @@ describe("sendAndPersistMessage — NATS-first dual-write order (ADR-006)", () =
       context: "test",
     });
 
-    // Pre-insert the same id to force unique-constraint failure on persistMessage
-    persistMessage(db, msg);
+    // The history refuses the row after NATS has taken the message.
+    db.exec("CREATE TRIGGER no_history BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END");
 
-    // Second call with the same msg triggers DB insert failure after NATS success
     const result = await sendAndPersistMessage(
       nats,
       db,
@@ -182,6 +181,24 @@ describe("sendAndPersistMessage — NATS-first dual-write order (ADR-006)", () =
     expect(result.delivered).toBe(true);
     expect(result.persisted).toBe(false);
     expect(nats.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a row that is there already as stored: two repeats of one send at the same moment", async () => {
+    const nats = { publish: vi.fn(async () => ({ seq: 7, duplicate: true })) };
+    const msg = createMessage({ from: "alpha", to: "beta", type: "info", payload: "hi", context: "test" });
+    persistMessage(db, msg); // the other repeat was faster
+
+    const result = await sendAndPersistMessage(nats, db, msg, "mesh.agents.beta.inbox");
+    expect(result).toEqual({ delivered: true, persisted: true, duplicate: true });
+  });
+
+  it("stores who the message is for, by key", async () => {
+    const nats = { publish: vi.fn(async () => ({ seq: 3, duplicate: false })) };
+    const msg = createMessage({ from: "alpha", to: "Beta", type: "info", payload: "hi", context: "test" });
+    const result = await sendAndPersistMessage(nats, db, msg, "mesh.agents.beta.inbox", "alpha", "beta");
+    expect(result).toEqual({ delivered: true, persisted: true });
+    const row = db.prepare("SELECT from_key, to_key, stream_seq FROM messages WHERE id = ?").get(msg.id);
+    expect(row).toEqual({ from_key: "alpha", to_key: "beta", stream_seq: 3 });
   });
 });
 

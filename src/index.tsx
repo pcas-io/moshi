@@ -4,7 +4,7 @@
 
 import { serve } from "@hono/node-server";
 import { initDatabase } from "./services/db.js";
-import { maintenanceTasks, BACKUP_TASK } from "./services/maintenance-tasks.js";
+import { maintenanceTasks, BACKUP_TASK, EXPIRED_UNREAD_TASK } from "./services/maintenance-tasks.js";
 import { createShutdown, closeHttpServer, beginDraining, HTTP_GRACE_MS, SHUTDOWN_STEP_TIMEOUTS_MS } from "./services/shutdown.js";
 import { endAllStreams } from "./routes/sse.js";
 import type { Server as HttpServer } from "node:http";
@@ -13,6 +13,7 @@ import { AgentService } from "./services/agent.js";
 import { ActivityService } from "./services/activity.js";
 import { RateLimiter } from "./services/ratelimit.js";
 import { PresenceService } from "./services/presence.js";
+import { recordDeadLetter } from "./services/dead-letter.js";
 import { startMaintenance } from "./services/maintenance.js";
 import { RATE_LIMIT_PER_MINUTE, VERSION } from "./types.js";
 import { loadConfig, isConfigError } from "./config.js";
@@ -50,6 +51,9 @@ const rateLimiter = new RateLimiter(RATE_LIMIT_PER_MINUTE);
 // Presence: single write-path (touch) + single read-path (list/countByState).
 // Wired into authMiddleware and every MCP tool that needs agent presence.
 const presence = new PresenceService(db, nats);
+// A message the broker has given up on gets an audit row. Until now nobody
+// was listening when the broker said so.
+nats.onDeadLetter((letter, streamCreated) => recordDeadLetter(db, activity, letter, streamCreated));
 
 const app = createApp({ config, db, nats, agents, activity, presence, rateLimiter });
 
@@ -87,10 +91,11 @@ async function start() {
     maintenanceTasks({ db, activity, backupDir, backupKeep: config.backupKeep }),
     {
       intervalMs: MAINTENANCE_INTERVAL_MS,
-      onResult: (name, count) =>
-        name === BACKUP_TASK
-          ? log("info", "database backup written", { dir: backupDir, keep: config.backupKeep })
-          : log("info", "maintenance removed expired rows", { table: name, count }),
+      onResult: (name, count) => {
+        if (name === BACKUP_TASK) log("info", "database backup written", { dir: backupDir, keep: config.backupKeep });
+        else if (name === EXPIRED_UNREAD_TASK) log("warn", "messages expired unread", { count });
+        else log("info", "maintenance removed expired rows", { table: name, count });
+      },
       onError: (name, err) => log("error", "maintenance task failed", { table: name, err: String(err) }),
     },
   );

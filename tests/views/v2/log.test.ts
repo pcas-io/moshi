@@ -344,6 +344,17 @@ describe("audit sentences", () => {
       "You reset scout's token"],
     [{ action: "agent_deleted", agent_name: "admin", summary: 'Agent "ghost" deleted' },
       "You deleted ghost"],
+    // What the delivery core writes.
+    [{ action: "message_stored", agent_name: "ops-kai", summary: "ops-kai → triage-1 [info] (delivered earlier; history mended)" },
+      "ops-kai's message to triage-1 reached the history late"],
+    [{ action: "message_stored", agent_name: "ops-kai", summary: "ops-kai → broadcast [info] (delivered earlier; history mended)" },
+      "ops-kai's message to everyone reached the history late"],
+    [{ action: "message_expired", agent_name: "ops-kai", summary: "ops-kai → triage-1: expired unread, its deadline was 2 h" },
+      "ops-kai's message to triage-1 expired before it was read"],
+    [{ action: "message_dead_letter", agent_name: "triage-1", summary: "triage-1 was handed msg_01J from ops-kai 5 times and never acknowledged it; the broker has stopped delivering it. mesh_inbox still shows it." },
+      "triage-1 never acknowledged a message; the broker gave up on it"],
+    [{ action: "read_not_recorded", agent_name: "triage-1", summary: "triage-1 was handed msg_01J; the read could not be stored" },
+      "triage-1 was handed a message; the read could not be stored"],
   ];
 
   for (const [over, expected] of cases) {

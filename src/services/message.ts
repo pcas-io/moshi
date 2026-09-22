@@ -8,7 +8,12 @@ import { log } from "./logger.js";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/** What a message id looks like: `msg_` and a ULID. */
+export const MESSAGE_ID_RE = /^msg_[0-9A-HJKMNP-TV-Z]{26}$/;
+
 export function createMessage(params: {
+  /** Only when a send is repeated under the id of its first attempt. */
+  id?: string;
   from: string;
   to: string;
   type: string;
@@ -33,7 +38,7 @@ export function createMessage(params: {
   }
 
   return {
-    id: `msg_${ulid()}`,
+    id: params.id ?? `msg_${ulid()}`,
     from: params.from,
     to: params.to,
     type: params.type,
@@ -55,9 +60,10 @@ export function createMessage(params: {
  *
  * `ttl_seconds` is a **delivery deadline**, not a data-lifetime guarantee:
  *
- * - After expiry, `mesh_receive` silently acks and drops the message
- *   (see src/mcp/tools/messaging.ts:156) — an expired message will never
- *   be delivered to a recipient that wasn't polling fast enough.
+ * - After expiry, `mesh_receive` acks and drops the message
+ *   (src/mcp/tools/receive.ts) — an expired message will never be delivered
+ *   to a recipient that wasn't polling fast enough. The sender is told the
+ *   deadline (`expires_at`), and the audit log gets a `message_expired` row.
  * - Expired messages **remain in SQLite** until the retention-based
  *   rotation (`rotateMessages(MESSAGE_RETENTION_DAYS)`, default 30 days)
  *   sweeps them away. They are visible via `mesh_history` until then.
@@ -72,6 +78,15 @@ export function isMessageExpired(msg: Message): boolean {
   const createdMs = new Date(msg.created_at).getTime();
   const expiresMs = createdMs + msg.ttl_seconds * 1000;
   return Date.now() > expiresMs;
+}
+
+/** The moment a message stops being delivered, as the sender is told it.
+ *  Null for a row whose created_at is no date (written by hand): one such
+ *  row must not take a whole inbox or thread down. */
+export function expiresAt(msg: Pick<Message, "created_at" | "ttl_seconds">): string | null {
+  const created = Date.parse(msg.created_at);
+  if (Number.isNaN(created)) return null;
+  return new Date(created + msg.ttl_seconds * 1000).toISOString();
 }
 
 export function serializeMessage(msg: Message): Uint8Array {
@@ -94,12 +109,15 @@ export interface StoredWith {
   streamSeq?: number | null;
   /** The sender's inbox key: who sent it, whatever it is called later. */
   fromKey?: string | null;
+  /** The recipient's inbox key; "" for a broadcast. Undefined or null: the
+   *  row is written without one, like rows from before migration 0010. */
+  toKey?: string | null;
 }
 
 export function persistMessage(db: Database.Database, msg: Message, stored: StoredWith = {}): void {
   db.prepare(
-    `INSERT INTO messages (id, from_agent, to_agent, type, payload, context, correlation_id, reply_to, priority, ttl_seconds, created_at, stream_seq, from_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (id, from_agent, to_agent, type, payload, context, correlation_id, reply_to, priority, ttl_seconds, created_at, stream_seq, from_key, to_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.from,
@@ -114,6 +132,7 @@ export function persistMessage(db: Database.Database, msg: Message, stored: Stor
     msg.created_at,
     stored.streamSeq ?? null,
     stored.fromKey || null,
+    stored.toKey ?? null,
   );
 }
 
@@ -191,6 +210,11 @@ export interface SendResult {
    */
   persisted: boolean;
   /**
+   * The broker had this message already (same id inside its duplicate
+   * window) and stored nothing new: an earlier attempt had arrived.
+   */
+  duplicate?: boolean;
+  /**
    * Why `delivered=false`.
    * - `"nats_unavailable"`: the message was not sent (breaker open, no
    *   connection). Sending it again is safe.
@@ -222,6 +246,8 @@ export async function sendAndPersistMessage(
   subject: string,
   /** The sender's inbox key, stored with the row. */
   fromKey?: string | null,
+  /** The recipient's inbox key, stored with the row. None for a broadcast. */
+  toKey?: string | null,
 ): Promise<SendResult> {
   // 1. NATS publish FIRST — this IS the delivery act.
   let ack: PublishAck | void;
@@ -247,16 +273,19 @@ export async function sendAndPersistMessage(
   // the message was delivered but is missing from history. Log loudly
   // ("CRITICAL" prefix) so the gap is visible, but return delivered=true
   // because the caller should see a successful send.
+  const duplicate = ack?.duplicate === true ? { duplicate: true } : {};
   try {
-    persistMessage(db, msg, { streamSeq: ack?.seq ?? null, fromKey });
+    persistMessage(db, msg, { streamSeq: ack?.seq ?? null, fromKey, toKey });
   } catch (err) {
+    // Two repeats of one send at the same moment: the other one wrote the row.
+    if (hasRow(db, msg.id)) return { delivered: true, persisted: true, ...duplicate };
     log("error", "CRITICAL: message delivered but history insert failed", {
       msg_id: msg.id,
       from: msg.from,
       to: msg.to,
       err: String(err),
     });
-    return { delivered: true, persisted: false };
+    return { delivered: true, persisted: false, ...duplicate };
   }
 
   // 3. Notify in-process subscribers (GET /sse/messages). Best-effort —
@@ -264,5 +293,13 @@ export async function sendAndPersistMessage(
   // can never affect the send result.
   publishMessageEvent(msg);
 
-  return { delivered: true, persisted: true };
+  return { delivered: true, persisted: true, ...duplicate };
+}
+
+function hasRow(db: Database.Database, id: string): boolean {
+  try {
+    return db.prepare("SELECT 1 FROM messages WHERE id = ?").get(id) !== undefined;
+  } catch {
+    return false;
+  }
 }

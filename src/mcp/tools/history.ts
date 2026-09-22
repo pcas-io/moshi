@@ -5,6 +5,9 @@ import { ok, error } from "../shared.js";
 import type { ToolContext } from "../shared.js";
 import { FIELD_LIMITS } from "../../types.js";
 import { resolveThreadRoot } from "../../services/message-queries.js";
+import { expiresAt } from "../../services/message.js";
+import { readStates } from "../../services/reads.js";
+import type { ReadState } from "../../services/reads.js";
 
 interface MessageRow {
   id: string;
@@ -18,9 +21,12 @@ interface MessageRow {
   priority: string;
   ttl_seconds: number;
   created_at: string;
+  to_key?: string | null;
 }
 
-function rowToMessage(row: MessageRow) {
+/** A stored message as the tools show it: the envelope, when its delivery
+ *  stops, and whether it was read (flat read access: every agent may know). */
+function rowToMessage(row: MessageRow, read: ReadState = {}) {
   return {
     id: row.id,
     from: row.from_agent,
@@ -33,6 +39,8 @@ function rowToMessage(row: MessageRow) {
     priority: row.priority,
     ttl_seconds: row.ttl_seconds,
     created_at: row.created_at,
+    expires_at: expiresAt(row),
+    ...read,
   };
 }
 
@@ -56,7 +64,7 @@ export function registerHistoryTools(server: McpServer, ctx: ToolContext): void 
         .prepare(
           `SELECT * FROM messages
            WHERE correlation_id = ? OR id = ?
-           ORDER BY created_at ASC
+           ORDER BY created_at ASC, rowid ASC
            LIMIT ?`,
         )
         .all(root, root, limit) as MessageRow[];
@@ -68,7 +76,8 @@ export function registerHistoryTools(server: McpServer, ctx: ToolContext): void 
         });
       }
 
-      const messages = rows.map(rowToMessage);
+      const read = readStates(db, rows);
+      const messages = rows.map((row) => rowToMessage(row, read.get(row.id)));
       return ok({ thread_id: root, messages, count: messages.length });
     },
   );
@@ -76,7 +85,7 @@ export function registerHistoryTools(server: McpServer, ctx: ToolContext): void 
   // ── mesh_get ──────────────────────────────────────────────────
   server.tool(
     "mesh_get",
-    "Fetch one message with its complete payload — use it after mesh_receive returned a truncated preview (payload_truncated=true).",
+    "Fetch one message with its complete payload — use it after mesh_receive returned a truncated preview (payload_truncated=true). Also says whether it was read: read_at for a direct message (null = not handed to its recipient yet), read_by for a broadcast.",
     {
       message_id: z.string().max(FIELD_LIMITS.ID).describe("The message id (msg_…) from mesh_receive or mesh_history"),
     },
@@ -90,7 +99,7 @@ export function registerHistoryTools(server: McpServer, ctx: ToolContext): void 
           `Message not found: ${params.message_id} (history is kept for 30 days).`,
         );
       }
-      return ok(rowToMessage(row));
+      return ok(rowToMessage(row, readStates(db, [row]).get(row.id)));
     },
   );
 }

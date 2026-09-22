@@ -19,6 +19,11 @@ export interface FakeMeshNats extends MeshNats, NatsPresenceBackend {
   published: { subject: string; msgId: string; json: Record<string, unknown> }[];
   acked: number;
   failPublish: boolean;
+  /** What the next publishes do. `timeout_stored`: the broker kept the
+   *  message and the answer never came. `timeout_lost`: neither arrived. */
+  publishOutcome: "ok" | "timeout_stored" | "timeout_lost";
+  /** The duplicate window is over: the broker no longer knows any msgID. */
+  forgetDuplicates(): void;
   failPending: boolean;
   /** The stream's bounds cannot be had (the broker did not answer that one). */
   withoutBounds: boolean;
@@ -62,11 +67,16 @@ export function createFakeMeshNats(): FakeMeshNats {
     return stream.filter((m) => m.subject === subject && m.seq > from);
   };
   const bounds = () => ({ created, firstSeq: stream.length ? 1 : 0, lastSeq: stream.length });
+  // Nats-Msg-Id -> the sequence it was stored under (the duplicate window).
+  const msgIds = new Map<string, number>();
+  const timeout = () => Object.assign(new Error("TIMEOUT"), { code: "TIMEOUT" });
 
   const self: FakeMeshNats = {
     published: [],
     acked: 0,
     failPublish: false,
+    publishOutcome: "ok",
+    forgetDuplicates() { msgIds.clear(); },
     failPending: false,
     withoutBounds: false,
     kv: new Map(),
@@ -78,13 +88,25 @@ export function createFakeMeshNats(): FakeMeshNats {
     },
     resetStream() {
       stream = [];
+      msgIds.clear();
       positions.clear();
       created = new Date().toISOString();
     },
     async publish(subject, data, msgId) {
       if (self.failPublish) throw new Error("nats unavailable");
+      if (self.publishOutcome === "timeout_lost") throw timeout();
+      // Like the broker: a msgID it has seen inside the window stores nothing
+      // and answers with the sequence of the first one.
+      const known = msgIds.get(msgId);
+      if (known !== undefined) {
+        if (self.publishOutcome === "timeout_stored") throw timeout();
+        return { seq: known, duplicate: true };
+      }
       self.published.push({ subject, msgId, json: JSON.parse(dec.decode(data)) });
-      return { seq: append(subject, data), duplicate: false };
+      const seq = append(subject, data);
+      msgIds.set(msgId, seq);
+      if (self.publishOutcome === "timeout_stored") throw timeout();
+      return { seq, duplicate: false };
     },
     async pullInbox(inboxKey, limit, opts = {}) {
       const messages: PulledMessage[] = [];
@@ -135,13 +157,13 @@ export interface Harness {
   connect(agentName: string, opts?: { isAdmin?: boolean }): Promise<Client>;
 }
 
-export function createHarness(): Harness {
+export function createHarness(opts: { rateLimiter?: RateLimiter } = {}): Harness {
   const db = initDatabase(":memory:");
   const activity = new ActivityService(db);
   const agents = new AgentService(db, activity);
   const nats = createFakeMeshNats();
   const presence = new PresenceService(db, nats);
-  const rateLimiter = new RateLimiter(60);
+  const rateLimiter = opts.rateLimiter ?? new RateLimiter(60);
 
   return {
     db, agents, activity, presence, nats, rateLimiter,
