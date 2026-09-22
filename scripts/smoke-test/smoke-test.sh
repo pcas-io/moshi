@@ -52,6 +52,19 @@ LIVE_TOKEN="${MESH_LIVE_TOKEN:-}"
 # Skip live smoke automatically if no token
 [[ -z "$LIVE_TOKEN" ]] && SKIP_LIVE=true
 
+# This script creates, revokes and deletes agents. It does that to a LOCAL
+# instance and to nothing else: on 2026-09-19 a test script renamed and deleted
+# a real agent in production. Phase 6 only ever reads from LIVE_URL.
+# Anchored, and in a variable so that bash 3.2 and 5 read it the same way. A
+# prefix match let "http://localhost:1@evil.example" through: for curl and
+# for the CLI the host is what follows the @.
+LOOPBACK_RE='^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?$'
+if ! [[ "$MESH_URL" =~ $LOOPBACK_RE ]]; then
+  echo "MESH_URL must be a loopback address and nothing else (http://localhost:PORT, http://127.0.0.1:PORT, http://[::1]:PORT), got: $MESH_URL" >&2
+  echo "This script deletes agents. It refuses to do that anywhere but on this machine." >&2
+  exit 2
+fi
+
 # ─── Run identity ────────────────────────────────────────
 RUN_ID="$(openssl rand -hex 2)"
 ALPHA="uft-alpha-${RUN_ID}"
@@ -67,6 +80,7 @@ FIRST_MSG_ID=""
 # ─── Scoring ─────────────────────────────────────────────
 PASS=0
 FAIL=0
+SKIPPED=0
 FAILED_STEPS=()
 
 step() { printf "\n[%02d] %s\n" "$1" "$2"; }
@@ -174,47 +188,66 @@ extract_token_from_agents_page() {
   echo "$html" | grep -oE 'bt_[a-z0-9]{20,}' | head -1
 }
 
-# Extract agent id from /agents HTML using Python3.
-# The rename form has this structure (all on one line):
-#   <form action="/agents/rename">
-#     <input name="csrf" value="...">
-#     <input name="id" value="<ULID>">        <-- we want this ULID
-#     <input name="name" value="<AGENT_NAME>">
-# We walk the HTML, tracking the most recent id= input, and return it
-# when we hit the matching name= input.
+# Every agent as "<id> <name>", one per line.
+#
+# The ids come from the rows of the Agents page (each links to its inspector),
+# the NAME from the inspector's rename field: <input id="rename-<id>" … value="<name>">,
+# a field that holds the name and nothing else. The row's text does not: it
+# also shows role and working_on, free text any agent sets. An agent that
+# announced "answering uft-alpha-1a2b" was taken for the test agent, and
+# deleted by the cleanup.
+agent_rows() {
+  local ids id name
+  ids=$(curl -sS -b "$COOKIE_JAR" "$MESH_URL/agents" | grep -oE 'href="/agents\?inspect=[0-9A-Za-z]+' | sed -E 's/.*inspect=//' | sort -u)
+  for id in $ids; do
+    name=$(curl -sS -b "$COOKIE_JAR" "$MESH_URL/agents?inspect=$id" \
+      | grep -oE "<input[^>]*id=\"rename-$id\"[^>]*>" | head -1 \
+      | grep -oE 'value="[^"]*"' | head -1 | sed -E 's/^value="(.*)"$/\1/')
+    [[ -n "$name" ]] && printf '%s %s\n' "$id" "$name"
+  done
+  return 0
+}
+
+# Agent id by its exact name. Empty when there is none.
 extract_agent_id() {
-  local name="$1"
-  curl -sS -b "$COOKIE_JAR" "$MESH_URL/agents" | python3 -c '
-import sys, re
-html = sys.stdin.read()
-name = sys.argv[1]
-# Find every id + subsequent name pair in the HTML.
-pattern = re.compile(
-  r"name=\"id\"[^>]*value=\"([^\"]+)\"[^>]*/?>"
-  r"\s*<input[^>]*name=\"name\"[^>]*value=\"([^\"]+)\""
-)
-for m in pattern.finditer(html):
-  if m.group(2) == name:
-    print(m.group(1))
-    sys.exit(0)
-' "$name"
+  # No early exit: awk would close the pipe under agent_rows' feet.
+  agent_rows | awk -v n="$1" '$2 == n && !found { print $1; found = 1 }'
+}
+
+# Names of all test agents (exactly uft-alpha-xxxx / uft-beta-xxxx), one per line.
+list_test_agents() {
+  agent_rows | awk '$2 ~ /^uft-(alpha|beta)-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]$/ { print $2 }' | sort -u
 }
 
 # ─── Cleanup (runs on every exit) ────────────────────────
+# Deletes the agent with exactly this name. Returns 1 when there is none, so
+# that nobody prints "deleted" for a request that was never sent.
+delete_agent_named() {
+  local id
+  id=$(extract_agent_id "$1")
+  [[ -n "$id" ]] || return 1
+  local code
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -b "$COOKIE_JAR" "$MESH_URL/agents/delete" \
+    --data-urlencode "id=$id" --data-urlencode "csrf=$CSRF" 2>/dev/null || echo "000")
+  [[ "$code" =~ ^[23] ]]
+}
+
 cleanup() {
   local rc=$?
-  # Only try cleanup if we have CSRF and IDs
+  # By NAME, looked up now: a run that failed before it learned the ids used
+  # to leave its agents behind.
   if [[ -n "$CSRF" ]]; then
-    if [[ -n "$ALPHA_ID" ]]; then
-      curl -sS -X POST -b "$COOKIE_JAR" "$MESH_URL/agents/delete" \
-        -d "id=$ALPHA_ID&csrf=$CSRF" >/dev/null 2>&1 || true
-    fi
-    if [[ -n "$BETA_ID" ]]; then
-      curl -sS -X POST -b "$COOKIE_JAR" "$MESH_URL/agents/delete" \
-        -d "id=$BETA_ID&csrf=$CSRF" >/dev/null 2>&1 || true
-    fi
+    [[ -n "$ALPHA" ]] && { delete_agent_named "$ALPHA" || true; }
+    [[ -n "$BETA" ]] && { delete_agent_named "$BETA" || true; }
   fi
   rm -f "$COOKIE_JAR"
+  # A build that is still running writes its binary after the directory is
+  # gone, and creates it again: end it first.
+  if [[ -n "${BUILD_PID:-}" ]]; then
+    kill "$BUILD_PID" 2>/dev/null || true
+    wait "$BUILD_PID" 2>/dev/null || true
+  fi
+  [[ -n "${CLI_BUILD_DIR:-}" ]] && rm -rf "$CLI_BUILD_DIR"
   exit $rc
 }
 trap cleanup EXIT
@@ -222,7 +255,7 @@ trap cleanup EXIT
 # ─── Summary ─────────────────────────────────────────────
 print_summary() {
   printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-  printf " PASS: %d   FAIL: %d\n" "$PASS" "$FAIL"
+  printf " PASS: %d   FAIL: %d   SKIPPED: %d\n" "$PASS" "$FAIL" "${SKIPPED:-0}"
   if (( FAIL > 0 )); then
     printf " Failed steps:\n"
     printf "   - %s\n" "${FAILED_STEPS[@]}"
@@ -284,6 +317,24 @@ assert_redirect "login accepts admin token" "$LOGIN_CODE"
 # From here on the forms belong to the session: take a token from one of its pages.
 CSRF=$(fetch_session_csrf)
 assert_not_empty "session form token fetched from /agents" "$CSRF"
+
+if $CLEANUP_STALE; then
+  step 1 "Deleting test agents left behind by earlier runs"
+  STALE=$(list_test_agents)
+  if [[ -z "$STALE" ]]; then
+    pass "nothing to clean up"
+  else
+    while IFS= read -r name; do
+      if delete_agent_named "$name"; then printf "  deleted %s\n" "$name"; else printf "  not found any more: %s\n" "$name"; fi
+    done <<< "$STALE"
+    LEFT=$(list_test_agents)
+    assert_eq "no uft-* agent left" "" "$LEFT"
+  fi
+  ALPHA=""; BETA=""
+  print_summary
+  (( FAIL == 0 )) || exit 1
+  exit 0
+fi
 
 step 2 "Create agent $ALPHA"
 
@@ -423,6 +474,26 @@ esac
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CLI_PATH="$REPO_ROOT/$CLI_BIN"
 
+# Build the CLI from this checkout. The binaries lying around in cli/ were
+# months old and tested nothing but themselves.
+# With a compiler the build is an assertion: a CLI that does not compile
+# used to skip the whole phase and leave the run green. A job of this shell,
+# so that the cleanup can end it (see there).
+if command -v go >/dev/null 2>&1; then
+  CLI_BUILD_DIR="$(mktemp -d -t moshi-smoke-cli.XXXXXX)"
+  ( cd "$REPO_ROOT/cli" && exec go build -o "$CLI_BUILD_DIR/moshi" . ) >"$CLI_BUILD_DIR/build.log" 2>&1 &
+  BUILD_PID=$!
+  if wait "$BUILD_PID"; then
+    BUILD_PID=""
+    CLI_PATH="$CLI_BUILD_DIR/moshi"
+    pass "cli builds from this checkout"
+  else
+    BUILD_PID=""
+    fail "cli builds from this checkout" "$(tail -5 "$CLI_BUILD_DIR/build.log" 2>/dev/null | tr '\n' ' ')"
+    CLI_PATH=""
+  fi
+fi
+
 if [[ -x "$CLI_PATH" ]]; then
   step 14 "moshi status (as alpha)"
 
@@ -436,7 +507,8 @@ if [[ -x "$CLI_PATH" ]]; then
   CLI_SEND=$(echo "cli test $RUN_ID" | \
     MESH_URL="$MESH_URL/mcp" MESH_TOKEN="$ALPHA_TOKEN" \
     "$CLI_PATH" send "$BETA" 2>&1 || true)
-  assert_contains "cli send succeeds" "Gesendet" "$CLI_SEND"
+  # German today, English once i18n/cli-english has landed: the message id is in both.
+  assert_contains "cli send succeeds" "msg_" "$CLI_SEND"
 
   sleep 1
 
@@ -452,7 +524,8 @@ if [[ -x "$CLI_PATH" ]]; then
     "$CLI_PATH" history "$FIRST_MSG_ID" 2>&1 || true)
   assert_contains "cli history shows ping" "ping" "$CLI_HIST"
 else
-  printf "\n[14-17] moshi binary not found at %s — skipping Phase 3\n" "$CLI_PATH"
+  SKIPPED=$((SKIPPED + 5))
+  printf "\n[14-17] no go and no moshi binary (%s) — Phase 3 SKIPPED, five assertions did not run\n" "${CLI_PATH:-none}"
 fi
 
 # ═══════════════════════════════════════════════
@@ -465,22 +538,23 @@ HOME_HTML=$(curl -sS -b "$COOKIE_JAR" "$MESH_URL/")
 assert_contains "home shows alpha" "$ALPHA" "$HOME_HTML"
 assert_contains "home shows beta" "$BETA" "$HOME_HTML"
 
-step 19 "GET /messages renders"
+step 19 "GET /log lists the test messages (and /messages still leads there)"
 
-MSGS_HTML=$(curl -sS -b "$COOKIE_JAR" "$MESH_URL/messages")
-MSGS_LOWER=$(echo "$MSGS_HTML" | tr '[:upper:]' '[:lower:]')
-assert_contains "messages page loads" "messages" "$MSGS_LOWER"
+MSGS_HTML=$(curl -sS -b "$COOKIE_JAR" "$MESH_URL/log")
+assert_contains "log page names alpha as a sender" "$ALPHA" "$MSGS_HTML"
+OLD_MSGS=$(curl -sS -b "$COOKIE_JAR" -o /dev/null -w '%{http_code} %{redirect_url}' "$MESH_URL/messages")
+assert_contains "/messages is a permanent redirect to /log" "301 $MESH_URL/log" "$OLD_MSGS"
 
 step 20 "GET /conversations contains test context"
 
 CONV_HTML=$(curl -sS -b "$COOKIE_JAR" "$MESH_URL/conversations")
 assert_contains "conversations contains user-flow-test context" "user-flow-test" "$CONV_HTML"
 
-step 21 "GET /activity shows our test messages"
+step 21 "GET /log?tab=audit shows our test agents"
 
 # Activity log shows `summary` if present (agents.ts sets summary for all events),
 # so we search for the alpha agent name — it appears in the message_sent summaries.
-ACT_HTML=$(curl -sS -b "$COOKIE_JAR" "$MESH_URL/activity")
+ACT_HTML=$(curl -sS -b "$COOKIE_JAR" "$MESH_URL/log?tab=audit")
 assert_contains "activity log references alpha" "$ALPHA" "$ACT_HTML"
 
 # ═══════════════════════════════════════════════
@@ -556,12 +630,11 @@ BETA_ID=""
 
 step 28 "GET /agents no longer lists test agents"
 
-FINAL_HTML=$(curl -sS -b "$COOKIE_JAR" "$MESH_URL/agents")
-if echo "$FINAL_HTML" | grep -q ">$ALPHA<\|>$BETA<"; then
-  fail "test agents removed from page" "still visible in HTML"
-else
-  pass "test agents removed from page"
-fi
+# By exact name, like everything else here: another agent may well MENTION a
+# test agent in its working_on, and that is not the test agent still being there.
+LEFT_ALPHA=$(extract_agent_id "$ALPHA")
+LEFT_BETA=$(extract_agent_id "$BETA")
+assert_eq "test agents are gone" "" "$LEFT_ALPHA$LEFT_BETA"
 
 # ═══════════════════════════════════════════════
 # Phase 6: Live-Smoke (read-only)
