@@ -16,8 +16,15 @@ import { BROADCAST_RECIPIENT, LOG_CARD_STYLE, LOG_EMPTY_TEXT, LogEmptyBlock } fr
 
 const T = V2_TOKENS;
 
-const GRID = "display:grid;grid-template-columns:56px 26px 1fr 150px;gap:14px";
-const ELLIPSIS = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+// A row that wraps, not a grid: 56px 26px 1fr 150px plus gaps and padding
+// was 314 px before the sentence got a pixel, and at 360 px it read "tria…".
+// Time and emblem keep their width, the sentence takes what is left and,
+// when that is too little, a whole line of its own; the kind pill stays at
+// the right edge on either line.
+const ROW = "display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px";
+const TIME = "flex:0 0 56px";
+const SENTENCE = "flex:1 1 220px;min-width:0;overflow-wrap:anywhere";
+const PILL = "margin-left:auto";
 
 /** COPY §8 — an audit row names a thing, not a table. */
 const ENTITY_LABELS: Record<string, string> = {
@@ -148,9 +155,9 @@ export const AuditTable: FC<AuditTableProps> = ({ result, agentRoles, footer }) 
             <div
               key={ev.id}
               class="d-row"
-              style={`${GRID};padding:12px 20px;align-items:center;border-bottom:1px solid ${T.lineRow}`}
+              style={`${ROW};padding:12px 20px;border-bottom:1px solid ${T.lineRow}`}
             >
-              <span style={`font-family:${V2_FONT_FAMILY_MONO};font-size:12.5px;color:${T.faint}`}>
+              <span style={`${TIME};font-family:${V2_FONT_FAMILY_MONO};font-size:12.5px;color:${T.faint}`}>
                 {new Date(ev.created_at).toTimeString().slice(0, 5)}
               </span>
               <ActorCell
@@ -159,11 +166,11 @@ export const AuditTable: FC<AuditTableProps> = ({ result, agentRoles, footer }) 
                 size={26}
               />
               {/* The raw action stays reachable for debugging. */}
-              <span style={`font-size:13.5px;color:${T.ink};${ELLIPSIS}`} title={ev.action}>
+              <span style={`${SENTENCE};font-size:13.5px;color:${T.ink}`} title={ev.action}>
                 {auditSentence(ev)}
               </span>
               <span
-                style={`font-size:12.5px;color:${ink};background:${ground};padding:3px 10px;` +
+                style={`${PILL};font-size:12.5px;color:${ink};background:${ground};padding:3px 10px;` +
                   `border-radius:${T.radiusPill}px;width:fit-content;white-space:nowrap;text-align:center`}
               >
                 {entityLabel(ev.entity_type)}

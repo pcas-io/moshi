@@ -276,6 +276,23 @@ describe("Log · Audit trail tab", () => {
     expect(html).toContain("<svg"); // the agent's emblem
   });
 
+  it("lets the sentence take its own line on a phone instead of a two-pixel cell", async () => {
+    // A grid of 56px 26px 1fr 150px plus gaps and padding is 314 px before
+    // the sentence gets a pixel: at 360 px it read "tria…". A row that wraps
+    // gives the sentence a whole line when the width is not there.
+    const html = await render({ ...BASE, tab: "audit", topActors: actors, events: page([ev({ summary: "triage-1 → ops-kai [incident]" })]) });
+    const row = /<div class="d-row" style="([^"]*)"/.exec(html)?.[1] ?? "";
+    expect(row).toContain("display:flex");
+    expect(row).toContain("flex-wrap:wrap");
+    expect(row).not.toContain("grid-template-columns");
+    const sentence = /<span style="([^"]*)" title="message_sent">/.exec(html)?.[1] ?? "";
+    expect(sentence).toMatch(/flex:1 1 2\d\dpx/);
+    expect(sentence).toContain("min-width:0");
+    expect(sentence).not.toContain("white-space:nowrap");
+    // The kind pill keeps to the right edge, on either line.
+    expect(html).toMatch(/margin-left:auto[^"]*"\s*>\s*message<\/span>/);
+  });
+
   it("renders the Busiest today aside from real totals", async () => {
     const html = await render({ ...BASE, tab: "audit", events: page([ev()]), topActors: actors });
     expect(html).toContain("Busiest today");
