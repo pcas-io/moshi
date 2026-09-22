@@ -583,7 +583,12 @@ describe("MCP tools — field bounds", () => {
     const reply = await callTool(beta, "mesh_reply", { message_id: id, payload: "y", context: CTX });
     expect(reply.isError, reply.text).toBe(false);
 
-    // An id of exactly 64 characters is still a legal thread reference.
+    // An id of exactly 64 characters is still a legal thread reference. It
+    // has to name a thread: this one was named freely, before that rule.
+    h.db.prepare(
+      `INSERT INTO messages (id, from_agent, to_agent, type, payload, context, correlation_id, reply_to, priority, ttl_seconds, created_at)
+       VALUES ('msg_named', 'beta', 'alpha', 'info', 'x', 'ctx', ?, NULL, 'normal', 86400, ?)`,
+    ).run("c".repeat(64), new Date().toISOString());
     expect((await send({ correlation_id: "c".repeat(64) })).isError).toBe(false);
 
     const tooLong = "m".repeat(FIELD_LIMITS.ID + 1);

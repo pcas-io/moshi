@@ -16,7 +16,7 @@ describe("maintenanceTasks", () => {
   it("cleans up first and copies last, so a copy never carries what was about to be deleted", () => {
     const db = new Database(":memory:");
     const names = maintenanceTasks({ db, activity: new ActivityService(initDatabase(":memory:")), backupDir: "/data/backups", backupKeep: 7 }).map((t) => t.name);
-    expect(names).toEqual(["oauth_codes", "oauth_tokens (legacy)", "messages", "activity_log", BACKUP_TASK]);
+    expect(names).toEqual(["oauth_codes", "oauth_tokens (legacy)", "expired_unread", "messages", "message_reads", "send_attempts", "activity_log", BACKUP_TASK]);
   });
 
   it("has no backup task without a directory, or when told to keep none", () => {

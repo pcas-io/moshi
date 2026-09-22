@@ -219,6 +219,28 @@ export function resolveThreadRoot(db: Database.Database, messageId: string): str
   return row?.root ?? messageId;
 }
 
+/**
+ * The thread a `correlation_id` may join: the id as it is when a thread of
+ * that name exists, the thread of the message when it is a message id, null
+ * when the history knows neither. Same precedence as `getThread`: a thread
+ * id wins over a message that happens to have the same id.
+ *
+ * mesh_send used to take any string. A made-up one opened a thread nobody
+ * could have meant, and the id of a reply opened a second thread next to the
+ * one the reply belongs to.
+ */
+export function existingThread(db: Database.Database, id: string): string | null {
+  if (!id) return null;
+  const named = db
+    .prepare("SELECT 1 FROM messages WHERE (correlation_id = ? OR id = ?) AND COALESCE(correlation_id, id) = ? LIMIT 1")
+    .get(id, id, id);
+  if (named) return id;
+  const row = db
+    .prepare("SELECT COALESCE(correlation_id, id) AS root FROM messages WHERE id = ?")
+    .get(id) as { root: string } | undefined;
+  return row?.root ?? null;
+}
+
 /** The id of the thread the newest message belongs to, straight from the
  *  created_at index. Null on an empty table. */
 export function newestThreadId(db: Database.Database): string | null {
@@ -364,8 +386,9 @@ function threadRows(db: Database.Database, threadId: string): MessageRow[] {
  * also one that is far outside the first page of the list. Null when nobody
  * knows the id.
  *
- * A thread id wins. mesh_send accepts any correlation_id, also the id of
- * someone's reply: then "X" names a thread AND a message of another thread.
+ * A thread id wins. mesh_send used to accept any correlation_id, also the id
+ * of someone's reply: a legacy thread "X" can name a thread AND a message of
+ * another thread.
  * Every link the dashboard builds carries a thread id, so reading X as a
  * message first would open the other thread from X's own row, and the pinned
  * fragment would swap a different conversation into the pane.

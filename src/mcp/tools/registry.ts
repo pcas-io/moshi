@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { ok, adminError, pendingCount } from "../shared.js";
+import { ok, error, adminError, pendingCount } from "../shared.js";
 import type { ToolContext } from "../shared.js";
 import { FIELD_LIMITS } from "../../types.js";
 
@@ -19,7 +19,7 @@ export function parseCapabilities(raw: string | null): string[] | null {
 }
 
 export function registerRegistryTools(server: McpServer, ctx: ToolContext): void {
-  const { presence, agentName } = ctx;
+  const { presence, agentName, rateLimiter, inboxKey } = ctx;
 
   // ── mesh_status ───────────────────────────────────────────────
   server.tool(
@@ -68,6 +68,14 @@ export function registerRegistryTools(server: McpServer, ctx: ToolContext): void
     },
     async (params) => {
       if (ctx.isAdmin) return adminError();
+
+      // It writes SQLite and the presence bucket, and every agent reads the
+      // result in mesh_status: the same bucket as sending, once the fields
+      // have passed their bounds.
+      const rateCheck = rateLimiter.check(inboxKey);
+      if (!rateCheck.allowed) {
+        return error(`Rate limit exceeded. Wait ${rateCheck.retryAfterSeconds} seconds before retrying.`);
+      }
 
       // Single presence write-path: SQLite is the store for the metadata,
       // NATS KV only carries the liveness flag.
