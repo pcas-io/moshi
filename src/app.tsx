@@ -36,6 +36,9 @@ import { createSseRoutes } from "./routes/sse.js";
 import { listenerCount } from "./services/message-events.js";
 import { createOAuthRoutes } from "./oauth.js";
 import { registerCliRoutes, requestOrigin } from "./services/cli-dist.js";
+import { registerFontRoutes } from "./routes/fonts.js";
+import { createCspReportRoute } from "./routes/csp-report.js";
+import { page } from "./views/nonce.js";
 import { LoginPage } from "./views/login.js";
 
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
@@ -97,6 +100,19 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
     await next();
   });
 
+  // --- Security headers (incl. no-store for everything dynamic) ---
+  // In front of the body limits: a limit answers without calling on, and its
+  // 413 went out without HSTS, a policy or nosniff. This reads no body: it
+  // makes the nonce before the handler and sets the headers after it.
+  app.use("*", securityHeaders({
+    version: versionLabel(config.commit),
+    cspMode: config.cspMode,
+    // Served over TLS: production with a Secure cookie. MESH_COOKIE_SECURE=0
+    // is how a plain-http host says what it is, and HSTS there would lock its
+    // users out for a year the day it met https.
+    hsts: config.isProduction && config.cookieSecure,
+  }));
+
   // --- Body-size limits (C6) ---
   // Cap request body sizes by route-group to prevent OOM DoS. Numbers
   // chosen just above the legitimate max for each path. Anything larger
@@ -117,9 +133,6 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   // /mcp gets its limit on the route itself (src/routes/mcp.ts), behind the
   // 405 guard and behind auth — see the note at the top of this file.
 
-  // --- Security headers (incl. no-store for everything dynamic) ---
-  app.use("*", securityHeaders(versionLabel(config.commit)));
-
   // --- /mcp is POST-only ---
   // In front of the auth middleware on purpose: a GET must not even cost a
   // presence write. See src/mcp/http-guard.ts for the reconnect loop it ends.
@@ -128,6 +141,8 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   // --- Health endpoint (no auth) ---
   // CLI distribution: /install.sh, /install.ps1, /cli/version, /cli/:file
   registerCliRoutes(app);
+  registerFontRoutes(app);
+  app.route("/", createCspReportRoute(now));
 
   // Liveness: the process is up and serving. Asks neither NATS nor SQLite.
   // This is what the container healthcheck polls. /health below is
@@ -165,7 +180,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
     } catch {
       health = null;
     }
-    return c.html(
+    return page(c,
       <LoginPage
         error={error}
         expired={expired}

@@ -109,6 +109,7 @@ async function start() {
     // Whose address failed sign-ins are counted against. False behind a
     // proxy means one count for everybody: look here first.
     behind_proxy: config.behindProxy,
+    csp: config.cspMode,
   });
 
   // C4: First connect in the background, for as long as it takes. Once

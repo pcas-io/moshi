@@ -9,8 +9,10 @@ import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
 import { V2_CSS, V2_TOKENS } from "./tokens.js";
 import { V2_INTERACTION_CSS } from "./components.js";
-import { COPY_SCRIPT } from "./copy-script.js";
-import { LIVE_REFRESH_CSS, LIVE_REFRESH_SCRIPT } from "./live-refresh.js";
+import { COPY_JS } from "./copy-script.js";
+import { LIVE_REFRESH_CSS, LIVE_REFRESH_JS } from "./live-refresh.js";
+import { InlineScript } from "../nonce.js";
+import { FONT_FACE_CSS } from "../fonts.js";
 import { MCP_TOOL_CATALOG } from "../../mcp/catalog.js";
 
 const T = V2_TOKENS;
@@ -114,7 +116,8 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
-const PALETTE_SCRIPT = raw(`<script>
+/** The palette's behaviour. Written into the page through <InlineScript>, with the response's nonce. */
+const PALETTE_JS = `
 (function(){
   var modal = document.getElementById('v2-palette');
   var input = document.getElementById('v2-palette-input');
@@ -174,7 +177,7 @@ const PALETTE_SCRIPT = raw(`<script>
   var btn = document.querySelector('[data-v2-search]');
   if(btn) btn.addEventListener('click', function(e){ e.preventDefault(); open(); });
 })();
-</script>`);
+`;
 
 const PALETTE_CSS = `
 .v2-palette { position: fixed; inset: 0; z-index: 100; align-items: flex-start; justify-content: center; padding-top: 90px; }
@@ -290,11 +293,9 @@ const Topbar: FC<{ active?: V2NavKey; userRole?: string; userName?: string; csrf
 const FOOTER_FACTS = ["NATS JetStream · single node", "SQLite"] as const;
 
 // Sora stops at 600 for body and headings, as the handoff narrowed it. 700 is
-// loaded for one glyph only: the brand mark, which README §Sign in pins at
-// 22px/700. JetBrains Mono keeps 400/500/600.
-const FONT_HREF =
-  "https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700" +
-  "&family=JetBrains+Mono:wght@400;500;600&display=swap";
+// used for one glyph only: the brand mark, which README §Sign in pins at
+// 22px/700. JetBrains Mono keeps 400/500/600. Both come from this origin
+// (src/views/fonts.ts), one variable file per subset.
 
 export const V2Layout: FC<V2LayoutProps> = ({
   title, active, userRole, userName, csrfToken, fullBleed, narrow, children,
@@ -307,13 +308,7 @@ export const V2Layout: FC<V2LayoutProps> = ({
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{title ? `${title} — moshi.moshi` : "moshi.moshi — もしもし"}</title>
         {FAVICON}
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
-        <link
-          href={FONT_HREF}
-          rel="stylesheet"
-        />
-        {raw(`<style>${V2_CSS}${V2_INTERACTION_CSS}${PALETTE_CSS}${LIVE_REFRESH_CSS}</style>`)}
+        {raw(`<style>${FONT_FACE_CSS}${V2_CSS}${V2_INTERACTION_CSS}${PALETTE_CSS}${LIVE_REFRESH_CSS}</style>`)}
         <meta name="color-scheme" content="light" />
       </head>
       <body>
@@ -347,9 +342,9 @@ export const V2Layout: FC<V2LayoutProps> = ({
             element outside of every live container: the containers themselves
             must not be live regions, a swap replaces their whole subtree. */}
         <div id="d-live-status" role="status" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap" />
-        {PALETTE_SCRIPT}
-        {COPY_SCRIPT}
-        {LIVE_REFRESH_SCRIPT}
+        <InlineScript code={PALETTE_JS} />
+        <InlineScript code={COPY_JS} />
+        <InlineScript code={LIVE_REFRESH_JS} />
       </body>
     </html>
   );

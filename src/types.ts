@@ -110,6 +110,9 @@ export interface AppVariables {
   /** The socket's remote address, kept before `c.env` is replaced by the
    *  config bindings. Only used when no proxy named a client. */
   peerAddress?: string;
+  /** The nonce of this response's Content-Security-Policy. Set before the
+   *  handler runs; the views read it through src/views/nonce.tsx. */
+  cspNonce: string;
 }
 
 // === Pagination ===

@@ -10,6 +10,7 @@ import type { AppVariables, Env } from "../../src/types";
 import { AgentService } from "../../src/services/agent";
 import { ActivityService } from "../../src/services/activity";
 import { createOAuthRoutes } from "../../src/oauth";
+import { handoffTarget, handoffTargetIn } from "../helpers/handoff";
 
 const ADMIN_TOKEN = "a".repeat(40);
 const REDIRECT = "http://localhost:9911/callback";
@@ -69,23 +70,59 @@ describe("POST /oauth/authorize", () => {
     const { app, agents } = setup();
     const { plaintextToken } = agents.create("scout");
     const res = await app.request("/oauth/authorize", authorize({ token: plaintextToken, state: "  padded state  " }));
-    expect(res.status).toBe(302);
-    expect(new URL(res.headers.get("location")!).searchParams.get("state")).toBe("  padded state  ");
+    expect(new URL(await handoffTarget(res)).searchParams.get("state")).toBe("  padded state  ");
   });
 
   it("still forgives whitespace around a pasted token", async () => {
     const { app, agents } = setup();
     const { plaintextToken } = agents.create("scout");
     const res = await app.request("/oauth/authorize", authorize({ token: `  ${plaintextToken}\n` }));
-    expect(res.status).toBe(302);
+    expect(await handoffTarget(res)).toContain("code=");
   });
 
   it("still issues a code for an agent token", async () => {
     const { app, agents } = setup();
     const { plaintextToken } = agents.create("scout");
     const res = await app.request("/oauth/authorize", authorize({ token: plaintextToken }));
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toContain("code=");
+    expect(await handoffTarget(res)).toContain("code=");
+  });
+});
+
+// Chrome applies form-action to EVERY redirect that follows a form post, so a
+// client that redirects on from its callback stranded the browser on the
+// consent page, and the client's origin had to be written into the policy
+// (where ';' in a host name injected directives). The form is answered with a
+// page now: what follows is a new navigation and no form's.
+describe("POST /oauth/authorize hands the browser on with a page", () => {
+  it("answers 200 without a Location, with a refresh and a link to the same place", async () => {
+    const { app, agents } = setup();
+    const { plaintextToken } = agents.create("scout");
+    const res = await app.request("/oauth/authorize", authorize({ token: plaintextToken, state: 'a&b"c<d' }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    const target = handoffTargetIn(html);
+    const url = new URL(target);
+    expect(`${url.origin}${url.pathname}`).toBe(REDIRECT);
+    expect(url.searchParams.get("state")).toBe('a&b"c<d');
+    expect(url.searchParams.get("code")).toMatch(/^[A-Za-z0-9_-]{20,}$/);
+    // The same place for somebody whose browser does not follow a refresh.
+    const link = /<a [^>]*href="([^"]*)"[^>]*>Continue<\/a>/.exec(html)?.[1] ?? "";
+    expect(link.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, "<")).toBe(target);
+    // Nothing of the state gets out of its attribute.
+    expect(html).not.toContain('a&b"c<d');
+    expect(html).not.toMatch(/<script/i);
+  });
+
+  it("keeps a redirect_uri's own query, and works for an IPv6 loopback client", async () => {
+    const { app, agents } = setup();
+    const { plaintextToken } = agents.create("scout");
+    const res = await app.request("/oauth/authorize", authorize({ token: plaintextToken, redirect_uri: "http://[::1]:9911/cb?client=x" }));
+    const url = new URL(await handoffTarget(res));
+    expect(url.host).toBe("[::1]:9911");
+    expect(url.searchParams.get("client")).toBe("x");
+    expect(url.searchParams.get("code")).toBeTruthy();
   });
 });
 
@@ -111,7 +148,7 @@ describe("POST /oauth/token — malformed bodies", () => {
     const { app, agents } = setup();
     const { plaintextToken } = agents.create("scout");
     const auth = await app.request("/oauth/authorize", authorize({ token: plaintextToken }));
-    const code = new URL(auth.headers.get("location")!).searchParams.get("code")!;
+    const code = new URL(await handoffTarget(auth)).searchParams.get("code")!;
     const res = await app.request("/oauth/token", json(JSON.stringify({ grant_type: "authorization_code", code, code_verifier: VERIFIER })));
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ access_token: plaintextToken, token_type: "Bearer" });
@@ -124,7 +161,7 @@ describe("POST /oauth/token — malformed bodies", () => {
     const { plaintextToken } = agents.create("scout");
     const exchange = async (contentType: string, body: (code: string) => URLSearchParams | string) => {
       const auth = await app.request("/oauth/authorize", authorize({ token: plaintextToken }));
-      const code = new URL(auth.headers.get("location")!).searchParams.get("code")!;
+      const code = new URL(await handoffTarget(auth)).searchParams.get("code")!;
       return app.request("/oauth/token", { method: "POST", body: body(code), headers: { "Content-Type": contentType } });
     };
     const fields = (code: string) => ({
@@ -160,7 +197,7 @@ describe("the authorization code is bound to its challenge on the server", () =>
     const t = setup();
     const { plaintextToken } = t.agents.create("scout");
     const res = await t.app.request("/oauth/authorize", authorize({ token: plaintextToken }));
-    const code = new URL(res.headers.get("location")!).searchParams.get("code")!;
+    const code = new URL(await handoffTarget(res)).searchParams.get("code")!;
     return { ...t, plaintextToken, code };
   }
 
@@ -236,7 +273,8 @@ describe("the authorization code is bound to its challenge on the server", () =>
       expect(get.status, bad.slice(0, 50)).toBe(400);
     }
     const ok = await app.request("/oauth/authorize", authorize({ token: plaintextToken, code_challenge: CHALLENGE }));
-    expect(ok.status).toBe(302);
+    expect(ok.status).toBe(200);
+    expect(await handoffTarget(ok)).toContain("code=");
   });
 });
 
@@ -262,7 +300,7 @@ describe("the routes seal with OAUTH_SECRET", () => {
     const { app, agents } = setup();
     const { plaintextToken } = agents.create("scout");
     const auth = await app.request("/oauth/authorize", authorize({ token: plaintextToken }));
-    const code = new URL(auth.headers.get("location")!).searchParams.get("code")!;
+    const code = new URL(await handoffTarget(auth)).searchParams.get("code")!;
     process.env.OAUTH_SECRET = "p".repeat(40); // rotated between the two requests
     const res = await exchange(app, code);
     expect(res.status).toBe(400);
@@ -273,7 +311,7 @@ describe("the routes seal with OAUTH_SECRET", () => {
     delete process.env.OAUTH_SECRET;
     const { app, agents } = setup();
     const { plaintextToken } = agents.create("scout");
-    const codeOf = async () => new URL((await app.request("/oauth/authorize", authorize({ token: plaintextToken }))).headers.get("location")!).searchParams.get("code")!;
+    const codeOf = async () => new URL(await handoffTarget(await app.request("/oauth/authorize", authorize({ token: plaintextToken })))).searchParams.get("code")!;
     expect((await exchange(app, await codeOf())).status).toBe(200);
     const waiting = await codeOf();
     process.env.MESH_ADMIN_TOKEN = "z".repeat(40);

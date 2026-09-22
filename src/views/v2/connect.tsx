@@ -11,6 +11,7 @@
 // ./connect-clients.ts, step 4 in ./connect-verify.tsx, and the styles the
 // steps share in ./connect-parts.tsx.
 
+import { InlineScript, NonceContext } from "../nonce.js";
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
@@ -283,14 +284,14 @@ const StepToken: FC<{
         </button>
       </div>
     </div>
-    {GATE_SCRIPT}
+    <InlineScript code={GATE_JS} />
   </section>
 );
 
 // The gate is permanent for the session: the copy button's own label
 // reverts after 1600 ms, this one does not. Styled inert rather than
 // `disabled`, so it keeps its place in the tab order and can say why.
-const GATE_SCRIPT: HtmlEscapedString = raw(`<script>
+const GATE_JS = `
 (function(){
   var btn = document.getElementById('c-step2-next');
   if (!btn) return;
@@ -312,7 +313,7 @@ const GATE_SCRIPT: HtmlEscapedString = raw(`<script>
     btn.className = 'd-solid';
   });
 })();
-</script>`);
+`;
 
 // ── Step 3 — Paste it in your client ────────────────────────────
 const BlockHeader: FC<{ index: number; block: ConnectBlock }> = ({ index, block }) => (
@@ -451,6 +452,13 @@ export const V2ConnectPage: FC<V2ConnectProps> = ({
  *  JSX call site lives here. */
 export function renderConnectPage(
   props: V2ConnectProps,
+  nonce = "",
 ): HtmlEscapedString | Promise<HtmlEscapedString> {
-  return <V2ConnectPage {...props} />;
+  // The route is plain TypeScript, so the nonce of its response is put in
+  // reach of the page's scripts here.
+  return (
+    <NonceContext.Provider value={nonce}>
+      <V2ConnectPage {...props} />
+    </NonceContext.Provider>
+  );
 }

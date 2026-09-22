@@ -6,6 +6,7 @@ import {
   V2_FONT_FAMILY_MONO,
 } from "./v2/tokens.js";
 import type { HealthResult } from "../services/health.js";
+import { FONT_FACE_CSS } from "./fonts.js";
 
 const T = V2_TOKENS;
 
@@ -124,11 +125,6 @@ const FAVICON =
   "font-family='sans-serif' font-size='19' font-weight='800'%3Em%3C/text%3E" +
   '%3C/svg%3E">';
 
-const FONT_HREF =
-  "https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700" +
-  "&family=JetBrains+Mono:wght@400;500;600&display=swap";
-
-// Inline code chip inside the note sentence.
 const CHIP = `font-family:${V2_FONT_FAMILY_MONO};font-size:12px;background:${T.subtle};padding:1px 6px;border-radius:5px;color:${T.body}`;
 
 export const LoginPage: FC<LoginProps> = ({
@@ -148,10 +144,7 @@ export const LoginPage: FC<LoginProps> = ({
         <meta name="color-scheme" content="light" />
         <title>もしもし — moshi.moshi</title>
         {raw(FAVICON)}
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
-        <link href={FONT_HREF} rel="stylesheet" />
-        {raw(`<style>${STYLE}</style>`)}
+        {raw(`<style>${FONT_FACE_CSS}${STYLE}</style>`)}
       </head>
       <body>
         <div

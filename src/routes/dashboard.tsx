@@ -3,6 +3,7 @@
 // src/index.tsx; the order of the routes is unchanged. The live sections'
 // fragments and the message stream have files of their own next to this one.
 
+import { page } from "../views/nonce.js";
 import { Hono } from "hono";
 import type Database from "better-sqlite3";
 import type { Env, AppVariables } from "../types.js";
@@ -51,7 +52,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
     const agent = c.get("agent");
     const csrfToken = issueCsrf(c);
     const data = await loadV2HomeData({ db, presence, nats });
-    return c.html(
+    return page(c, 
       <V2HomePage
         {...data}
         now={new Date(now())}
@@ -75,7 +76,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
     const flash = getFlash(c.req.query("flash"));
     const agentsData = await loadV2AgentsData(db, presence);
 
-    return c.html(
+    return page(c, 
       <V2AgentsPage
         agents={agentsData}
         csrfToken={csrfToken}
@@ -127,7 +128,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
 
     if (tab === "audit") {
       const filter = { agent_name: filterAgent, entity_type: filterEntity, q: query, range };
-      return c.html(
+      return page(c, 
         <V2LogPage
           {...shared}
           events={activity.list({ ...filter, limit: LIMITS.PAGINATION_DEFAULT, offset })}
@@ -137,7 +138,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
       );
     }
 
-    return c.html(
+    return page(c, 
       <V2LogPage
         {...shared}
         messages={loadLogMessages(db, { offset, agent: filterAgent, q: query, routing: messageRoutingOf(routing) })}
@@ -167,7 +168,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
     const query = readConversationsQuery((key) => c.req.query(key));
     const result = loadConversationList(db, query);
     const { opened, unknownId } = loadOpenThread(db, query, result);
-    return c.html(
+    return page(c, 
       <V2ConversationsPage
         result={result}
         opened={opened}

@@ -29,6 +29,9 @@ export interface Config {
   isProduction: boolean;
   /** The deployed commit, or "unknown". See `resolveCommit`. */
   commit: string;
+  /** Content-Security-Policy: "report" (say what would be blocked, block
+   *  nothing), "enforce", or "off". MESH_CSP, default "report". */
+  cspMode: "enforce" | "report" | "off";
   /** Where the daily copies of the database go; null when it is not a file. */
   backupDir: string | null;
   /** How many daily copies stay. 0 switches backups off. */
@@ -168,6 +171,12 @@ export function loadConfig(
   if (behindProxyRaw !== "" && !behindProxy && behindProxyRaw !== "0" && behindProxyRaw !== "false") {
     errors.push(`MESH_BEHIND_PROXY must be 1, 0, true or false (got "${env.MESH_BEHIND_PROXY}")`);
   }
+  // The switch an operator reaches for when a policy breaks a page: report
+  // instead of block, without a code change.
+  const cspRaw = (env.MESH_CSP ?? "").trim().toLowerCase();
+  let cspMode: "enforce" | "report" | "off" = "report";
+  if (cspRaw === "enforce" || cspRaw === "report" || cspRaw === "off") cspMode = cspRaw;
+  else if (cspRaw !== "") errors.push(`MESH_CSP must be enforce, report or off (got "${env.MESH_CSP}")`);
 
   if (errors.length > 0) {
     return { errors };
@@ -187,6 +196,7 @@ export function loadConfig(
     cookieSecure,
     behindProxy,
     commit: resolveCommit(env),
+    cspMode,
   };
 }
 

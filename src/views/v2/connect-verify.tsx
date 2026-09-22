@@ -5,6 +5,7 @@
 // src/mcp/catalog.ts and every limit is formatted from the constant in
 // src/types.ts, so neither can drift from what the server enforces.
 
+import { InlineScript } from "../nonce.js";
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
@@ -133,14 +134,14 @@ export const StepVerify: FC<{
           <PrimaryLink href="/agents">Done — show me the agents</PrimaryLink>
         </div>
       </div>
-      {s && pollScript(s, agentName)}
+      {s && <InlineScript code={pollScript(s, agentName)} />}
     </section>
   );
 };
 
 // Poll, don't stream: one handshake per connect run does not justify an
 // SSE connection, and a dropped poll costs two seconds.
-function pollScript(sessionKey: string, agentName: string): HtmlEscapedString {
+function pollScript(sessionKey: string, agentName: string): string {
   const cfg = {
     url: `/agents/connect/handshake?s=${encodeURIComponent(sessionKey)}`,
     everyMs: 2000,
@@ -156,7 +157,7 @@ function pollScript(sessionKey: string, agentName: string): HtmlEscapedString {
     amber: T.amber,
     onGreen: ON_GREEN,
   };
-  return raw(`<script>
+  return `
 (function(){
   var cfg = ${jsonForScript(cfg)};
   var icon = document.getElementById('c-verify-icon');
@@ -203,5 +204,5 @@ function pollScript(sessionKey: string, agentName: string): HtmlEscapedString {
   tick();
   timer = setInterval(tick, cfg.everyMs);
 })();
-</script>`);
+`;
 }

@@ -72,7 +72,7 @@ export const LIVE_REFRESH_CSS = `
 @media (prefers-reduced-motion: reduce) { .d-new-fade { transition: none; } }
 `;
 
-export const LIVE_REFRESH_SCRIPT = raw(`<script>
+export const LIVE_REFRESH_JS = `
 (function(){
   if (window.__dLive) return; window.__dLive = 1;
   if (!window.fetch) return;
@@ -310,4 +310,7 @@ export const LIVE_REFRESH_SCRIPT = raw(`<script>
   for (var n = 0; n < sections.length; n++) { followBottom(sections[n].el); schedule(sections[n]); }
   connect();
 })();
-</script>`);
+`;
+
+/** The same code as one tag, without a nonce: what a view test compares against. */
+export const LIVE_REFRESH_SCRIPT = raw(`<script>${LIVE_REFRESH_JS}</script>`);

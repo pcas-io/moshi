@@ -183,11 +183,12 @@ describe("V2Layout — the Daylight shell", () => {
     expect(html).not.toContain("05e901");
   });
 
-  it("loads only the narrowed font weights", async () => {
+  it("brings its two typefaces from this origin, one variable file per subset", async () => {
     const html = await render({ active: "HOME", children: "x" });
-    expect(html).toContain("family=Sora:wght@400;600");
-    expect(html).toContain("JetBrains+Mono:wght@400;500;600");
-    expect(html).not.toContain("300;400;500;600;700;800");
+    expect(html.match(/@font-face/g)).toHaveLength(4); // Sora and JetBrains Mono, latin and latin-ext
+    expect(html).toMatch(/url\(\/fonts\/sora-latin\.[0-9a-f]{10}\.woff2\)/);
+    expect(html).toMatch(/url\(\/fonts\/jetbrains-mono-latin\.[0-9a-f]{10}\.woff2\)/);
+    expect(html).not.toMatch(/googleapis|gstatic/);
   });
 
   it("signs out through a CSRF-carrying POST, not a bare link", async () => {

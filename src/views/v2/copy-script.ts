@@ -23,7 +23,7 @@ import { V2_TOKENS } from "./tokens.js";
  *   (neither)                      — nearest `pre, code` inside the parent
  *   data-copy-gate="token"         — optional key emitted on `d-copied`
  */
-export const COPY_SCRIPT = raw(`<script>
+export const COPY_JS = `
 (function(){
   if (window.__dCopy) return; window.__dCopy = 1;
   var GREEN = ${JSON.stringify(V2_TOKENS.green)};
@@ -85,4 +85,4 @@ export const COPY_SCRIPT = raw(`<script>
     }
   });
 })();
-</script>`);
+`;
