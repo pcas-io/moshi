@@ -106,6 +106,9 @@ async function start() {
     port: config.port,
     production: config.isProduction,
     cookie_secure: config.cookieSecure,
+    // Whose address failed sign-ins are counted against. False behind a
+    // proxy means one count for everybody: look here first.
+    behind_proxy: config.behindProxy,
   });
 
   // C4: First connect in the background, for as long as it takes. Once

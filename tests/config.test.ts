@@ -60,6 +60,27 @@ describe("loadConfig", () => {
       if (isConfigError(result)) expect(result.errors.join(" ")).toContain("MESH_COOKIE_SECURE");
     });
 
+    // Whose address a failed sign-in is counted against. Only a proxy that
+    // appends its peer makes X-Forwarded-For worth reading.
+    it("believes forwarding headers only when MESH_BEHIND_PROXY says there is a proxy", () => {
+      const behind = (env: NodeJS.ProcessEnv) => {
+        const result = loadConfig(env);
+        if (isConfigError(result)) throw new Error(result.errors.join("; "));
+        return result.behindProxy;
+      };
+      expect(behind(VALID_DEV_ENV)).toBe(false);
+      expect(behind(VALID_PROD_ENV)).toBe(false); // production alone does not say how it is reached
+      expect(behind({ ...VALID_PROD_ENV, MESH_BEHIND_PROXY: "" })).toBe(false);
+      for (const on of ["1", "true", " TRUE "]) expect(behind({ ...VALID_PROD_ENV, MESH_BEHIND_PROXY: on }), on).toBe(true);
+      for (const off of ["0", "false", "False"]) expect(behind({ ...VALID_PROD_ENV, MESH_BEHIND_PROXY: off }), off).toBe(false);
+    });
+
+    it("refuses a MESH_BEHIND_PROXY it cannot read, instead of guessing", () => {
+      const result = loadConfig({ ...VALID_PROD_ENV, MESH_BEHIND_PROXY: "traefik" });
+      expect(isConfigError(result)).toBe(true);
+      if (isConfigError(result)) expect(result.errors.join(" ")).toContain("MESH_BEHIND_PROXY");
+    });
+
     it("applies defaults for NATS_URL, DATABASE_PATH, and PORT", () => {
       const minimal: NodeJS.ProcessEnv = { MESH_ADMIN_TOKEN: "a".repeat(32) };
       const result = loadConfig(minimal);

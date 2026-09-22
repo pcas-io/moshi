@@ -23,6 +23,8 @@ export const TEST_CONFIG: Config = {
   port: 0,
   isProduction: false,
   cookieSecure: false,
+  // Like production: a proxy in front that appends its peer to X-Forwarded-For.
+  behindProxy: true,
   commit: "unknown",
   backupDir: null,
   backupKeep: 0,
@@ -96,10 +98,12 @@ export const formPost = (fields: Record<string, string>, headers: Record<string,
 });
 
 /** GET /login, then POST it. Returns the POST response and the session cookie (`mesh_session=…`), if one was set. */
-export async function signIn(app: App, token: string, fields: Record<string, string> = {}): Promise<{ res: Response; cookie: string }> {
-  const page = await app.request("/login");
+export async function signIn(
+  app: App, token: string, fields: Record<string, string> = {}, headers: Record<string, string> = {},
+): Promise<{ res: Response; cookie: string }> {
+  const page = await app.request("/login", { headers });
   const pre = cookieFrom(page, LOGIN_COOKIE) ?? "";
-  const res = await app.request("/login", formPost({ csrf: csrfInPage(await page.text()), token, ...fields }, { Cookie: pre }));
+  const res = await app.request("/login", formPost({ csrf: csrfInPage(await page.text()), token, ...fields }, { Cookie: pre, ...headers }));
   return { res, cookie: cookieFrom(res, SESSION_COOKIE) ?? "" };
 }
 

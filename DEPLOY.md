@@ -74,6 +74,54 @@ minutes it waits for its OAuth code to be redeemed. The other half is the
 code, which only the client has. Changing the secret fails the sign-ins that
 are under way at that moment, nothing else.
 
+### Failed sign-ins
+
+A wrong token leaves one line in the log (`sign-in failed`: path, reason,
+network, never anything of the token) and counts against the client: the
+sign-in form, the OAuth consent form and wrong Bearer tokens, together. From
+the eleventh failure within 15 minutes on:
+
+- the two **forms** answer `429` with `Retry-After` and a page that says so;
+- a wrong **Bearer** keeps its `401` with `WWW-Authenticate`, now with
+  `Retry-After`. That `401` is what makes a connector start its OAuth flow
+  again after a token reset, and neither the CLI nor the MCP SDK reads a
+  `429`. Behind a throttled address it would hide that from every other
+  client with an old token;
+- nothing is counted or logged for that client until its failures age out.
+
+The log says `sign-in throttled` each time a client's count fills up. A
+client that keeps retrying fills it again as its old failures age out: up to
+ten `sign-in failed` lines and one `sign-in throttled` per 15 minutes per
+client, not one per incident. All clients together write at most 300
+`sign-in failed` lines a minute; what was left out is summed up in one
+`sign-in failures not logged` line.
+
+A CORRECT credential from the same address still works: several agents share
+one address, and one connector with an old token must not lock the others
+out. Tokens are far too long to guess; this is for seeing attempts.
+
+Who is "the client"? An IPv4 address, or an IPv6 /64: whoever has one address
+in a /64 has all of them. Whose address is it? That depends on
+`MESH_BEHIND_PROXY`:
+
+- `1` (what `docker-compose.yml` sets): the proxy in front appends the peer
+  that connected to it to `X-Forwarded-For`, and the last entry counts.
+  `CF-Connecting-IP` is believed only when that peer is one of Cloudflare's
+  published ranges (`src/services/client-ip.ts`, update the list when
+  Cloudflare changes it).
+- unset or `0` (`npm run dev`, a port you published yourself, a LAN host):
+  only the socket address counts. Without an appending proxy both headers
+  are the sender's own text: with them the count could be dodged, and aimed
+  at somebody else. If you run the image behind a proxy of your own without
+  the compose file, set it to `1`, or every client has the proxy's address.
+
+> **Do not assume Cloudflare is the only way in.** Unless the host firewall
+> allows ports 80 and 443 from Cloudflare's ranges only (or you use
+> Authenticated Origin Pulls, or a Cloudflare Tunnel), the origin answers
+> whoever finds its address, and nothing Cloudflare does (WAF, rate limiting,
+> bot rules) applies to that request. That is why the header above is
+> believed only from Cloudflare's ranges.
+
 ## 3. Domain + TLS
 
 Point a DNS record for **`moshi.enki.run`** at the Coolify host, then map

@@ -7,6 +7,7 @@ import type { AgentService } from "./services/agent";
 import { inboxKeyOf } from "./services/agent";
 import type { ActivityService } from "./services/activity";
 import type { PresenceService } from "./services/presence";
+import type { SignInGuard } from "./services/signin-guard";
 
 // --- Public paths (no auth required) ---
 // /install.* + /cli/* are public by design: the served binary contains
@@ -298,6 +299,8 @@ const recentLogins = new Map<string, number>();
 const LOGIN_LOG_INTERVAL_MS = 30 * 60 * 1000; // Log at most once per 30 minutes per agent
 
 export interface AuthOptions {
+  /** Told about wrong Bearer tokens: logs them, and answers 429 after ten. */
+  guard?: SignInGuard;
   /** `Secure` on a renewed session cookie — `config.cookieSecure`, the same
    *  value the sign-in route sets it with. */
   secureCookie?: boolean;
@@ -307,7 +310,7 @@ export function authMiddleware(
   agents: AgentService,
   presence: PresenceService,
   activity?: ActivityService,
-  { secureCookie = false }: AuthOptions = {},
+  { secureCookie = false, guard }: AuthOptions = {},
 ) {
   return createMiddleware<HonoEnv>(async (c, next) => {
     const path = c.req.path;
@@ -448,6 +451,17 @@ export function authMiddleware(
       }
 
       return next();
+    }
+
+    // --- A credential was presented and it is wrong ---
+    // Not for a request that presents nothing: an expired tab is not an attack.
+    // A throttled Bearer keeps the 401 below and gets a Retry-After with it:
+    // the throttle stops the counting and the log line, not the answer. A
+    // connector whose token was reset starts its OAuth flow on 401 plus
+    // WWW-Authenticate and on nothing else, and no client here reads a 429.
+    if (guard && authHeader?.startsWith("Bearer ")) {
+      const wait = guard.failure(c, "wrong_bearer");
+      if (wait > 0) c.header("Retry-After", String(wait));
     }
 
     // --- No valid auth ---

@@ -7,6 +7,9 @@ import type { Env, AppVariables } from "./types.js";
 import { V2_TOKENS } from "./views/v2/tokens.js";
 import { formString, formRaw } from "./routes/form.js";
 import { issueCode, redeemCode, CODE_CHALLENGE_PATTERN } from "./oauth-codes.js";
+import { throttledResponse } from "./views/throttled.js";
+import { isSameOriginPost } from "./auth.js";
+import type { SignInGuard } from "./services/signin-guard.js";
 
 /** The consent screen is the one page a Claude Desktop user sees during the
  *  connect flow, so it wears the same Daylight surfaces as the dashboard. */
@@ -216,7 +219,7 @@ function classifyToken(
 // --- OAuth sub-app ---
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
 
-export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
+export function createOAuthRoutes(agents: AgentService, db: Database.Database, guard?: SignInGuard) {
   const oauth = new Hono<HonoEnv>();
 
   // RFC 8414 — OAuth Authorization Server Metadata
@@ -367,6 +370,15 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
       return c.json({ error: "invalid_request", error_description: PKCE_REQUIRED }, 400);
     }
 
+    // The form is moshi's own page, so its POST is same-origin. Checked
+    // BEFORE the token is looked at: a form-encoded POST needs no preflight,
+    // and any web page could otherwise spend its visitor's failure count (ten
+    // hidden posts, and the visitor's next typo is answered 429), or try a
+    // token from the visitor's address.
+    if (!isSameOriginPost(c.req)) {
+      return c.html(authorizePageHTML({ redirectUri, state, codeChallenge, codeChallengeMethod, error: true }), 403);
+    }
+
     const adminToken = process.env.MESH_ADMIN_TOKEN ?? "";
     // Trimmed, and empty means none, exactly as src/config.ts reads it: the
     // compose file passes an empty string when no rotation is under way.
@@ -377,6 +389,12 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database) {
     const pasted = token ? classifyToken(token, agents, adminToken, adminTokenPrev) : "invalid";
 
     if (pasted !== "agent" || !token) {
+      // A pasted token that is wrong, or the admin token where it has no
+      // business. An empty field is a form mistake, not an attempt.
+      if (token) {
+        const wait = guard?.failure(c, pasted === "admin" ? "admin_token_refused" : "wrong_token") ?? 0;
+        if (wait > 0) return throttledResponse(c, wait);
+      }
       return c.html(
         authorizePageHTML({
           redirectUri,
