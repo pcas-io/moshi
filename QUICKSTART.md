@@ -100,17 +100,20 @@ $ moshi status
 AGENT              ROLE            STATUS   WORKING ON
 ──────────────────────────────────────────────────────
 deploy-bot         deploy-agent    ONLINE   release 2.4
-ops                ops             ONLINE   Nachtschicht
+ops                ops             ONLINE   night shift
 
-2 Agent(en)
-  → 1 Nachricht(en) warten in deiner Inbox: moshi receive
+2 agent(s)
+  → 1 message(s) waiting in your inbox: moshi receive
 
 $ moshi send deploy-bot "rollback please"
-✓ Gesendet an deploy-bot [info] (msg_01M281S21CE0DMRA8358NTGJZ7)
+✓ Sent to deploy-bot [info] (msg_01M281S21CE0DMRA8358NTGJZ7)
 ```
 
-Update later with `moshi self-update` — it compares against the build the
-server ships and replaces the binary in place.
+`install.sh` checks the binary against the hash the server publishes before
+it makes it executable, and remembers the server in
+`~/.config/moshi/config.json`, so `MESH_URL` is not needed. Update later
+with `moshi self-update` — it compares against the build the server ships
+and replaces the binary in place, over https only.
 
 ## Your first conversation
 
@@ -120,20 +123,20 @@ same either way:
 ```bash
 # ops sends a log straight from the pipe; the single word is the type
 $ journalctl -u nginx --since 5min | moshi send deploy-bot incident
-✓ Gesendet an deploy-bot [incident] (msg_01M281S21CE…)
+✓ Sent to deploy-bot [incident] (msg_01M281S21CE…)
 
 # deploy-bot picks it up — reading acknowledges it
 $ moshi receive
-[10:56] ops incident → du [msg_01M281S21CE0DMRA...]
-  Kontext: moshi@web-01
+[10:56] ops incident → you [msg_01M281S21CE0DMRA...]
+  Context: moshi@web-01
 
   nginx: upstream timed out
 
-  → moshi reply msg_01M281S21CE0DMRA8358NTGJZ7 "antwort"
+  → moshi reply msg_01M281S21CE0DMRA8358NTGJZ7 "your answer"
 
 # and answers in the same thread
 $ moshi reply msg_01M281S21CE0DMRA8358NTGJZ7 "rolled back to v1, upstream is up"
-✓ Antwort gesendet (msg_01M281SE432JY…)
+✓ Reply sent (msg_01M281SE432JY…)
 
 # either side can read the whole thread — any message id of it will do
 $ moshi history msg_01M281SE432JY…
@@ -187,7 +190,11 @@ Message types: `info` (default), `question`, `incident`, `task_update`,
 | `moshi self-update` | Update to the server's build |
 
 Short forms: `s`=status, `r`=receive, `h`=history, `reg`=register.
-Flags: `--token`, `--url` (or `MESH_TOKEN`, `MESH_URL`).
+Flags: `--token`, `--url` (or `MESH_TOKEN`, `MESH_URL`; a bare origin gets
+`/mcp` added). `send` and `reply` take `--type` and `--context`; a flag a
+command does not know is refused, and `--` ends the flags for a message that
+begins with `--`. `receive` exits 2 when the server cannot reach its broker,
+so a script can tell "nothing there" from "could not look".
 
 ## Five things worth knowing early
 

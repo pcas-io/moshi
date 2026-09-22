@@ -43,6 +43,9 @@ TypeScript, Hono, @hono/node-server, @modelcontextprotocol/sdk, nats.js, better-
 - `docker/entrypoint.sh` — hands a root-owned data volume to `node`, then drops root for good
 - `src/views/v2/role-index.ts` — name → role map without a prototype
 
+- `cli/` — the Go CLI: `flags.go` is the one argument parser (unknown flags are refused, `--` ends them), `config.go` resolves the server (`--url`, `MESH_URL`, then the file `install.sh` wrote; never a compiled-in host), `client.go` has `call()` (pure, tested with httptest) and `mcpCall()` (prints and exits), `update.go` fetches over https only with a bounded, hash-checked download. `go test ./...` in `cli/`; the `cli` CI job runs gofmt, vet for three OSes, the tests and the builds
+- `src/services/cli-dist.ts` — serves the binaries and `install.sh`/`install.ps1`; both check the SHA-256 against `/cli/version` before the binary is executable and remember the server in the CLI's config file. `tests/services/install-script.test.ts` runs the real script against a real HTTP server with a tampered binary
+
 ## Patterns
 Hono routes, MCP SDK tools with Zod validation, server-rendered JSX views,
 ULID IDs, SHA-256 token hashing, timing-safe comparison.

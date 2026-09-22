@@ -16,7 +16,13 @@ import { log } from "./logger.js";
 
 type App = Hono<{ Bindings: Env; Variables: AppVariables }>;
 
-const CLI_DIST = resolve(process.cwd(), "cli-dist");
+let cliDist = resolve(process.cwd(), "cli-dist");
+
+/** Tests point this at a directory of their own. Empties the cache. */
+export function __setCliDistForTest(dir: string | null): void {
+  cliDist = dir ?? resolve(process.cwd(), "cli-dist");
+  cache = null;
+}
 const ASSET_RE = /^moshi-(linux|darwin|windows)-(amd64|arm64)(\.exe)?$/;
 
 interface Asset {
@@ -30,10 +36,10 @@ let cache: Map<string, Asset> | null = null;
 function load(): Map<string, Asset> {
   if (cache) return cache;
   const m = new Map<string, Asset>();
-  if (existsSync(CLI_DIST)) {
-    for (const name of readdirSync(CLI_DIST)) {
+  if (existsSync(cliDist)) {
+    for (const name of readdirSync(cliDist)) {
       if (!ASSET_RE.test(name)) continue;
-      const p = resolve(CLI_DIST, name);
+      const p = resolve(cliDist, name);
       if (!statSync(p).isFile()) continue;
       const bytes = Uint8Array.from(readFileSync(p));
       m.set(name, {
@@ -43,7 +49,7 @@ function load(): Map<string, Asset> {
     }
   } else {
     log("warn", "cli-dist not present — /cli routes will 404 (dev build?)", {
-      dir: CLI_DIST,
+      dir: cliDist,
     });
   }
   cache = m;
@@ -68,6 +74,12 @@ function installSh(base: string): string {
   return `#!/bin/sh
 # moshi.moshi CLI installer.  Re-run any time to update.
 #   curl -fsSL ${base}/install.sh | sh
+#
+# The binary is checked against the SHA-256 the server publishes at
+# /cli/version before it is made executable, and the server is remembered in
+# $XDG_CONFIG_HOME/moshi/config.json (~/.config/moshi/config.json), so that
+# the CLI needs no MESH_URL. Hash and binary come from the same server: this
+# proves the download arrived whole, not who built it.
 set -eu
 BASE="${base}"
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -89,13 +101,36 @@ if [ -z "$dest" ]; then
   if [ -w /usr/local/bin ] 2>/dev/null; then dest=/usr/local/bin
   else dest="$HOME/.local/bin"; fi
 fi
-mkdir -p "$dest"
+
+# The hash the server publishes for this platform: 64 hex characters after the key.
+want=$(curl -fsSL "$BASE/cli/version" | tr -d ' \\n' | sed -n "s/.*\\"$os-$arch\\":\\"\\([0-9a-f]\\{64\\}\\)\\".*/\\1/p")
+if [ -z "$want" ]; then
+  echo "moshi: the server has no build for $os-$arch (see $BASE/cli/version)" >&2; exit 1
+fi
+
 tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
 echo "↓ $BASE/cli/$asset"
-curl -fsSL "$BASE/cli/$asset" -o "$tmp"
+curl -fsSL --max-filesize 67108864 "$BASE/cli/$asset" -o "$tmp"
+if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$tmp" | cut -d' ' -f1)
+else got=$(shasum -a 256 "$tmp" | cut -d' ' -f1); fi
+if [ "$got" != "$want" ]; then
+  echo "moshi: integrity check failed — the downloaded binary does not match the hash the server published. Nothing was installed." >&2
+  exit 1
+fi
+
+mkdir -p "$dest"
 chmod +x "$tmp"
 mv "$tmp" "$dest/moshi"
-echo "✓ installed: $dest/moshi"
+trap - EXIT
+echo "✓ installed: $dest/moshi (sha256 $(echo "$got" | cut -c1-12))"
+
+# Remember the server. The CLI reads it when neither --url nor MESH_URL is set.
+cfgdir="\${XDG_CONFIG_HOME:-$HOME/.config}/moshi"
+mkdir -p "$cfgdir"
+printf '{"url":"%s"}\n' "$BASE" > "$cfgdir/config.json"
+echo "✓ server remembered in $cfgdir/config.json"
+
 case ":$PATH:" in
   *":$dest:"*) ;;
   *) echo "⚠ $dest is not on PATH — add:  export PATH=\\"$dest:\\$PATH\\"" ;;
@@ -108,16 +143,33 @@ echo "Next:  moshi --token <bt_...> status   ·   update later:  moshi self-upda
 function installPs1(base: string): string {
   return `# moshi.moshi CLI installer (Windows PowerShell). Re-run to update.
 #   irm ${base}/install.ps1 | iex
+# The binary is checked against the SHA-256 the server publishes at
+# /cli/version, and the server is remembered in %APPDATA%\\moshi\\config.json.
 $ErrorActionPreference = "Stop"
 $base = "${base}"
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+$key = "windows-$arch"
 $asset = "moshi-windows-$arch.exe"
 $dest = if ($env:MOSHI_BIN_DIR) { $env:MOSHI_BIN_DIR } else { "$env:LOCALAPPDATA\\Programs\\moshi" }
+$version = Invoke-RestMethod -Uri "$base/cli/version"
+$want = $version.platforms.$key
+if (-not $want) { throw "moshi: the server has no build for $key (see $base/cli/version)" }
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("moshi-" + [System.IO.Path]::GetRandomFileName() + ".exe")
+Write-Host "↓ $base/cli/$asset"
+Invoke-WebRequest -Uri "$base/cli/$asset" -OutFile $tmp
+$got = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
+if ($got -ne $want) {
+  Remove-Item $tmp -Force
+  throw "moshi: integrity check failed - the downloaded binary does not match the hash the server published. Nothing was installed."
+}
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 $out = Join-Path $dest "moshi.exe"
-Write-Host "↓ $base/cli/$asset"
-Invoke-WebRequest -Uri "$base/cli/$asset" -OutFile $out
-Write-Host "✓ installed: $out"
+Move-Item -Force $tmp $out
+Write-Host "✓ installed: $out (sha256 $($got.Substring(0, 12)))"
+$cfgdir = Join-Path $env:APPDATA "moshi"
+New-Item -ItemType Directory -Force -Path $cfgdir | Out-Null
+Set-Content -Path (Join-Path $cfgdir "config.json") -Value ('{"url":"' + $base + '"}')
+Write-Host "✓ server remembered in $cfgdir\\config.json"
 Write-Host "Add to PATH if needed:  $dest"
 & $out --version
 `;

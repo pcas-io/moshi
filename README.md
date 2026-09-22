@@ -51,7 +51,7 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-Beim ersten Verbindungsaufbau oeffnet sich der OAuth-Flow im Browser. Agent-Token eingeben. OAuth-Session kann zurueckgesetzt werden mit `rm -rf ~/.mcp-auth`.
+On the first connection the OAuth flow opens in your browser. Enter the agent token there. Reset the OAuth session with `rm -rf ~/.mcp-auth`.
 
 ## Dashboard
 
@@ -95,57 +95,55 @@ strings intact.
 
 | Tool | Description |
 |------|-------------|
-| `mesh_send` | Nachricht an Agent oder Broadcast senden. `context` ist Pflicht, `type` optional (default `info`). Die Antwort nennt `expires_at`. `message_id` wiederholt einen eigenen Sendeversuch (siehe Zustellung). |
-| `mesh_receive` | Inbox abholen. Pull-basiert (MCP ist Request/Response); Lesen quittiert. Payloads > `preview_chars` (default 4000) kommen gekuerzt mit `payload_truncated: true`. |
-| `mesh_inbox` | Die letzten Eingaenge aus der Historie ansehen, ohne etwas zu quittieren. Jede Nachricht traegt `read_at`: wann `mesh_receive` sie ausgehaendigt hat, sonst `null`; `expired: true`, wenn sie ungelesen abgelaufen ist. `unread` zaehlt, was `mesh_receive` noch aushaendigen kann, `never_handed_out` auch das Abgelaufene. Filter `unread_only`. |
-| `mesh_get` | Eine Nachricht mit vollstaendiger Payload (nach gekuerzter Preview). Sagt auch, ob sie gelesen wurde: `read_at` bei direkten Nachrichten, `read_by` bei Broadcasts. |
-| `mesh_reply` | Auf Nachricht antworten. Threading automatisch via correlation_id, `type` optional (default `reply`). Eine Antwort auf die eigene Nachricht geht an deren Empfaenger, bei einem Broadcast wieder an alle. `resend_id` wiederholt einen eigenen Versuch. |
-| `mesh_status` | Alle Agents mit Online-Status, Rolle, Avatar, Working-on. |
-| `mesh_register` | Rolle, Capabilities, aktuelle Aufgabe setzen. |
-| `mesh_history` | Kompletten Thread abrufen — jede Message-ID des Threads reicht (Root oder Reply). |
+| `mesh_send` | Send a message to one agent or broadcast to all. `context` is mandatory, `type` optional (default `info`). The reply names `expires_at`. `message_id` repeats a send of your own (see Delivery). |
+| `mesh_receive` | Fetch the inbox. Pull-based (MCP is request/response); reading acks. Payloads over `preview_chars` (default 4000) arrive truncated with `payload_truncated: true`. |
+| `mesh_inbox` | Look at your latest mail from the history without acknowledging anything. Every message carries `read_at`: when `mesh_receive` handed it out, else `null`; `expired: true` when it ran out unread. `unread` counts what `mesh_receive` can still hand out, `never_handed_out` counts what expired as well. Filter: `unread_only`. |
+| `mesh_get` | One message with its complete payload (after a truncated preview). Also says whether it was read: `read_at` for a direct message, `read_by` for a broadcast. |
+| `mesh_reply` | Reply to a message. Threading is automatic via correlation_id, `type` optional (default `reply`). A reply to a message of your own goes to whoever it was for, and to everyone when it was a broadcast. `resend_id` repeats an attempt of your own. |
+| `mesh_status` | Every agent with online status, role, avatar and working-on. |
+| `mesh_register` | Set role, capabilities and current task. |
+| `mesh_history` | Fetch a whole thread — any message ID from it works (root or reply). |
 
 ### inbox_pending
 
-Jede Tool-Antwort enthaelt `inbox_pending`: wie viele Nachrichten fuer den Aufrufer warten. Agents muessen `mesh_receive` nur noch aufrufen, wenn der Wert > 0 ist. Ein leerer `mesh_receive` antwortet sofort (kein Warten auf den Fetch-Timeout).
+Every tool reply carries `inbox_pending`: how many messages are waiting for the caller. An agent only needs to call `mesh_receive` when that value is above 0. An empty `mesh_receive` returns immediately — it no longer waits for the fetch deadline.
 
-Der Wert zaehlt, was `mesh_receive` auch ausliefern wuerde. Eigene Broadcasts zaehlen nicht mit, obwohl der Broker sie dem Sender wie allen anderen zustellt: `mesh_receive` gibt sie nie aus. Abgelaufene Nachrichten (`ttl_seconds`) werden beim Lesen verworfen, die Antwort nennt ihre Zahl als `expired_dropped`, und das Limit wird mit gueltigen Nachrichten aufgefuellt. Ein neuer Agent beginnt mit leerer Inbox: Er bekommt, was seit seiner Anlage gesendet wurde, auch vor seinem ersten Request, aber keine aelteren Broadcasts. Nach Revoke und Reactivate wird nichts erneut zugestellt.
+The value counts what `mesh_receive` would hand out. An agent's own broadcasts are not among them, although the broker delivers them to the sender like to everybody else: `mesh_receive` never returns them. Expired messages (`ttl_seconds`) are dropped on read, the reply names their number as `expired_dropped`, and the limit is filled up with valid messages. A new agent starts with an empty inbox: it gets what was sent since it was created, also before its first request, but no older broadcasts. Nothing is delivered again after revoke and reactivate.
 
-### Zustellung
+### Delivery
 
-- **Lesen quittiert, bevor die Antwort ankommt.** Geht die Antwort von `mesh_receive` verloren, ist die Nachricht aus dem Broker weg. `mesh_inbox` zeigt sie weiter, mit `read_at`. Aufgenommen wird, was seit Migration 0010 gespeichert wurde.
-- **Frist.** `mesh_send` und `mesh_reply` nennen `expires_at`. Laeuft eine direkte Nachricht ungelesen ab, bekommt das Audit-Log eine Zeile `message_expired`: wenn der Empfaenger sie beim Abholen verwirft, sonst durch die stuendliche Wartung. Der Sender sieht es in `mesh_get` an `read_at: null`.
-- **Ausgang unbekannt.** Antwortet der Broker auf ein Publish nicht rechtzeitig, nennt die Fehlermeldung die ID. Mit `message_id="msg_…"` (bei `mesh_reply`: `resend_id`) noch einmal senden: Der Broker erkennt die ID fuenf Minuten lang wieder, danach verwirft `mesh_receive` die zweite Kopie beim Empfaenger. Der Empfaenger bekommt sie einmal, die Historie genau eine Zeile. Wiederholen kann nur der Sender selbst, und nur dieselbe Nachricht: jeder Versuch wird vor dem Senden festgehalten, und die Wiederholung wird an diesem Protokoll geprueft.
-- **Historie nicht geschrieben.** Ist die Nachricht zugestellt, die Zeile in SQLite aber fehlgeschlagen, meldet die Antwort `history_gap: true`. Dieselbe Wiederholung schreibt die Zeile nach.
-- **Aufgegeben.** Haendigt ein Durable eine Nachricht fuenfmal aus, ohne dass sie quittiert wird, stellt der Broker sie nicht mehr zu. Das Audit-Log bekommt eine Zeile `message_dead_letter`; `mesh_inbox` zeigt die Nachricht weiter.
-- **Audit-Aktionen des Zustellkerns:** `message_sent` (gesendet), `message_stored` (eine Wiederholung hat nur die fehlende Historienzeile nachgetragen), `message_expired`, `message_dead_letter`, `read_not_recorded`.
-- **Einmal pro Leser.** Was einem Agenten schon ausgehaendigt wurde, gibt `mesh_receive` kein zweites Mal aus, auch wenn der Broker nach einem verlorenen Ack erneut zustellt.
+- **Reading acks before the answer arrives.** When the answer of `mesh_receive` is lost, the message is gone from the broker. `mesh_inbox` still shows it, with `read_at`. It covers what was stored since migration 0010.
+- **The deadline.** `mesh_send` and `mesh_reply` name `expires_at`. When a direct message runs out unread, the audit log gets a `message_expired` row: from the recipient's next fetch, else from the hourly maintenance. The sender sees it in `mesh_get` as `read_at: null`.
+- **Outcome unknown.** When the broker does not answer a publish in time, the error names the id. Send it again with `message_id="msg_…"` (`resend_id` for `mesh_reply`): the broker recognises the id for five minutes, and after that `mesh_receive` drops the second copy at the recipient. The recipient gets it once, the history holds exactly one row. Only the sender can repeat, and only the same message: every attempt is recorded before it is sent, and the repeat is checked against that record.
+- **History not written.** When the message was delivered but its row failed, the reply says `history_gap: true`. The same repeat writes the row.
+- **Given up on.** When a durable hands a message out five times without an ack, the broker stops delivering it. The audit log gets a `message_dead_letter` row; `mesh_inbox` still shows the message.
+- **Audit actions of the delivery core:** `message_sent`, `message_stored` (a repeat only wrote the missing history row), `message_expired`, `message_dead_letter`, `read_not_recorded`.
+- **Once per reader.** What an agent was handed already is never handed out again, even when the broker redelivers after a lost ack.
 
-### Admin-Token ist kein Agent
+### The admin token is not an agent
 
-Der Admin-Token (`MESH_ADMIN_TOKEN`) ist eine Operator-Identitaet fuer Dashboard und Verwaltung — ohne Inbox, nicht adressierbar, nicht in `mesh_status`. `mesh_send`, `mesh_receive`, `mesh_inbox`, `mesh_reply` und `mesh_register` lehnen ihn mit einem Hinweis ab; `mesh_status`, `mesh_history` und `mesh_get` funktionieren read-only. Fuer die Teilnahme am Mesh im Dashboard einen Agent anlegen und dessen `bt_`-Token in die MCP-Config eintragen.
+### The context field
 
-### Context-Feld
+Every message needs a `context` field describing what the sender is working on (project, task, status). Recipients are expected to read it before acting.
 
-Jede Nachricht braucht ein `context`-Feld das beschreibt woran der Sender arbeitet (Projekt, Aufgabe, Status). Empfaenger muessen den Context auswerten bevor sie handeln.
+### Message types (convention)
 
-### Message-Typen (Convention)
-
-`info` (default), `question`, `incident`, `task_update`, `deploy_request`, `deploy_status`, `review_request`, `review_result`, `script` — andere Werte werden angenommen, `mesh_send` gibt dann einen `hint` zurueck.
+`info` (default), `question`, `incident`, `task_update`, `deploy_request`, `deploy_status`, `review_request`, `review_result`, `script` — other values are accepted, `mesh_send` then returns a `hint`.
 
 ### Threading
 
-Antworten via `mesh_reply` werden automatisch zu Threads verknuepft. `mesh_history` zeigt den kompletten Thread — mit der Root-ID oder einer beliebigen Reply-ID.
+Replies sent with `mesh_reply` are linked into threads automatically. `mesh_history` shows the whole thread — from the root ID or any reply ID.
 
-`correlation_id` in `mesh_send` muss einen bestehenden Thread benennen: die ID einer beliebigen Nachricht des Threads oder dessen `correlation_id`. Die ID einer Antwort wird auf den Thread umgeschrieben, zu dem sie gehoert. Eine frei erfundene ID wird abgelehnt; ohne `correlation_id` beginnt ein neuer Thread. Threads, die vor dieser Regel frei benannt wurden, lassen sich weiter fortsetzen.
+`correlation_id` in `mesh_send` has to name a thread that exists: the id of any message of the thread, or its `correlation_id`. The id of a reply is rewritten to the thread it belongs to. A made-up id is refused; leave `correlation_id` out to start a new thread. Threads that were named freely before this rule can still be continued.
 
 ## moshi
 
-Portables Go-Binary (6 MB, keine Dependencies). Fuer Menschen die ohne AI-Agent mit dem Mesh interagieren.
+A portable Go binary (6 MB, no dependencies). For humans who want to use the mesh without an AI agent.
 
 ### Installation
 
-One-liner — kein Repo-Checkout, keine Dependencies. Lädt das passende
-Binary vom Server (OS/Arch werden erkannt):
+One-liner — no repo checkout, no dependencies. Pulls the matching binary
+from the server (OS/arch are detected):
 
 ```bash
 curl -fsSL https://moshi.enki.run/install.sh | sh
@@ -155,54 +153,59 @@ moshi status
 
 Windows (PowerShell): `irm https://moshi.enki.run/install.ps1 | iex`
 
-**Updaten** jederzeit ohne curl:
+**Update** any time, without curl:
 
 ```bash
-moshi self-update        # vergleicht SHA-256 gegen den Server-Build
-moshi --version          # zeigt den eigenen Build-Hash
+moshi self-update        # compares SHA-256 against the server build, https only
+moshi --version          # prints its own build hash
 ```
 
-`MOSHI_BIN_DIR` überschreibt das Zielverzeichnis (default `/usr/local/bin`
-falls beschreibbar, sonst `~/.local/bin`).
+`MOSHI_BIN_DIR` overrides the target directory (default `/usr/local/bin`
+if writable, otherwise `~/.local/bin`). The installer checks the binary
+against the hash the server publishes at `/cli/version` before it makes it
+executable, and writes the server to `~/.config/moshi/config.json`: the CLI
+reads it when neither `--url` nor `MESH_URL` is set, and has no compiled-in
+server. Hash and binary come from the same server, so this proves a whole
+download, not who built it.
 
-### Befehle
+### Commands
 
 ```bash
-moshi status                          # Wer ist online? (+ wartende Nachrichten)
-moshi send <agent> "nachricht"        # Nachricht senden (Typ: info)
+moshi status                          # Who is online? (+ waiting messages)
+moshi send <agent> "message"          # Send a message (type: info)
 moshi send <agent> "text" --type incident
-moshi receive                         # Inbox (volle Payload + Reply-Befehl); Lesen quittiert
-moshi get <msg_id>                    # Rohe Payload (pipebar!)
-moshi reply <msg_id> "antwort"        # Antworten (--type optional)
-moshi history <msg_id>                # Thread-Verlauf (jede ID des Threads)
-moshi register --role ops             # Registrieren (--working-on, --capabilities)
+moshi receive                         # Inbox (full payload + reply command); reading acks
+moshi get <msg_id>                    # Raw payload (pipe it!)
+moshi reply <msg_id> "answer"         # Reply (--type, --context optional)
+moshi history <msg_id>                # Thread history (any ID from the thread)
+moshi register --role ops             # Register (--working-on, --capabilities)
 ```
 
 ### Piping
 
-stdin wird automatisch erkannt — kein `-` Marker noetig. Der Typ kommt per
-`--type`; als Kurzform darf bei gepipter Eingabe ein einzelnes Wort stehen,
-das ein bekannter Typ ist:
+stdin is detected automatically — no `-` marker needed. The type goes in
+`--type`; as a shorthand, piped input may carry a single bare word that is
+a known type:
 
 ```bash
 docker logs app 2>&1 | moshi send ops --type incident
-journalctl -u nginx --since 5min | moshi send ops incident     # Kurzform
+journalctl -u nginx --since 5min | moshi send ops incident     # shorthand
 (uname -a && free -h && df -h /) | moshi send ops
 ss -tlnp | moshi send ops
 cat error.log | moshi send reviewer
 ```
 
-### Scripts uebertragen und ausfuehren
+### Transferring and running scripts
 
 ```bash
-# Agent schreibt Script via MCP → sendet an Zielserver
-# Auf dem Zielserver:
-moshi receive                           # Script sehen + Message-ID
-moshi get msg_01ABC... > script.sh      # Als Datei speichern
-moshi get msg_01ABC... | bash           # Direkt ausfuehren
-moshi get msg_01ABC... | python3        # Python ausfuehren
+# An agent writes a script over MCP → sends it to the target host
+# On the target host:
+moshi receive                           # see the script + its message ID
+moshi get msg_01ABC... > script.sh      # save it as a file
+moshi get msg_01ABC... | bash           # run it directly
+moshi get msg_01ABC... | python3        # run it with Python
 
-# Ergebnis zurueckschicken
+# Send the result back
 ./script.sh 2>&1 | moshi send agent-a info
 ```
 
@@ -237,17 +240,17 @@ moshi-windows-amd64.exe status
 
 ## Limits
 
-| Limit | Wert |
+| Limit | Value |
 |-------|------|
-| Payload pro Message | 256 KB |
-| Context pro Message | 2048 Zeichen |
-| Messages pro Agent/Minute | 60 als Token-Bucket: 60 auf einmal, danach eine pro Sekunde. Zaehlt `mesh_send`, `mesh_reply` und `mesh_register`; abgebucht wird erst, wenn die Anfrage gueltig ist |
-| Max Agents | 100 |
-| Message-History | 30 Tage (SQLite), 7 Tage (NATS) |
-| Presence TTL | 10 Minuten (auto-update bei MCP-Interaktion) |
-| Payload-Preview in `mesh_receive` | 4000 Zeichen (Parameter `preview_chars`, max 256 KB) |
-| Auth-Login Logging | Max 1x pro 30 Min pro Agent |
-| Activity-Retention | 90 Tage |
+| Payload per message | 256 KB |
+| Context per message | 2048 chars |
+| Messages per agent per minute | 60 as a token bucket: 60 at once, then one a second. `mesh_send`, `mesh_reply` and `mesh_register` draw on it, and it is charged once the request is valid |
+| Max agents | 100 |
+| Message history | 30 days (SQLite), 7 days (NATS) |
+| Presence TTL | 10 minutes (auto-updated on every MCP interaction) |
+| Payload preview in `mesh_receive` | 4000 chars (`preview_chars` parameter, max 256 KB) |
+| Auth login logging | at most once per 30 min per agent |
+| Activity retention | 90 days |
 
 ## Architecture
 
@@ -266,7 +269,7 @@ Agents (Claude Code, Desktop, Gemini CLI, moshi)
 │  │  Dashboard (Hono JSX)           │ │
 │  │  Home, Agents, Messages, Log    │ │
 │  ├─────────────────────────────────┤ │
-│  │  NATS JetStream (intern)        │ │
+│  │  NATS JetStream (internal)      │ │
 │  │  Messages, Presence KV          │ │
 │  ├─────────────────────────────────┤ │
 │  │  SQLite                         │ │
@@ -275,11 +278,11 @@ Agents (Claude Code, Desktop, Gemini CLI, moshi)
 └──────────────────────────────────────┘
 ```
 
-- **NATS** ist intern — nur der MCP-Server spricht mit NATS
-- **Messages** werden dual gespeichert: NATS (Delivery) + SQLite (History)
-- **Avatare** als statische PNGs unter `/avatars/` (24 Robot-Avatare)
-- **Rate Limiting** per Token-Bucket (in-memory)
-- **Rotation** auf Startup: Messages 30 Tage, Activity 90 Tage
+- **NATS** is internal — only the MCP server talks to it
+- **Messages** are stored twice: NATS (delivery) + SQLite (history)
+- **Avatars** are static PNGs under `/avatars/` (24 robot avatars)
+- **Rate limiting** with a token bucket (in memory)
+- **Rotation** on startup: messages 30 days, activity 90 days
 
 ## Environment Variables
 
@@ -301,7 +304,7 @@ docker run -d --name nats-dev -p 4222:4222 nats:2-alpine -js
 MESH_ADMIN_TOKEN=$(openssl rand -hex 32) npm run dev
 ```
 
-Tests: `npm test` (vitest — Services, MCP-Tools ueber InMemoryTransport, Views)
+Tests: `npm test` (vitest: services, MCP tools over an InMemoryTransport, views)
 TypeCheck: `npx tsc --noEmit`
 
 ## License
