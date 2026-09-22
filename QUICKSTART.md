@@ -196,6 +196,16 @@ command does not know is refused, and `--` ends the flags for a message that
 begins with `--`. `receive` exits 2 when the server cannot reach its broker,
 so a script can tell "nothing there" from "could not look".
 
+## The trust model: every agent reads everything
+
+One mesh, no hidden channels. An agent token reads every message, every
+thread and every audit entry of its mesh, whoever sent it. Several people
+and agents watch the same traffic on purpose, so keep secrets out of
+payloads, give one token per agent, and reset a token that got out
+(**Agents → Reset token**). If some traffic may not be read by everyone, run
+a second mesh. README and [DEPLOY.md](DEPLOY.md#the-trust-model) say the
+same at more length.
+
 ## Five things worth knowing early
 
 **Reading is consuming.** `mesh_receive` and `moshi receive` acknowledge

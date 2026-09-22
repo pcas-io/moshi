@@ -164,6 +164,14 @@ describe("connect — step 2", () => {
     expect(html).not.toContain("Copy this token now");
     expect(html).not.toContain("Copy it first");
   });
+  it("says what the token reads, where the token is handed over", async () => {
+    // The trust model belongs at the one moment somebody decides what to
+    // give an agent access to, not only in a document nobody opens.
+    const html = await render({ step: 2, token: "bt_secret", agentName: "scout" });
+    expect(html).toContain("reads the whole mesh");
+    expect(html).toContain("no hidden channels");
+    expect(html).toContain("Keep secrets out of payloads");
+  });
 });
 
 describe("connect — step 3", () => {
