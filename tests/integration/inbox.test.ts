@@ -233,6 +233,12 @@ describe.skipIf(!URL)("an agent's inbox against a real JetStream broker", () => 
 
     await nats.close();
     await sleep(20);
+    // Emptied first, then deleted, like every beforeEach in this suite: on
+    // NATS 2.12 a stream that is deleted and created again at once can come
+    // back holding what the old one held. That is not "the volume is lost",
+    // which is what this case is about — and on a loaded runner it showed up
+    // as seven waiting broadcasts where one was expected.
+    await jsm.streams.purge(STREAM);
     await jsm.streams.delete(STREAM);
     const restarted = new NatsService(URL!, { consumerClockToleranceMs: 0 });
     extra.push(restarted);
