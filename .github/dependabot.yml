@@ -21,6 +21,12 @@ updates:
       development:
         dependency-type: development
         update-types: [minor, patch]
+    ignore:
+      # The types follow the Node major the service runs on (the image says
+      # which). Types for a newer major let code compile against APIs the
+      # runtime does not have.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: gomod
     directory: /cli
@@ -49,6 +55,11 @@ updates:
     groups:
       images:
         patterns: ["*"]
+    ignore:
+      # A new Node major is a decision (LTS line, native modules, tsx), not a
+      # routine bump. Digest and minor updates of the current line keep coming.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
 
   # The broker image in docker-compose.yml. The `docker` entry above reads
   # Dockerfiles only.
@@ -62,6 +73,13 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # The broker is pinned to what production runs, and moving it is a
+      # decision: one minor at a time, with a copy of nats-data, together with
+      # scripts/test-integration.sh (DEPLOY.md, "The broker"). Patch releases
+      # of the pinned line keep coming.
+      - dependency-name: "nats"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: github-actions
     directory: /

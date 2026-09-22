@@ -26,6 +26,8 @@ import { closeConnectionsWhileDraining } from "./services/shutdown.js";
 import { mcpPostOnly } from "./mcp/http-guard.js";
 import { securityHeaders } from "./middleware/security-headers.js";
 import { createSessionRoutes, issueLoginCsrf } from "./routes/session.js";
+import { createSignInGuard } from "./services/signin-guard.js";
+import { SignInThrottle } from "./services/signin-throttle.js";
 import { createMcpRoute } from "./routes/mcp.js";
 import type { McpRouteNats } from "./routes/mcp.js";
 import { createDashboardRoutes } from "./routes/dashboard.js";
@@ -53,6 +55,8 @@ export interface AppDeps {
   now?: () => number;
 }
 
+type NodeBindings = { incoming?: { socket?: { remoteAddress?: string } } };
+
 export function createApp({ config, db, nats, agents, activity, presence, rateLimiter, now }: AppDeps): Hono<HonoEnv> {
   const app = new Hono<HonoEnv>();
 
@@ -75,7 +79,13 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   // --- Inject env bindings from validated config ---
   // The Env interface is kept for compatibility with existing middleware,
   // but values come from the validated config, not raw process.env.
+  // One count of failed sign-ins for the form, the consent screen and the
+  // Bearer header, on the same clock as everything else.
+  const guard = createSignInGuard(new SignInThrottle(now ?? Date.now), { now, behindProxy: config.behindProxy });
+
   app.use("*", async (c, next) => {
+    // Kept before c.env is replaced: without a proxy in front, this is who called.
+    c.set("peerAddress", (c.env as unknown as NodeBindings | undefined)?.incoming?.socket?.remoteAddress);
     c.env = {
       NATS_URL: config.natsUrl,
       MESH_ADMIN_TOKEN: config.meshAdminToken,
@@ -169,10 +179,10 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   });
 
   // --- Sign-in / sign-out (no auth; see src/routes/session.ts) ---
-  app.route("/", createSessionRoutes({ agents, secureCookie: config.cookieSecure }));
+  app.route("/", createSessionRoutes({ agents, secureCookie: config.cookieSecure, guard }));
 
   // --- Auth middleware on all other routes ---
-  app.use("*", authMiddleware(agents, presence, activity, { secureCookie: config.cookieSecure }));
+  app.use("*", authMiddleware(agents, presence, activity, { secureCookie: config.cookieSecure, guard }));
 
   // Limits for authenticated routes come after auth, for the same reason as
   // on /mcp: bodyLimit drains a body of unknown length before it passes on,
@@ -193,7 +203,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   app.route("/", createSseRoutes());
 
   // --- OAuth routes ---
-  app.route("/", createOAuthRoutes(agents, db));
+  app.route("/", createOAuthRoutes(agents, db, guard));
 
   return app;
 }

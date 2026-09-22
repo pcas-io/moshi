@@ -101,9 +101,14 @@ describe("closeHttpServer", () => {
     });
 
   it("lets a request that is being answered finish, and takes no new ones", async () => {
-    const { server, port } = await listen((_req, res) => setTimeout(() => res.end("done"), 150));
+    // Wait for the handler, not for a number of milliseconds: on a loaded
+    // machine 30 ms was not always enough for the request to arrive, and the
+    // close then came first, which is the opposite of what this checks.
+    let arrived: () => void;
+    const inHandler = new Promise<void>((r) => { arrived = r; });
+    const { server, port } = await listen((_req, res) => { arrived(); setTimeout(() => res.end("done"), 150); });
     const inFlight = get(port);
-    await new Promise((r) => setTimeout(r, 30));
+    await inHandler;
     const closed = closeHttpServer(server, 2000);
     await expect(get(port)).rejects.toThrow(); // ECONNREFUSED
     expect(await inFlight).toEqual({ status: 200, body: "done" });
@@ -122,9 +127,11 @@ describe("closeHttpServer", () => {
   });
 
   it("cuts what is still open when the grace period is over", async () => {
-    const { server, port } = await listen(() => { /* never answers */ });
+    const { server, port } = await listen(() => { arrived(); /* never answers */ });
+    let arrived: () => void;
+    const inHandler = new Promise<void>((r) => { arrived = r; });
     const hanging = get(port).catch((err: Error) => err.message);
-    await new Promise((r) => setTimeout(r, 30));
+    await inHandler;
     const started = Date.now();
     await closeHttpServer(server, 100);
     expect(Date.now() - started).toBeLessThan(1000);

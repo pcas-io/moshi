@@ -1,8 +1,12 @@
 # moshi.moshi — User-Flow Smoke Test
 
 Wiederholbarer End-to-End-Smoke-Test über den vollen Agent-Mesh-User-Flow.
-Läuft in <3 Minuten, non-destruktiv gegen lokale Dev-Instance + optionaler
-read-only Live-Check gegen `moshi.enki.run`.
+Läuft in <3 Minuten gegen eine **lokale** Instanz + optionaler read-only
+Live-Check gegen `moshi.enki.run`.
+
+> Das Script legt Agenten an, deaktiviert und löscht sie. Es weigert sich,
+> wenn `MESH_URL` keine Loopback-Adresse ist (Exit 2). Am 2026-09-19 hat ein
+> Testskript in Produktion einen echten Agenten gelöscht. Phase 6 liest nur.
 
 **Source of Truth (Design-Spec):** Plexus `entities:ctcv73b5vp78oy6bp3c0`
 
@@ -15,8 +19,9 @@ Deckt ab:
 
 - **Admin-CRUD** — Login, Agent anlegen, Revoke (deactivate), Reactivate, Reset-Token, Delete
 - **MCP Bearer-Flow** — die Tools `mesh_register`, `mesh_status`, `mesh_send`, `mesh_receive`, `mesh_reply`, `mesh_history` + Broadcast-Pfad + Threading (`mesh_get` seit dem Top-5-Review zusaetzlich)
-- **`moshi`** — Go-Binary inkl. Pipe-Mode (`echo ... | moshi send`)
-- **Dashboard-Views** — Home, Messages, Conversations, Activity (curl + HTML-contains)
+- **`moshi`** — Go-Binary inkl. Pipe-Mode (`echo ... | moshi send`), im Lauf frisch aus `cli/` gebaut, wenn `go` da ist
+- **Dashboard-Views** — Home, Log (Messages und Audit), Conversations, dazu die 301 von `/messages` (curl + HTML-contains)
+- **Aufräumen** — per `trap`, nach NAME: auch ein abgebrochener Lauf löscht seine `uft-*`-Agenten. `--cleanup-stale` löscht liegengebliebene.
 - **Revoke-Auth-Guard** — nach `revoke` muss der alte Token ein 401 bekommen
 - **Live-Smoke** (optional) — `/health`, `/.well-known/oauth-authorization-server`, 1× `mesh_status` gegen `moshi.enki.run`
 

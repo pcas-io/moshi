@@ -211,9 +211,24 @@ export class NatsService {
     // viewer. Runs as a detached async iterator; errors are suppressed to
     // prevent crashes if the iterator closes during shutdown.
     (async () => {
+      // Attempts to reconnect since the connection was last up.
+      let attempts = 0;
       try {
         for await (const s of nc.status()) {
-          log("info", "nats status event", { event: s.type, data: String(s.data ?? "") });
+          const type = String(s.type);
+          if (type === "reconnect") attempts = 0;
+          if (type === "reconnecting") attempts++;
+          // Two events would bury the rest. nats.js reports every ping it
+          // sends: one "pingTimer" every 20 s, 4320 lines a day (a ping that
+          // gets no answer shows up as staleConnection, which is logged). And
+          // during an outage it reports every attempt to reconnect, one every
+          // two seconds: the first is logged, then every thirtieth.
+          const quiet = type === "pingTimer" || (type === "reconnecting" && attempts !== 1 && attempts % 30 !== 0);
+          if (!quiet) {
+            const lost = type === "disconnect" || type === "staleConnection" || type === "error";
+            const data = typeof s.data === "object" && s.data !== null ? JSON.stringify(s.data) : String(s.data ?? "");
+            log(lost ? "warn" : "info", "nats status event", { event: type, data, ...(type === "reconnecting" ? { attempt: attempts } : {}) });
+          }
           // Only the connection in service steers the breaker. A replaced
           // connection keeps emitting until it has closed.
           if (nc !== this.nc) continue;

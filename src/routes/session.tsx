@@ -28,6 +28,8 @@ import {
 } from "../auth.js";
 import { formString } from "./form.js";
 import { SignOutPage } from "../views/signout.js";
+import { throttledResponse } from "../views/throttled.js";
+import type { SignInGuard } from "../services/signin-guard.js";
 
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -71,13 +73,15 @@ export function issueLoginCsrf(c: Context<HonoEnv>, secureCookie: boolean): stri
 }
 
 export interface SessionDeps {
+  /** Told about wrong tokens: logs them, and answers 429 after ten. */
+  guard?: SignInGuard;
   agents: Pick<AgentService, "getByTokenHash">;
   /** `Secure` on the session cookie — `config.cookieSecure`. Off wherever
    *  the dashboard is served over plain http, or the browser drops it. */
   secureCookie: boolean;
 }
 
-export function createSessionRoutes({ agents, secureCookie }: SessionDeps): Hono<HonoEnv> {
+export function createSessionRoutes({ agents, secureCookie, guard }: SessionDeps): Hono<HonoEnv> {
   const session = new Hono<HonoEnv>();
   const cookieAttributes = sessionCookieAttributes(secureCookie);
 
@@ -119,7 +123,11 @@ export function createSessionRoutes({ agents, secureCookie }: SessionDeps): Hono
       if (found && found.is_active) who = { kind: "agent", id: found.id };
     }
 
-    if (!who) return c.redirect(loginError);
+    if (!who) {
+      const wait = guard?.failure(c, "wrong_token") ?? 0;
+      if (wait > 0) return throttledResponse(c, wait);
+      return c.redirect(loginError);
+    }
 
     // The session is made from THIS token: it names the agent by id and
     // carries a fingerprint of the token's hash. Reset or rotate the token

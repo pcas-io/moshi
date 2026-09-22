@@ -36,6 +36,10 @@ export interface Config {
   /** `Secure` on the session cookie. Follows `isProduction` unless
    *  MESH_COOKIE_SECURE says otherwise. */
   cookieSecure: boolean;
+  /** Is there a proxy in front that appends its peer to X-Forwarded-For?
+   *  MESH_BEHIND_PROXY, off unless set: without such a proxy the header is
+   *  whatever the sender typed (src/services/client-ip.ts). */
+  behindProxy: boolean;
 }
 
 export interface ConfigError {
@@ -157,6 +161,14 @@ export function loadConfig(
     errors.push(`MESH_COOKIE_SECURE must be 1, 0, true or false (got "${env.MESH_COOKIE_SECURE}")`);
   }
 
+  // Whose address failed sign-ins are counted against. The compose file sets
+  // this: there the container is reachable through Coolify's proxy only.
+  const behindProxyRaw = (env.MESH_BEHIND_PROXY ?? "").trim().toLowerCase();
+  const behindProxy = behindProxyRaw === "1" || behindProxyRaw === "true";
+  if (behindProxyRaw !== "" && !behindProxy && behindProxyRaw !== "0" && behindProxyRaw !== "false") {
+    errors.push(`MESH_BEHIND_PROXY must be 1, 0, true or false (got "${env.MESH_BEHIND_PROXY}")`);
+  }
+
   if (errors.length > 0) {
     return { errors };
   }
@@ -173,6 +185,7 @@ export function loadConfig(
     port,
     isProduction,
     cookieSecure,
+    behindProxy,
     commit: resolveCommit(env),
   };
 }

@@ -107,6 +107,9 @@ export interface AppVariables {
   /** Set by the auth middleware: what the form tokens of this request are
    *  bound to (src/auth.ts, `csrfBindingOf`). Empty means no form is valid. */
   csrfBinding: string;
+  /** The socket's remote address, kept before `c.env` is replaced by the
+   *  config bindings. Only used when no proxy named a client. */
+  peerAddress?: string;
 }
 
 // === Pagination ===

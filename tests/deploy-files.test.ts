@@ -15,6 +15,14 @@ const service = (name: string): string => {
 };
 
 describe("docker-compose.yml", () => {
+  it("says that a proxy is in front: the container is reachable through it only", () => {
+    // Without this the app believes the socket alone, and behind the proxy
+    // every client has the proxy's address: one count for everybody.
+    expect(service("moshi")).toMatch(/- MESH_BEHIND_PROXY=\$\{MESH_BEHIND_PROXY:-1\}/);
+    expect(service("moshi")).toMatch(/\n    expose:\n/);
+    expect(service("moshi")).not.toMatch(/\n    ports:\n/);
+  });
+
   it("hands MESH_ADMIN_TOKEN_PREVIOUS to the container: the rotation DEPLOY.md describes never arrived", () => {
     expect(service("moshi")).toMatch(/- MESH_ADMIN_TOKEN_PREVIOUS=\$\{MESH_ADMIN_TOKEN_PREVIOUS:-\}/);
   });

@@ -19,6 +19,11 @@ services:
       # Empty = follow NODE_ENV (Secure on). Set to 0 only when the dashboard
       # is served over plain http, e.g. a LAN host without TLS.
       - MESH_COOKIE_SECURE=${MESH_COOKIE_SECURE:-}
+      # This container is reachable through the proxy only (`expose`, no
+      # `ports`), and the proxy appends its peer to X-Forwarded-For: that is
+      # the address failed sign-ins are counted against. Set to 0 when you
+      # publish the port yourself: then the header is the sender's own text.
+      - MESH_BEHIND_PROXY=${MESH_BEHIND_PROXY:-1}
       - DATABASE_PATH=/data/moshi.db
       # Daily copies of the database. Empty means the defaults: next to the
       # database (/data/backups), seven of them. BACKUP_KEEP=0 switches them off.
