@@ -3,16 +3,36 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
-const defaultURL = "https://moshi.enki.run/mcp"
+// normalizeMCPURL: MESH_URL names the server, the endpoint is /mcp. A bare
+// origin (no path, or "/") gets it; any other path is what the user meant.
+// Sent as it was, a bare origin reached the dashboard, which answered a
+// JSON client with a sign-in redirect.
+func normalizeMCPURL(raw string) string {
+	u := strings.TrimSpace(raw)
+	if !strings.Contains(u, "://") {
+		return u
+	}
+	rest := u[strings.Index(u, "://")+3:]
+	query := ""
+	if q := strings.IndexAny(rest, "?#"); q >= 0 {
+		query = rest[q:]
+		rest = rest[:q]
+	}
+	if !strings.Contains(rest, "/") || strings.HasSuffix(rest, "/") && strings.Count(rest, "/") == 1 {
+		return u[:strings.Index(u, "://")+3] + strings.TrimSuffix(rest, "/") + "/mcp" + query
+	}
+	return u
+}
 
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
 		printUsage()
 		fmt.Println()
-		hint("Starte mit: moshi status")
+		hint("Start with: moshi status")
 		os.Exit(0)
 	}
 
@@ -27,7 +47,7 @@ func main() {
 	}
 
 	// Parse global flags
-	url := env("MESH_URL", defaultURL)
+	urlFlag := ""
 	token := env("MESH_TOKEN", "")
 	var remaining []string
 
@@ -35,42 +55,49 @@ func main() {
 		switch args[i] {
 		case "--url":
 			if i+1 < len(args) {
-				url = args[i+1]
+				urlFlag = args[i+1]
 				i++
 			} else {
-				fatal("--url braucht einen Wert, z.B. --url https://mesh.example.com/mcp")
+				fatal("--url needs a value, e.g. --url https://mesh.example.com")
 			}
 		case "--token":
 			if i+1 < len(args) {
 				token = args[i+1]
 				i++
 			} else {
-				fatal("--token braucht einen Wert, z.B. --token bt_...")
+				fatal("--token needs a value, e.g. --token bt_...")
 			}
 		default:
 			remaining = append(remaining, args[i])
 		}
 	}
 
-	// Commands that need neither a token nor (only) the server URL.
-	if len(remaining) > 0 {
-		switch remaining[0] {
-		case "--version", "-v", "version":
-			printVersion()
-			os.Exit(0)
-		case "self-update", "update", "upgrade":
-			cmdSelfUpdate(url)
-			os.Exit(0)
-		}
+	if len(remaining) > 0 && (remaining[0] == "--version" || remaining[0] == "-v" || remaining[0] == "version") {
+		printVersion()
+		os.Exit(0)
+	}
+
+	// The server: --url, MESH_URL, or what install.sh remembered. Never a
+	// compiled-in host: a token must not go anywhere nobody configured.
+	url, err := resolveURL(urlFlag, os.Getenv("MESH_URL"), configPath())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "moshi: "+err.Error())
+		os.Exit(1)
+	}
+
+	// Needs no token.
+	if len(remaining) > 0 && (remaining[0] == "self-update" || remaining[0] == "update" || remaining[0] == "upgrade") {
+		cmdSelfUpdate(url)
+		os.Exit(0)
 	}
 
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "moshi: Kein Token gesetzt.")
+		fmt.Fprintln(os.Stderr, "moshi: No token set.")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Option 1: export MESH_TOKEN=bt_dein_token")
-		fmt.Fprintln(os.Stderr, "  Option 2: moshi --token bt_dein_token status")
+		fmt.Fprintln(os.Stderr, "  Option 1: export MESH_TOKEN=bt_your_token")
+		fmt.Fprintln(os.Stderr, "  Option 2: moshi --token bt_your_token status")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Token bekommst du vom Admin im Dashboard: "+baseURL(url)+"/agents")
+		fmt.Fprintln(os.Stderr, "  Ask your admin for a token in the dashboard: "+baseURL(url)+"/agents")
 		os.Exit(1)
 	}
 
@@ -98,57 +125,59 @@ func main() {
 	case "register", "reg":
 		cmdRegister(url, token, cmdArgs)
 	default:
-		fmt.Fprintf(os.Stderr, "moshi: Unbekannter Befehl '%s'\n\n", cmd)
-		fmt.Fprintln(os.Stderr, "Verfuegbare Befehle: status, send, receive, get, reply, history, register, self-update")
-		fmt.Fprintln(os.Stderr, "Hilfe: moshi --help")
+		fmt.Fprintf(os.Stderr, "moshi: Unknown command '%s'\n\n", cmd)
+		fmt.Fprintln(os.Stderr, "Available commands: status, send, receive, get, reply, history, register, self-update")
+		fmt.Fprintln(os.Stderr, "Help: moshi --help")
 		os.Exit(1)
 	}
 }
 
 func printUsage() {
-	fmt.Print(`moshi — もしもし · async chat zwischen Agenten & Menschen
+	fmt.Print(`moshi — もしもし · async chat between agents and humans
 
-Befehle:
-  moshi status                        Wer ist online? (+ ungelesene Nachrichten)
-  moshi send <agent> "nachricht"      Nachricht senden (Typ: info)
-  moshi receive                       Neue Nachrichten abholen (Lesen quittiert!)
-  moshi get <msg_id>                  Rohe Payload ausgeben (pipebar!)
-  moshi reply <msg_id> "antwort"      Auf Nachricht antworten
-  moshi history <msg_id>              Thread-Verlauf anzeigen (jede ID des Threads)
-  moshi register                      Als CLI-Agent registrieren
-  moshi self-update                   Auf den neuesten Server-Build aktualisieren
-  moshi --version                     Version (Build-Hash) anzeigen
+Commands:
+  moshi status                        Who is online? (+ unread messages)
+  moshi send <agent> "message"        Send a message (type: info)
+  moshi receive                       Fetch new messages (reading acks them!)
+  moshi get <msg_id>                  Print the raw payload (pipe it!)
+  moshi reply <msg_id> "answer"       Reply to a message
+  moshi history <msg_id>              Show the thread (any ID from the thread)
+  moshi register                      Register as a CLI agent
+  moshi self-update                   Update to the latest server build
+  moshi --version                     Show the version (build hash)
 
-Installieren / updaten ohne Repo:
-  curl -fsSL https://moshi.enki.run/install.sh | sh
-  moshi self-update                   (danach jederzeit, kein curl noetig)
+Install / update without the repo:
+  curl -fsSL https://your.moshi.server/install.sh | sh
+  moshi self-update                   (any time after that, no curl needed)
 
-Nachrichten senden:
-  moshi send ops "Server laeuft"                   Direkt als Text
-  moshi send ops "DB down" --type incident          Mit Typ
+Sending messages:
+  moshi send ops "server is up"                    Plain text
+  moshi send ops "DB down" --type incident          With a type
   echo "logs" | moshi send ops                      Piped (auto)
-  echo "logs" | moshi send ops --type incident      Piped mit Typ
-  docker logs app 2>&1 | moshi send ops incident    Kurzform: Typ als einziges Wort
-  cat datei.txt | moshi send ops                    Datei senden
-  moshi send broadcast "Wartung um 22 Uhr"          An alle
+  echo "logs" | moshi send ops --type incident      Piped with a type
+  docker logs app 2>&1 | moshi send ops incident    Shorthand: type as the only word
+  cat file.txt | moshi send ops                     Send a file
+  moshi send broadcast "maintenance at 22:00"       To everyone
 
-Typen: info (default), question, incident, task_update, deploy_request,
+Types: info (default), question, incident, task_update, deploy_request,
        deploy_status, review_request, review_result, script
 
-Scripts & Dateien:
-  moshi get <msg_id> > script.sh      Payload als Datei speichern
-  moshi get <msg_id> | bash           Script direkt ausfuehren
-  moshi get <msg_id> | python3        Python-Script ausfuehren
+Scripts and files:
+  moshi get <msg_id> > script.sh      Save the payload to a file
+  moshi get <msg_id> | bash           Run the script directly
+  moshi get <msg_id> | python3        Run a Python script
 
-Optionen:
-  --token <t>     Token (oder: export MESH_TOKEN=bt_...)
-  --url <u>       Server-URL (oder: export MESH_URL=...; default: moshi.enki.run)
-  --type <t>      Nachrichtentyp fuer send/reply (default: info bzw. reply)
-  --context <c>   Kontext fuer send (default: moshi@hostname)
-  --limit <n>     Max Nachrichten fuer receive (default 10, max 50)
-  --role <r>      Rolle fuer register (default: cli)
-  --working-on <> Aktuelle Aufgabe fuer register
+Options:
+  --token <t>     Token (or: export MESH_TOKEN=bt_...)
+  --url <u>       The server (or: export MESH_URL=...; or what install.sh
+                  remembered in ~/.config/moshi/config.json). /mcp is added
+                  to a bare origin.
+  --type <t>      Message type for send/reply (default: info / reply)
+  --context <c>   Context for send/reply (default: moshi@hostname)
+  --limit <n>     Max messages for receive (default 10, max 50)
+  --role <r>      Role for register (default: cli)
+  --working-on <> Current task for register
 
-Kurzformen: s=status, r=receive, h=history, reg=register, get=pull
+Shorthands: s=status, r=receive, h=history, reg=register, get=pull
 `)
 }
