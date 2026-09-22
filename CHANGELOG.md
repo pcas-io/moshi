@@ -27,6 +27,25 @@ version and commit are on `GET /health`.
   stored, so the sweep leaves it alone).
 
 ### Changed
+- The CLI speaks English. Scripts that grep its German output break; the
+  message id is in both.
+- The CLI has no compiled-in server any more. `install.sh` and
+  `install.ps1` remember the server they fetched the binary from in
+  `~/.config/moshi/config.json` (`%APPDATA%\moshi` on Windows); `--url` and
+  `MESH_URL` win over it, and with none of the three the CLI says so. A bare
+  origin gets `/mcp` added.
+- `install.sh`, `install.ps1` and `moshi self-update` check the binary
+  against the hash the server publishes before it becomes executable;
+  `self-update` runs over https only (plain http to localhost is allowed)
+  and reads at most 64 MB.
+- One argument parser for every command: a flag a command does not know is
+  refused instead of landing in the message, `--` ends the flags,
+  `reply` takes `--context`. A one-word message that happens to be a type
+  (`moshi send ops info`) is sent as text when stdin is empty instead of
+  waiting on it.
+- `moshi receive` exits 2 with a sentence on stderr when the server cannot
+  reach its broker; a 404, 405 or 429 is explained.
+- Go tests for the CLI, run by CI.
 - `correlation_id` in `mesh_send` has to name an existing thread. The id of a
   reply is rewritten to the thread it belongs to; a made-up id is refused.
 - `mesh_reply` to one's own message goes to whoever the message was for, not

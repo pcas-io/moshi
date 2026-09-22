@@ -364,14 +364,21 @@ recreated first.
 
 ## CLI endpoint
 
-Domain: **`moshi.enki.run`**. The CLI default is
-`https://moshi.enki.run/mcp`, fully configurable — same pattern as the
-token:
+The CLI has no compiled-in server. It sends a token only where it was told
+to, in this order:
 
-| | flag | env | default |
+| | flag | env | file |
 |---|---|---|---|
-| Server | `--url` | `MESH_URL` | `https://moshi.enki.run/mcp` |
+| Server | `--url` | `MESH_URL` | `~/.config/moshi/config.json` (`$XDG_CONFIG_HOME`; `%APPDATA%\moshi` on Windows), written by `install.sh` with the server it fetched the binary from |
 | Token | `--token` | `MESH_TOKEN` | none (must be set) |
 
-The 6 cross-platform binaries are built with this default. Override per
-invocation with `--url` or globally with `export MESH_URL=…`.
+A bare origin gets `/mcp` added; any other path is sent as it is. With none
+of the three set, the CLI says so and exits 1.
+
+`install.sh` and `install.ps1` fetch the binary, compare its SHA-256 with
+what the server publishes at `/cli/version`, and only then make it
+executable. `moshi self-update` does the same, over https only (plain http
+to `localhost` is allowed), with a 64 MB bound on the download. This proves
+that the download arrived whole. It does not prove who built it: hash and
+binary come from the same server. A signature with a key held outside the
+server is a separate step.
