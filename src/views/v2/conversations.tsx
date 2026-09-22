@@ -151,19 +151,36 @@ function metaLine(thread: ConversationSummary, now: number): string {
 // ── Styles that an inline attribute cannot express ──────────────
 // `d-row` from components.tsx fills with `sunk`, which is this panel's own
 // ground — invisible here. A thread row lifts to `card` instead.
+// The split is as tall as the viewport leaves (header, footer and the gap
+// above the footer: 64 + 84 + 12 px), never taller: with 50 threads the list
+// panel was 6283 px tall, both panes stretched to it, the inner scrollers
+// never scrolled, and on a phone the open thread began some 6400 px down.
+// Stacked (below about 790 px), the list takes at most 45dvh and the thread
+// the rest; a row link jumps to #thread, so a tap lands on the thread.
 const CONVOS_CSS = `
 .d-thread { display: block; text-decoration: none; color: inherit; }
 .d-thread:hover { background: var(--card); }
 .d-search::placeholder { color: ${T.faint}; }
+.d-list-panel { flex: 1 1 330px; max-width: 400px; min-width: 290px; min-height: 0; max-height: 45dvh; }
+.d-thread-pane { flex: 1 1 460px; min-width: 0; min-height: 0; }
+/* Side by side (the width at which the two flex bases stop fitting): each
+   pane takes the split's height and scrolls inside. Stacked, the list keeps
+   its 45dvh share and the thread takes the rest. */
+@media (min-width: 790px) {
+  .d-list-panel, .d-thread-pane { max-height: 100%; }
+}
 `;
 
 const SPLIT_STYLE =
-  "flex:1;display:flex;flex-wrap:wrap;align-items:stretch;min-height:760px;gap:0;" +
+  // `flex:0 0 auto`, not `flex:1`: in a column flex container flex-basis is
+  // the main size, so `flex:1` (basis 0, grow 1) made `height` moot and the
+  // split grew to its content again — 5254 px with 50 threads.
+  "flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:stretch;gap:0;" +
+  "height:calc(100dvh - 160px);min-height:420px;overflow:hidden;" +
   `border-left:1px solid ${T.line};border-right:1px solid ${T.line};background:${T.card}`;
 
 const PANEL_STYLE =
-  `flex:1 1 330px;max-width:400px;min-width:290px;border-right:1px solid ${T.line};` +
-  `display:flex;flex-direction:column;background:${T.sunk}`;
+  `border-right:1px solid ${T.line};display:flex;flex-direction:column;background:${T.sunk}`;
 
 const SEARCH_STYLE =
   `width:100%;margin-top:14px;background:${T.card};border:1px solid ${T.lineStrong};` +
@@ -350,7 +367,7 @@ const DetailFooter: FC<{ lastMessageId?: string }> = ({ lastMessageId }) => (
 
 /** The container of the open thread. Rendered by the page; its CHILDREN are
  *  ConversationThreadSection, which is also what the fragment returns. */
-const PANE_STYLE = "flex:1 1 460px;min-width:0;display:flex;flex-direction:column";
+const PANE_STYLE = "display:flex;flex-direction:column";
 
 export interface ConversationThreadSectionProps {
   thread: ConversationThread | null;
@@ -485,7 +502,7 @@ export const ConversationListSection: FC<ConversationListSectionProps> = ({
   const filterQs = filterQueryString(query, filterAgent);
   const pageQs = result.offset > 0 ? `${filterQs ? `${filterQs}&` : ""}offset=${result.offset}` : filterQs;
   const threadHref = (id: string): string =>
-    `/conversations?id=${encodeURIComponent(id)}${pageQs ? `&${pageQs}` : ""}`;
+    `/conversations?id=${encodeURIComponent(id)}${pageQs ? `&${pageQs}` : ""}#thread`;
   const pageHref = (offset: number): string =>
     offset > 0 ? `/conversations?offset=${offset}${filterQs ? `&${filterQs}` : ""}`
       : `/conversations${filterQs ? `?${filterQs}` : ""}`;
@@ -572,7 +589,7 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
             never inside a live container: it would replay on every refresh. */}
         <div class="m-rise" style={SPLIT_STYLE}>
           {/* Left: the thread panel */}
-          <div style={PANEL_STYLE}>
+          <div class="d-list-panel" style={PANEL_STYLE}>
             <div style={`padding:22px 20px 16px;border-bottom:1px solid ${T.lineSoft}`}>
               <h1 style="margin:0 0 4px;font-size:21px;font-weight:600;letter-spacing:-0.02em">
                 Conversations
@@ -627,6 +644,8 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
 
           {/* Right: the open thread. Live only when there is a thread. */}
           <div
+            id="thread"
+            class="d-thread-pane"
             data-live={opened ? "convos-thread" : undefined}
             data-live-src={opened ? conversationThreadSrc(opened.thread_id) : undefined}
             data-live-thread={opened ? opened.thread_id : undefined}

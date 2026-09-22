@@ -202,7 +202,8 @@ describe("V2ConversationsPage — thread and message rendering", () => {
   it("selects the thread named by ?id= and marks it as current", async () => {
     const second = thread({ thread_id: "thr_2", participants: ["dex-eu", "ops-kai"] });
     const html = await render({ ...page([thread(), second]), opened: second });
-    expect(html).toContain('href="/conversations?id=thr_2"');
+    // #thread: on a phone the panes stack, so a tap lands on the thread.
+    expect(html).toContain('href="/conversations?id=thr_2#thread"');
     expect(html).toContain('aria-current="true"');
     // The selected row lifts out of the sunk panel with a green rail.
     expect(html).toContain("box-shadow:inset 3px 0 0 #0e8a3e");
@@ -210,7 +211,7 @@ describe("V2ConversationsPage — thread and message rendering", () => {
 
   it("carries the search and agent filter into every thread link", async () => {
     const html = await render({ ...page([thread()]), query: "checkout", filterAgent: "ops-kai" });
-    expect(html).toContain("/conversations?id=thr_1&q=checkout&agent=ops-kai");
+    expect(html).toContain("/conversations?id=thr_1&q=checkout&agent=ops-kai#thread");
     expect(html).toContain('name="agent" value="ops-kai"');
   });
 });
@@ -334,6 +335,32 @@ describe("V2ConversationsPage — the split has to know the viewport width", () 
     const html = await render(page([thread()]));
     expect(html).toContain("max-width:1400px");
     expect(html).toMatch(/max-width:1400px[^"]*width:100%/);
+  });
+
+  // With 50 threads the list panel was 6283 px tall: both panes stretched to
+  // it, the inner scrollers never scrolled, and on a phone the open thread
+  // began some 6400 px down, after every tap.
+  it("bounds the split to the viewport so that list and thread scroll inside", async () => {
+    const html = await render(page([thread()]));
+    const split = /class="m-rise" style="([^"]*)"/.exec(html)?.[1] ?? "";
+    expect(split).toMatch(/height:calc\(100dvh - \d+px\)/);
+    expect(split).toMatch(/min-height:\d+px/);
+    expect(split).not.toMatch(/min-height:760px/);
+    expect(split).toContain("overflow:hidden");
+  });
+
+  it("caps the stacked list on a phone and puts the open thread within reach", async () => {
+    const opened = thread();
+    const html = await render({ ...page([opened]), opened });
+    // The list panel: at most a share of the viewport when the panes stack.
+    expect(html).toMatch(/class="d-list-panel"/);
+    expect(html).toMatch(/\.d-list-panel\s*\{[^}]*max-height:\s*45dvh/);
+    // The thread pane is a target, and every row link points at it.
+    expect(html).toContain('id="thread"');
+    expect(html).toMatch(/href="\/conversations\?id=thr_1[^"]*#thread"/);
+    expect(html).toMatch(/\.d-thread-pane\s*\{[^}]*min-height:\s*0/);
+    // Side by side each pane takes the split's height and scrolls inside it.
+    expect(html).toMatch(/@media \(min-width: 790px\)\s*\{[^}]*max-height:\s*100%/);
   });
 });
 
