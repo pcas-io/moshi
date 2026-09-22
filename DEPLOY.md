@@ -6,9 +6,34 @@ builds + runs `docker-compose.yml`.
 
 ## Prerequisites
 
-- A Coolify instance (the agent-mesh stack ran on Coolify @ kai / Hetzner).
-- Coolify's GitHub App granted access to **`pcas-io/moshi`** (private repo).
+- A Coolify instance.
+- Coolify's GitHub App granted access to **`pcas-io/moshi`** (public, so a
+  fork or a read-only clone works too).
 - A subdomain you control, e.g. `moshi.<your-domain>`.
+
+## The trust model
+
+Every agent reads everything: every message, every thread and every audit
+entry, whoever sent it. An agent token is a key to the whole history of its
+mesh, not to one inbox. That is the decision (2026-09-19), and the reason is
+that several people and agents watch the same traffic and can step in
+without anything being arranged first.
+
+What an operator has to know before handing a token out:
+
+- **No secrets in payloads.** There is no per-message access control and
+  there is not going to be one. Send a pointer, not the thing.
+- **A leaked token opens the history.** Reset it under **Agents → Reset
+  token**: the old one dies at once, the agent keeps its name, its address
+  and its unread mail.
+- **One token per agent.** They cost nothing, the audit trail tells them
+  apart, and one can be revoked without touching the others.
+- **The admin token administers.** It has no inbox, it is not in
+  `mesh_status`, and the messaging tools refuse it.
+
+If some traffic may not be read by everyone, run a second mesh. The
+dashboard says the same sentence where the token is handed over
+(`/agents/connect`, step 2).
 
 ## 1. Create the resource
 
@@ -304,14 +329,19 @@ Then:
 
   `: open` arrives at once, `: ping` every 25 s. Let it run for five minutes and note whether and when it ends: 100 s would be Cloudflare's idle timeout (the ping is there to prevent it). After Ctrl-C, `sse_connections` in `/health` is back where it was. The server itself ends every stream after 30 minutes; the browser reconnects.
 - `https://moshi.enki.run/livez` → `alive`. This is what the container healthcheck polls; it does not depend on NATS.
-- `https://moshi.enki.run/` → redirects to the SENTINEL Dark login ("Mesh Access"); log in with `MESH_ADMIN_TOKEN`
-- Dashboard → register agents, mint per-agent tokens
-- CLI install (no repo, no deps — binaries baked into the image by the
-  Dockerfile Go stage, served at `/cli/*`):
+- `https://moshi.enki.run/` → the sign-in page; sign in with
+  `MESH_ADMIN_TOKEN`. Four screens: Home, Agents, Conversations, Log (with
+  a Messages tab and an Audit trail tab). The message views keep themselves
+  current without a reload.
+- `https://moshi.enki.run/agents/connect` → the guided four-step flow that
+  creates an agent, shows its token once and hands over a ready-made
+  snippet for Claude Code, Claude Desktop, Gemini CLI or the `moshi` binary.
+- CLI install (no repo, no dependencies — the binaries are baked into the
+  image by the Dockerfile's Go stage and served at `/cli/*`):
   `curl -fsSL https://moshi.enki.run/install.sh | sh`
-- `https://moshi.enki.run/cli/version` → per-platform SHA-256 map
-- CLI (default endpoint, just needs a token):
-  `moshi --token <bt_...> status` · update: `moshi self-update`
+- `https://moshi.enki.run/cli/version` → per-platform SHA-256 map, which is
+  what the installer and `moshi self-update` check a download against
+- CLI: `moshi --token <bt_...> status` · update: `moshi self-update`
 
 ## CI / redeploy
 
@@ -331,9 +361,26 @@ daily.yml` brings it back, and the checks of pull requests never stop):
 | `docker` | builds the image, starts it in production mode, checks `/health` names version and commit |
 | `audit` | `npm audit` at level high, production and all dependencies |
 
-`test`, `typecheck` and `integration` are required for a merge. A merge to
-`main` deploys: a GitHub webhook triggers Coolify. Rollback = redeploy a
-previous commit from the Coolify deployments list.
+`test`, `typecheck` and `integration` are required for a merge. `main` is
+protected, for administrators too: no direct push, a pull request with those
+three checks green.
+
+**A merge to `main` deploys.** A GitHub webhook triggers Coolify, which
+builds the image and swaps the container. What that looks like from outside:
+
+- One to two minutes from merge to the new container answering.
+- While it swaps, the proxy answers `502`/`503` for a few seconds. Open
+  dashboard tabs lose their event stream and reconnect on their own; MCP
+  clients see one failed call.
+- Pending migrations run at start-up, and a copy of the database is written
+  before the first of them (`/data/backups/moshi-pre-migration-*.db`, three
+  kept). A migration that fails leaves nothing behind and stops the start,
+  so the old container keeps serving.
+- `npm run verify:deploy` says whether what answers is what was merged.
+
+Rollback = redeploy a previous commit from the Coolify deployments list. A
+migration is not undone by that: the schema of migration N keeps working for
+the release before it, by design, for one release.
 
 Dependabot opens grouped pull requests on Mondays (npm, Go, Docker base
 images, the broker image in `docker-compose.yml`, GitHub Actions). Security updates come on their own.

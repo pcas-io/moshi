@@ -269,6 +269,15 @@ const StepToken: FC<{
         the old one stops working immediately.
       </div>
 
+      {/* The trust model, where the token is handed over: this is the one
+          moment somebody decides what to give it access to. Stated plainly,
+          without a warning sign — it is the design, not a risk notice. */}
+      <div style={`margin-top:12px;font-size:14px;color:${T.body}`}>
+        This token reads the whole mesh: every message, every thread, every
+        audit entry, whoever sent it. One mesh, no hidden channels. Keep
+        secrets out of payloads.
+      </div>
+
       <div style={ACTION_ROW}>
         <GhostLink href={stepHref(1, s, client)}>Back</GhostLink>
         {/* Inert-looking, still legible: dim on the `line` fill is
