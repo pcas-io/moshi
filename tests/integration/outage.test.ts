@@ -155,7 +155,12 @@ describe.skipIf(!URL || !CONTAINER)("a broker that stops answering", () => {
     for (const path of ["/", "/agents", "/log", "/conversations"]) {
       const page = await timed(path, { Cookie: cookie, Accept: "text/html" });
       expect(page.res.status, path).toBe(200);
-      expect(page.ms, path).toBeLessThan(500);
+      // What this proves is that a page does not WAIT on the broker. One that
+      // did would pay JS_TIMEOUT_MS (1500 ms) at least. Measured here: 17 ms
+      // for the first page, 1 to 3 ms for the rest; a loaded CI runner took
+      // 504 ms for the first one and failed a 500 ms bound that was never
+      // about the cost of rendering.
+      expect(page.ms, path).toBeLessThan(1200);
     }
   }, 30_000);
 
