@@ -7,6 +7,7 @@
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
 import { V2_TOKENS, V2_FONT_FAMILY_SANS } from "./v2/tokens.js";
+import { FONT_FACE_CSS } from "./fonts.js";
 
 const T = V2_TOKENS;
 
@@ -26,7 +27,7 @@ export const SignOutPage: FC<{ csrfToken: string }> = ({ csrfToken }) => (
       <meta name="color-scheme" content="light" />
       <meta name="robots" content="noindex" />
       <title>Sign out — moshi.moshi</title>
-      {raw(`<style>${STYLE}</style>`)}
+      {raw(`<style>${FONT_FACE_CSS}${STYLE}</style>`)}
     </head>
     <body>
       <main style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:28px">

@@ -26,6 +26,7 @@ export const TEST_CONFIG: Config = {
   // Like production: a proxy in front that appends its peer to X-Forwarded-For.
   behindProxy: true,
   commit: "unknown",
+  cspMode: "report",
   backupDir: null,
   backupKeep: 0,
 };

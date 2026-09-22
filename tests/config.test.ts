@@ -81,6 +81,28 @@ describe("loadConfig", () => {
       if (isConfigError(result)) expect(result.errors.join(" ")).toContain("MESH_BEHIND_PROXY");
     });
 
+    // Content-Security-Policy: report first, enforce when told to.
+    it("reads MESH_CSP: report unless said otherwise, trimmed and in any case", () => {
+      const mode = (env: NodeJS.ProcessEnv) => {
+        const result = loadConfig(env);
+        if (isConfigError(result)) throw new Error(result.errors.join("; "));
+        return result.cspMode;
+      };
+      expect(mode(VALID_PROD_ENV)).toBe("report");
+      expect(mode({ ...VALID_PROD_ENV, MESH_CSP: "" })).toBe("report"); // compose passes "" when unset
+      expect(mode({ ...VALID_PROD_ENV, MESH_CSP: " Enforce " })).toBe("enforce");
+      expect(mode({ ...VALID_PROD_ENV, MESH_CSP: "REPORT" })).toBe("report");
+      expect(mode({ ...VALID_DEV_ENV, MESH_CSP: "off" })).toBe("off");
+    });
+
+    it("refuses a MESH_CSP it cannot read: 'enforced' must not quietly mean report", () => {
+      for (const bad of ["enforced", "block", "1"]) {
+        const result = loadConfig({ ...VALID_PROD_ENV, MESH_CSP: bad });
+        expect(isConfigError(result), bad).toBe(true);
+        if (isConfigError(result)) expect(result.errors.join(" ")).toContain(`MESH_CSP must be enforce, report or off (got "${bad}")`);
+      }
+    });
+
     it("applies defaults for NATS_URL, DATABASE_PATH, and PORT", () => {
       const minimal: NodeJS.ProcessEnv = { MESH_ADMIN_TOKEN: "a".repeat(32) };
       const result = loadConfig(minimal);

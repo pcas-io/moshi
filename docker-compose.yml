@@ -24,6 +24,10 @@ services:
       # the address failed sign-ins are counted against. Set to 0 when you
       # publish the port yourself: then the header is the sender's own text.
       - MESH_BEHIND_PROXY=${MESH_BEHIND_PROXY:-1}
+      # Content-Security-Policy: enforce | report | off. Empty = the default.
+      # "report" sends the policy Report-Only: the browser says what it WOULD
+      # block (POST /csp-report) and blocks nothing.
+      - MESH_CSP=${MESH_CSP:-}
       - DATABASE_PATH=/data/moshi.db
       # Daily copies of the database. Empty means the defaults: next to the
       # database (/data/backups), seven of them. BACKUP_KEEP=0 switches them off.

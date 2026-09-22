@@ -23,6 +23,10 @@ describe("docker-compose.yml", () => {
     expect(service("moshi")).not.toMatch(/\n    ports:\n/);
   });
 
+  it("hands MESH_CSP to the container: a switch that never arrives switches nothing", () => {
+    expect(service("moshi")).toMatch(/- MESH_CSP=\$\{MESH_CSP:-\}/);
+  });
+
   it("hands MESH_ADMIN_TOKEN_PREVIOUS to the container: the rotation DEPLOY.md describes never arrived", () => {
     expect(service("moshi")).toMatch(/- MESH_ADMIN_TOKEN_PREVIOUS=\$\{MESH_ADMIN_TOKEN_PREVIOUS:-\}/);
   });

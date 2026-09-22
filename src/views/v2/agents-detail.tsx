@@ -461,7 +461,7 @@ export const DeleteModal: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({
 
 // The only client state on this screen. Emitted after the modal markup so the
 // lookup resolves without waiting for DOMContentLoaded.
-export const AGENTS_SCRIPT = raw(`<script>
+export const AGENTS_JS = `
 (function(){
   var modal = document.getElementById('v2-del-modal');
   if (!modal) return;
@@ -475,4 +475,4 @@ export const AGENTS_SCRIPT = raw(`<script>
     if (e.key === 'Escape' && modal.style.display !== 'none') { modal.style.display = 'none'; }
   });
 })();
-</script>`);
+`;

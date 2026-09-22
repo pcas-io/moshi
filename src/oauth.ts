@@ -6,6 +6,7 @@ import type { AgentService } from "./services/agent.js";
 import type { Env, AppVariables } from "./types.js";
 import { V2_TOKENS } from "./views/v2/tokens.js";
 import { formString, formRaw } from "./routes/form.js";
+import { FONT_FACE_CSS } from "./views/fonts.js";
 import { issueCode, redeemCode, CODE_CHALLENGE_PATTERN } from "./oauth-codes.js";
 import { throttledResponse } from "./views/throttled.js";
 import { isSameOriginPost } from "./auth.js";
@@ -112,10 +113,7 @@ function authorizePageHTML(params: {
   <meta name="color-scheme" content="light">
   <title>Authorize — moshi.moshi</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e8a3e'/%3E%3Ctext x='16' y='23' text-anchor='middle' fill='%23ffffff' font-family='sans-serif' font-size='19' font-weight='800'%3Em%3C/text%3E%3C/svg%3E">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <style>
+  <style>${FONT_FACE_CSS}
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: 'Sora', system-ui, sans-serif; color: ${T.ink};
@@ -192,6 +190,46 @@ function authorizePageHTML(params: {
     </form>
     <div class="hint">The token is exchanged server-side and never appears in a URL. The code expires in five minutes. An agent token starts with <code>bt_</code> — the admin token will not work here.</div>
   </div>
+</body>
+</html>`;
+}
+
+// --- The page that hands the browser on to the client ---
+// POST /oauth/authorize is answered with this page, not with a 302. Chrome
+// applies the page's form-action to EVERY redirect that follows a form post:
+// a client whose callback redirects on (to its "you can close this tab" page
+// on another origin) left the browser standing on the consent form, with the
+// code already spent. Naming the client's origin in the policy covered one
+// hop only, could not be written for an IPv6 loopback client at all, and put
+// a piece of the request into a security header (a host may contain ';').
+// A refresh is a new navigation and no form's, so every page keeps
+// form-action 'self'. The link is for a browser that does not follow a refresh.
+// No script, no font: it is on the screen for a moment.
+function handoffPageHTML(target: string): string {
+  const url = escapeHtml(target);
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta http-equiv="refresh" content="0;url=${url}">
+  <title>Authorized — moshi.moshi</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 28px; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: ${T.ink}; background: ${T.paper}; }
+    main { max-width: 440px; }
+    h1 { margin: 0 0 10px; font-size: 22px; font-weight: 600; }
+    p { margin: 0 0 16px; font-size: 15px; line-height: 1.5; color: ${T.body}; }
+    a { color: ${T.greenDeep}; }
+    a:focus-visible { outline: 2px solid ${T.greenDeep}; outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Authorized</h1>
+    <p>Returning to the application that asked. If nothing happens:</p>
+    <a href="${url}">Continue</a>
+  </main>
 </body>
 </html>`;
 }
@@ -415,7 +453,7 @@ export function createOAuthRoutes(agents: AgentService, db: Database.Database, g
     url.searchParams.set("code", code);
     if (state) url.searchParams.set("state", state);
 
-    return c.redirect(url.toString());
+    return c.html(handoffPageHTML(url.toString()));
   });
 
   // Token endpoint — exchanges code for access token

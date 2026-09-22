@@ -13,8 +13,9 @@ import type { SignInGuard } from "./services/signin-guard";
 // /install.* + /cli/* are public by design: the served binary contains
 // no secrets (the moshi token is supplied by the user at runtime), and a
 // frictionless `curl … | sh` one-liner is the whole point.
-const PUBLIC_EXACT = new Set(["/health", "/livez", "/login", "/install.sh", "/install.ps1"]);
-const PUBLIC_PREFIX = ["/oauth", "/.well-known/", "/cli/"];
+const PUBLIC_EXACT = new Set(["/health", "/livez", "/login", "/install.sh", "/install.ps1", "/csp-report"]);
+// /fonts/*: the sign-in page needs its typefaces before anybody has signed in.
+const PUBLIC_PREFIX = ["/oauth", "/.well-known/", "/cli/", "/fonts/"];
 
 function isPublicPath(path: string): boolean {
   if (PUBLIC_EXACT.has(path)) return true;

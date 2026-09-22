@@ -46,10 +46,11 @@ describe("LoginPage — document shell", () => {
     expect(html).not.toContain("%2305e901");
   });
 
-  it("loads Sora 400/600/700 because the brand mark is drawn at 700", async () => {
+  it("brings Sora and JetBrains Mono from this origin: the brand mark is drawn at 700, and a variable file has it", async () => {
     const html = await render({ ...BASE });
-    expect(html).toContain("family=Sora:wght@400;600;700");
-    expect(html).toContain("family=JetBrains+Mono:wght@400;500;600");
+    expect(html).toMatch(/@font-face \{\s*font-family: 'Sora';[^}]*font-weight: 100 800;[^}]*url\(\/fonts\/sora-latin\./);
+    expect(html).toMatch(/@font-face \{\s*font-family: 'JetBrains Mono';/);
+    expect(html).not.toMatch(/googleapis|gstatic/);
     expect(html).toContain("font-weight:700;font-size:22px");
   });
 });

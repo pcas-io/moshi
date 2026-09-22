@@ -16,6 +16,7 @@
 // stays out: layout.tsx injects the one copy handler for every page, and this
 // screen has nothing to copy.
 
+import { InlineScript } from "../nonce.js";
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
 import type { Presence } from "../../services/presence.js";
@@ -25,7 +26,7 @@ import { PRESENCE_WORD, V2Avatar, V2Dot } from "./components.js";
 import { V2_TOKENS } from "./tokens.js";
 import type { V2AgentsAgent } from "./agents-detail.js";
 import {
-  AGENTS_CSS, AGENTS_SCRIPT, CARD_PANEL, DeleteModal, DetailAside, ON_SOLID, fmtRel,
+  AGENTS_CSS, AGENTS_JS, CARD_PANEL, DeleteModal, DetailAside, ON_SOLID, fmtRel,
 } from "./agents-detail.js";
 
 const T = V2_TOKENS;
@@ -326,7 +327,7 @@ export const V2AgentsPage: FC<V2AgentsProps> = ({
       </div>
 
       {inspected && <DeleteModal agent={inspected} csrfToken={csrfToken} />}
-      {inspected && AGENTS_SCRIPT}
+      {inspected && <InlineScript code={AGENTS_JS} />}
     </V2Layout>
   );
 };

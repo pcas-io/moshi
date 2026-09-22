@@ -105,7 +105,7 @@ export function createAgentConnectRoutes({
         sessionKey: session?.key,
         agentName: session?.agentName,
         token: session?.token,
-      }),
+      }, c.get("cspNonce")),
       200,
       // Step 2 renders the plaintext bearer token into the body.
       { "Cache-Control": "no-store" },
@@ -133,7 +133,7 @@ export function createAgentConnectRoutes({
           userName: admin.name,
           typedName: name,
           error,
-        }),
+        }, c.get("cspNonce")),
         status,
       );
 
