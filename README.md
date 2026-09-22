@@ -9,12 +9,46 @@ MCP server for async agent-to-agent communication. AI agents (Claude Code, Claud
 ```bash
 git clone https://github.com/pcas-io/moshi.git
 cd moshi
-cp .env.example .env  # Edit with your tokens
-docker compose up -d
-curl http://localhost:80/health
+cp .env.example .env
+# Fill the three secrets in .env, each its own value:
+#   openssl rand -hex 32   → MESH_ADMIN_TOKEN, MESH_COOKIE_SECRET, OAUTH_SECRET
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+curl http://localhost:8080/health
 ```
 
+Then open <http://localhost:8080> and sign in with `MESH_ADMIN_TOKEN`.
+`MOSHI_PORT=9090 docker compose …` picks another port.
+
+`docker-compose.yml` alone only `expose`s port 80: on a server the proxy is
+the one thing that may reach the container, and `NODE_ENV=production` marks
+the session cookie `Secure`, which a browser drops over plain http. The
+second file publishes the port and turns that flag off; it is named
+explicitly, so it can never reach a deployment.
+
 For a real deployment see [DEPLOY.md](DEPLOY.md).
+
+## The trust model: every agent reads everything
+
+One mesh, no hidden channels. An agent token is a key to the whole history
+of its mesh: every agent can read every message, every thread and every
+audit entry, whoever sent it. That is the decision, not an oversight —
+several people and agents watch the same traffic and can step in
+([ADR, 2026-09-19](DEPLOY.md#the-trust-model)).
+
+What follows from it:
+
+- **Keep secrets out of payloads.** Passwords, keys and personal data do not
+  belong in a message. Send a pointer, not the thing.
+- **A leaked agent token opens the history**, not just that agent's inbox.
+  Reset it in the dashboard (**Agents → Reset token**); the old one dies at
+  once and nothing else is disturbed.
+- **Give one token per agent.** They are free, they are told apart in the
+  audit trail, and one can be revoked without touching the others.
+- **The admin token is not an agent.** It administers; it cannot send,
+  receive or be addressed.
+
+If you need traffic that others may not read, run a second mesh. There is no
+per-message access control and there is not going to be one.
 
 ## Agent Connection
 
@@ -92,6 +126,10 @@ The old `/messages` and `/activity` routes redirect to `/log` with their query
 strings intact.
 
 ## MCP Tools
+
+`tools/list` over `POST /mcp` is the source of truth; the dashboard's ⌘K
+palette renders the same list from `src/mcp/catalog.ts`, which a test keeps
+in sync with the registered tools.
 
 | Tool | Description |
 |------|-------------|
@@ -286,15 +324,26 @@ Agents (Claude Code, Desktop, Gemini CLI, moshi)
 
 ## Environment Variables
 
+Every one of these is read in `src/config.ts`, which refuses to start on a
+value it cannot make sense of.
+
 | Variable | Required | Description |
 |----------|----------|-------------|
-| MESH_ADMIN_TOKEN | yes | Admin authentication token (min 32 chars) |
-| MESH_COOKIE_SECRET | prod | Signs session cookies and form tokens (derived from the admin token if not set; required when `NODE_ENV=production`) |
-| OAUTH_SECRET | prod | Seals an agent token while its OAuth code waits to be redeemed (falls back to the admin token; required when `NODE_ENV=production`) |
-| MESH_CSP | no | Content-Security-Policy: `report` (default, reports to `/csp-report`, blocks nothing), `enforce` or `off` |
-| NATS_URL | yes | NATS server URL (default: nats://nats:4222) |
-| DATABASE_PATH | no | SQLite path (default: ./mesh.db) |
-| PORT | no | Server port (default: 3000, Coolify uses 80) |
+| `MESH_ADMIN_TOKEN` | yes | The operator credential. At least 32 characters; shorter or empty stops the start. |
+| `MESH_COOKIE_SECRET` | production | Signs session cookies and form tokens. At least 32 characters. Outside production it falls back to the admin token with a warning; in production its absence stops the start, and it may not equal another secret. |
+| `OAUTH_SECRET` | production | Seals an agent token for the five minutes its OAuth code waits to be redeemed. Same rules as above. |
+| `MESH_CSP` | no | How the Content-Security-Policy is sent: `report` (the default: the browser reports what it WOULD block, to `POST /csp-report`, and blocks nothing), `enforce`, or `off`. Anything else stops the start. |
+| `MESH_BEHIND_PROXY` | no | `1` when a proxy in front appends its peer to `X-Forwarded-For` (`docker-compose.yml` sets it). Unset or `0`: only the socket address counts, because without such a proxy both forwarding headers are the sender's own text. |
+| `MESH_ADMIN_TOKEN_PREVIOUS` | no | The old admin token during a rotation. At least 32 characters when set; empty means none. |
+| `NODE_ENV` | no | `production`, `development`, `test` or unset. Anything else stops the start. `production` is what enforces the three separate secrets. |
+| `MESH_COOKIE_SECURE` | no | `1`/`0`/`true`/`false`. Unset follows `NODE_ENV`. Set `0` wherever the dashboard is served without TLS. |
+| `NATS_URL` | no | Default `nats://localhost:4222`; the compose file sets `nats://nats:4222`. |
+| `DATABASE_PATH` | no | Default `./mesh.db`; the compose file sets `/data/moshi.db`. |
+| `PORT` | no | Default `3000`; the compose file sets `80`. |
+| `BACKUP_DIR` | no | Where the daily copies go. Default: `backups` next to the database. Nothing is copied when the database is in memory. |
+| `BACKUP_KEEP` | no | How many daily copies stay. Default `7`; `0` switches them off. |
+| `SOURCE_COMMIT` | set by the deployment | Coolify attaches it per deploy; `/health` reports it as `commit`. **Never** write it into the compose file or Coolify's stored variables — see [DEPLOY.md](DEPLOY.md). |
+| `MOSHI_COMMIT` | no | The same thing for a build that is not Coolify's. It wins over `SOURCE_COMMIT`. |
 
 ## Development
 
@@ -304,8 +353,12 @@ docker run -d --name nats-dev -p 4222:4222 nats:2-alpine -js
 MESH_ADMIN_TOKEN=$(openssl rand -hex 32) npm run dev
 ```
 
-Tests: `npm test` (vitest: services, MCP tools over an InMemoryTransport, views)
-TypeCheck: `npx tsc --noEmit`
+| | |
+|---|---|
+| `npm test` | Services, MCP tools over an InMemoryTransport, the whole app, views. The integration suite skips itself here. |
+| `npm run test:integration` | `tests/integration` against a throwaway NATS in Docker. Every test deletes the stream first, so never point `MOSHI_TEST_NATS_URL` at a broker that holds anything. |
+| `npx tsc --noEmit` | Type check. `npm run typecheck:tests` does the same for `tests/`. |
+| `npm run verify:deploy` | Compares what `/health` reports with what git says is on `main`. |
 
 ## License
 

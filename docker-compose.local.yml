@@ -1,0 +1,16 @@
+# What the stack needs to be reachable from this machine, and nothing that
+# belongs on a server. Used explicitly, so that it can never reach a
+# deployment: Coolify builds `docker-compose.yml` alone.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# `docker-compose.yml` only `expose`s port 80: on a server the proxy is the
+# one thing that may talk to the container. Here the port has to be
+# published, and a browser drops a Secure cookie that arrives over plain
+# http, which turned every sign-in into "This sign-in page had expired".
+services:
+  moshi:
+    ports:
+      - "${MOSHI_PORT:-8080}:80"
+    environment:
+      - MESH_COOKIE_SECURE=0
