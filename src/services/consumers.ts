@@ -61,9 +61,15 @@ export class ConsumerRegistry {
   private generation = 0;
 
   private readonly clockToleranceMs: number;
+  private readonly ackWaitNs: number;
+  private readonly maxDeliver: number;
 
-  constructor(private readonly admin: ConsumerAdmin, opts: { clockToleranceMs?: number } = {}) {
+  /** `ackWaitMs` and `maxDeliver`: only tests change them. Waiting out five
+   *  redeliveries at 30 s each is not something a test can do. */
+  constructor(private readonly admin: ConsumerAdmin, opts: { clockToleranceMs?: number; ackWaitMs?: number; maxDeliver?: number } = {}) {
     this.clockToleranceMs = opts.clockToleranceMs ?? CLOCK_TOLERANCE_MS;
+    this.ackWaitNs = opts.ackWaitMs !== undefined ? opts.ackWaitMs * 1_000_000 : ACK_WAIT_NS;
+    this.maxDeliver = opts.maxDeliver ?? MAX_DELIVER;
   }
 
   /** Make sure both durables for `inboxKey` exist. `since` is the agent's
@@ -112,12 +118,12 @@ export class ConsumerRegistry {
    *  a recreate would replay the inbox. */
   private async alignSettings(durable: string, config: Partial<ConsumerConfig> | undefined): Promise<void> {
     if (!config || !this.admin.update) return;
-    if (config.ack_wait === ACK_WAIT_NS && config.max_deliver === MAX_DELIVER) return;
+    if (config.ack_wait === this.ackWaitNs && config.max_deliver === this.maxDeliver) return;
     log("warn", "durable settings differ, updating", {
-      durable, ack_wait: { from: config.ack_wait, to: ACK_WAIT_NS }, max_deliver: { from: config.max_deliver, to: MAX_DELIVER },
+      durable, ack_wait: { from: config.ack_wait, to: this.ackWaitNs }, max_deliver: { from: config.max_deliver, to: this.maxDeliver },
     });
     try {
-      await this.admin.update(durable, { ...config, ack_wait: ACK_WAIT_NS, max_deliver: MAX_DELIVER });
+      await this.admin.update(durable, { ...config, ack_wait: this.ackWaitNs, max_deliver: this.maxDeliver });
     } catch (err) {
       // The broker answered, and the answer is no (a hand-made durable with a
       // backoff list, say). It works as it is: keep it, say so, go on. Thrown
@@ -146,8 +152,8 @@ export class ConsumerRegistry {
       durable_name: durable,
       filter_subject: filterSubject,
       ack_policy: AckPolicy.Explicit,
-      max_deliver: MAX_DELIVER,
-      ack_wait: ACK_WAIT_NS,
+      max_deliver: this.maxDeliver,
+      ack_wait: this.ackWaitNs,
       ...(since ? { deliver_policy: DeliverPolicy.StartTime, opt_start_time: since } : {}),
     });
   }
