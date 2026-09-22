@@ -275,6 +275,7 @@ Agents (Claude Code, Desktop, Gemini CLI, moshi)
 | MESH_ADMIN_TOKEN | yes | Admin authentication token (min 32 chars) |
 | MESH_COOKIE_SECRET | prod | Signs session cookies and form tokens (derived from the admin token if not set; required when `NODE_ENV=production`) |
 | OAUTH_SECRET | prod | Seals an agent token while its OAuth code waits to be redeemed (falls back to the admin token; required when `NODE_ENV=production`) |
+| MESH_CSP | no | Content-Security-Policy: `report` (default, reports to `/csp-report`, blocks nothing), `enforce` or `off` |
 | NATS_URL | yes | NATS server URL (default: nats://nats:4222) |
 | DATABASE_PATH | no | SQLite path (default: ./mesh.db) |
 | PORT | no | Server port (default: 3000, Coolify uses 80) |

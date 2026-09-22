@@ -122,6 +122,35 @@ in a /64 has all of them. Whose address is it? That depends on
 > bot rules) applies to that request. That is why the header above is
 > believed only from Cloudflare's ranges.
 
+### What a browser is told
+
+- **Fonts** come from this origin (`/fonts/*`, two variable families, OFL,
+  latin and latin-ext, cached for a year under names that carry the hash of
+  their bytes). No page asks a third party for anything, the sign-in page
+  included.
+- **Content-Security-Policy** on every answer, the `413` of a body limit
+  included. A page: `default-src 'none'`, scripts only with the nonce of their
+  response, images, fonts and `fetch` from this origin, forms to this origin,
+  nothing may frame it. Everything that is not a page: `default-src 'none'`.
+  Nothing a request says is ever part of the header. `MESH_CSP` says how the
+  policy is sent, and `docker-compose.yml` passes it on: `report` (the default
+  for now: the browser reports what WOULD be blocked to `POST /csp-report`
+  and blocks nothing), `enforce`, or `off`. The start-up line names the mode
+  (`csp`). Reports land in the log as `csp violation`: path, directive, what
+  was blocked, and for a script its file and its first characters, which is
+  what tells an own script from one that Cloudflare or a browser extension
+  put into the page. At most 60 lines a minute; `csp violations not logged`
+  says how many were left out. When a policy ever breaks a page in
+  production, `MESH_CSP=report` is the switch.
+- **The OAuth consent form is answered with a page**, not with a redirect:
+  it sends the browser on to the client with a refresh and a "Continue"
+  link. Chrome applies `form-action` to every redirect that follows a form
+  post, so a client that redirects on from its callback would strand the
+  browser on the consent form.
+- **Strict-Transport-Security** (`max-age=31536000; includeSubDomains`, no
+  `preload`) where the deployment is served over TLS: production with a
+  `Secure` cookie. A plain-http host (`MESH_COOKIE_SECURE=0`) never gets it.
+
 ## 3. Domain + TLS
 
 Point a DNS record for **`moshi.enki.run`** at the Coolify host, then map
