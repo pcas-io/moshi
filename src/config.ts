@@ -148,11 +148,14 @@ export function loadConfig(
     else errors.push(`BACKUP_KEEP must be a whole number from 0 to 365 (got "${backupKeepRaw}")`);
   }
 
-  // Port parsing
-  const portStr = env.PORT ?? "3000";
-  const port = parseInt(portStr, 10);
+  // Port parsing. Digits and nothing else: parseInt stops at the first
+  // character that is not one, so "8080 # behind the proxy" was read as 8080
+  // and "80abc" as 80 — the one value this section's promise did not hold
+  // for. BACKUP_KEEP is already strict the same way.
+  const portStr = (env.PORT ?? "3000").trim();
+  const port = /^\d{1,5}$/.test(portStr) ? parseInt(portStr, 10) : NaN;
   if (Number.isNaN(port) || port < 1 || port > 65535) {
-    errors.push(`PORT must be a valid port number (got "${portStr}")`);
+    errors.push(`PORT must be a valid port number (got "${env.PORT}")`);
   }
 
   // Secure on the session cookie. A browser drops a Secure cookie that

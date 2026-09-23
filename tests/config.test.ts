@@ -127,6 +127,21 @@ describe("loadConfig", () => {
       }
     });
 
+    // parseInt stops at the first character that is not a digit, so
+    // `PORT="8080 # behind the proxy"` was read as 8080 and the comment
+    // silently discarded — the one value the section's promise ("refuses to
+    // start on a value it cannot make sense of") did not hold for.
+    it("refuses a PORT that is not digits alone", () => {
+      for (const bad of ["80abc", "3000.9", "8080 # behind the proxy", "", " ", "-1", "0x50", "80800"]) {
+        const result = loadConfig({ ...VALID_PROD_ENV, PORT: bad });
+        expect(isConfigError(result), bad).toBe(true);
+        if (isConfigError(result)) expect(result.errors.join(" ")).toContain("PORT must be a valid port number");
+      }
+      const good = loadConfig({ ...VALID_PROD_ENV, PORT: " 8080 " });
+      expect(isConfigError(good)).toBe(false);
+      if (!isConfigError(good)) expect(good.port).toBe(8080);
+    });
+
     it("applies defaults for NATS_URL, DATABASE_PATH, and PORT", () => {
       const minimal: NodeJS.ProcessEnv = { MESH_ADMIN_TOKEN: "a".repeat(32) };
       const result = loadConfig(minimal);
