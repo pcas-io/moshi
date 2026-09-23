@@ -85,7 +85,7 @@ export function registerHistoryTools(server: McpServer, ctx: ToolContext): void 
   // ── mesh_get ──────────────────────────────────────────────────
   server.tool(
     "mesh_get",
-    "Fetch one message with its complete payload — use it after mesh_receive returned a truncated preview (payload_truncated=true). Also says whether it was read: read_at for a direct message (null = not handed to its recipient yet), read_by for a broadcast.",
+    "Fetch one message with its complete payload — use it after mesh_receive returned a truncated preview (payload_truncated=true). Also says whether it was read: read_at for a direct message (null = not handed to its recipient yet), read_by for a broadcast. Both are ABSENT, not null, for a message stored before reads were recorded (migration 0010): about it nothing is known, and null would say the opposite.",
     {
       message_id: z.string().max(FIELD_LIMITS.ID).describe("The message id (msg_…) from mesh_receive or mesh_history"),
     },
