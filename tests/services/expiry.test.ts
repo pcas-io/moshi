@@ -75,7 +75,13 @@ describe("expired unread", () => {
     const readByAnother = stored();
     markRead(db, [readByAnother.id], "gamma");
     stored({ ttl: 86_400 }); // still running
-    stored({ to: "broadcast", toKey: null }); // nobody in particular missed it
+    // Both halves of "direct mail only", each on its own row. A broadcast
+    // this code wrote has to_key "" and is excluded by `!= \'\'`; a row from
+    // before recipients were stored by key has NULL and is excluded by
+    // `IS NOT NULL`. With only the NULL row the second half was pinned by
+    // nothing: dropping it left the whole suite green.
+    stored({ to: "broadcast", toKey: "" }); // nobody in particular missed it
+    stored({ to: "broadcast", toKey: null }); // and from before the keys
     stored({ ageMs: 48 * HOUR }); // from before reads were recorded
 
     expect(sweepExpiredUnread(db, activity)).toBe(2);

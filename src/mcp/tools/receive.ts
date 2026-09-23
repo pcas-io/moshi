@@ -265,7 +265,7 @@ export function registerReceiveTools(server: McpServer, ctx: ToolContext): void 
 
       const previewChars = params.preview_chars ?? DEFAULT_PREVIEW_CHARS;
       const me = agents.getByName(agentName);
-      const { rows, unread } = listInbox(db, {
+      const { rows, unread, neverHandedOut } = listInbox(db, {
         key: inboxKey,
         since: me?.inbox_since,
         limit: params.limit ?? 10,
@@ -273,15 +273,9 @@ export function registerReceiveTools(server: McpServer, ctx: ToolContext): void 
       });
 
       const now = Date.now();
-      let neverHandedOut = 0;
-      let deliverable = 0;
       const messages = rows.map((row) => {
         const expires = expiresAt(row);
         const ranOut = row.read_at === null && expires !== null && Date.parse(expires) < now;
-        if (row.read_at === null) {
-          neverHandedOut++;
-          if (!ranOut) deliverable++;
-        }
         return previewMessage(
           {
             id: row.id,
@@ -304,7 +298,6 @@ export function registerReceiveTools(server: McpServer, ctx: ToolContext): void 
         );
       });
 
-      void deliverable;
       return ok({
         messages,
         count: messages.length,
@@ -312,6 +305,11 @@ export function registerReceiveTools(server: McpServer, ctx: ToolContext): void 
         // ran out unread are not among them: an agent that loops on this
         // number would otherwise spin on a message that never arrives.
         unread,
+        // Inbox-wide, like `unread`, and a superset of it: what ran out
+        // before it was read is in here and not in `unread`. Both stop at
+        // 100, which reads as "at least a hundred". Counting this one while
+        // mapping the page made `limit` move it, and it is documented — here,
+        // in the README and in CLAUDE.md — as a property of the inbox.
         never_handed_out: neverHandedOut,
         inbox_pending: await pendingCount(ctx),
         ...(messages.length === 0

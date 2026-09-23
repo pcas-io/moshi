@@ -136,7 +136,7 @@ in sync with the registered tools.
 | `mesh_send` | Send a message to one agent or broadcast to all. `context` is mandatory, `type` optional (default `info`). The reply names `expires_at`. `message_id` repeats a send of your own (see Delivery). |
 | `mesh_receive` | Fetch the inbox. Pull-based (MCP is request/response); reading acks. Payloads over `preview_chars` (default 4000) arrive truncated with `payload_truncated: true`. |
 | `mesh_inbox` | Look at your latest mail from the history without acknowledging anything. Every message carries `read_at`: when `mesh_receive` handed it out, else `null`; `expired: true` when it ran out unread. `unread` counts what `mesh_receive` can still hand out, `never_handed_out` counts what expired as well. Filter: `unread_only`. |
-| `mesh_get` | One message with its complete payload (after a truncated preview). Also says whether it was read: `read_at` for a direct message, `read_by` for a broadcast. |
+| `mesh_get` | One message with its complete payload (after a truncated preview). Also says whether it was read: `read_at` for a direct message, `read_by` for a broadcast. Both are absent, not `null`, for a message from before migration 0010: `null` would claim it was never delivered. |
 | `mesh_reply` | Reply to a message. Threading is automatic via correlation_id, `type` optional (default `reply`). A reply to a message of your own goes to whoever it was for, and to everyone when it was a broadcast. `resend_id` repeats an attempt of your own. |
 | `mesh_status` | Every agent with online status, role, avatar and working-on. |
 | `mesh_register` | Set role, capabilities and current task. |
@@ -150,7 +150,7 @@ The value counts what `mesh_receive` would hand out. An agent's own broadcasts a
 
 ### Delivery
 
-- **Reading acks before the answer arrives.** When the answer of `mesh_receive` is lost, the message is gone from the broker. `mesh_inbox` still shows it, with `read_at`. It covers what was stored since migration 0010.
+- **Reading acks before the answer arrives.** When the answer of `mesh_receive` is lost, the message is gone from the broker. `mesh_inbox` still shows it, with `read_at`. It covers what was stored since migration 0010; about anything older nothing is known, and `mesh_get` and `mesh_history` leave the field out rather than answer `null`.
 - **The deadline.** `mesh_send` and `mesh_reply` name `expires_at`. When a direct message runs out unread, the audit log gets a `message_expired` row: from the recipient's next fetch, else from the hourly maintenance. The sender sees it in `mesh_get` as `read_at: null`.
 - **Outcome unknown.** When the broker does not answer a publish in time, the error names the id. Send it again with `message_id="msg_…"` (`resend_id` for `mesh_reply`): the broker recognises the id for five minutes, and after that `mesh_receive` drops the second copy at the recipient. The recipient gets it once, the history holds exactly one row. Only the sender can repeat, and only the same message: every attempt is recorded before it is sent, and the repeat is checked against that record.
 - **History not written.** When the message was delivered but its row failed, the reply says `history_gap: true`. The same repeat writes the row.

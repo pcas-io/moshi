@@ -93,6 +93,18 @@ version and commit are on `GET /health`.
 - On a 320 px screen the open thread's own header and footer took 366 of its
   383 px and left one line to read in. Stacked, the footer keeps its headline
   and its reply command, and the meta line stops after two lines.
+- `mesh_inbox`'s `never_handed_out` counts the whole inbox again, not the
+  page it just returned. `limit` moved a number that the tool's own
+  description, the README and CLAUDE.md all call a property of the inbox: 17
+  unsent messages with the default limit answered `never_handed_out: 10`
+  against `unread: 17` — smaller than `unread`, which is impossible under
+  that reading, so an agent that trusts the wording concludes seven were
+  already handed to it. It is a bounded count beside `unread` now, stops at
+  100 the same way, and stays a superset of it.
+- `mesh_get` and `mesh_history` say that `read_at` and `read_by` are ABSENT,
+  not `null`, for a message stored before migration 0010. About those rows
+  nothing is known, and `null` says the opposite — "never delivered" — for
+  every message of the 30 days before that deploy.
 
 ### Security
 - `--` now ends the global `--url` and `--token` flags too. The scan for

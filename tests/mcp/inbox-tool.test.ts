@@ -157,6 +157,60 @@ describe("mesh_inbox", () => {
     expect(res.text).toBe(ADMIN_NOT_AGENT_HINT);
   });
 
+  // The bug: never_handed_out was counted while mapping the RETURNED page,
+  // so `limit` moved a number that its own description, the README and
+  // CLAUDE.md all call a property of the inbox. With 17 unsent messages and
+  // the default limit of 10 it answered 10 — smaller than `unread`, which is
+  // impossible under that reading, and an agent that trusts the wording
+  // concludes seven were already handed to it.
+  it("counts the whole inbox, whatever the page size", async () => {
+    for (let i = 0; i < 17; i++) await toAlpha(`m${i}`);
+
+    const paged = await callTool(alpha, "mesh_inbox", { limit: 3 });
+    expect(rowsOf(paged)).toHaveLength(3);
+    expect(paged.json.unread).toBe(17);
+    expect(paged.json.never_handed_out).toBe(17);
+
+    const dflt = await callTool(alpha, "mesh_inbox", {});
+    expect(rowsOf(dflt)).toHaveLength(10);
+    expect(dflt.json.never_handed_out).toBe(17);
+
+    const all = await callTool(alpha, "mesh_inbox", { limit: 50 });
+    expect(rowsOf(all)).toHaveLength(17);
+    expect(all.json.never_handed_out).toBe(17);
+
+    // And it never drops below `unread`: it is a superset of it.
+    for (const reply of [paged, dflt, all]) {
+      expect(reply.json.never_handed_out as number).toBeGreaterThanOrEqual(reply.json.unread as number);
+    }
+  });
+
+  // `never_handed_out` is a superset of `unread`: what ran out before it was
+  // read stays in the first and leaves the second. Only a message whose own
+  // deadline has really passed is dropped by mesh_receive — the stream body
+  // carries its created_at, so moving the SQLite row's is not enough.
+  it("keeps counting what ran out unread, and stops counting what was read", async () => {
+    await toAlpha("ran out", { ttl_seconds: 1 });
+    // Past the deadline by more than a second: `created_at` is stored to the
+    // second, so for up to one second after it the SQL count and the
+    // message's own check can still disagree.
+    await new Promise((r) => setTimeout(r, 2_100));
+    await toAlpha("still due");
+
+    const before = await callTool(alpha, "mesh_inbox", { limit: 1 });
+    expect(before.json.unread).toBe(1);
+    expect(before.json.never_handed_out).toBe(2);
+
+    const received = await callTool(alpha, "mesh_receive", {});
+    expect(payloadsOf(received)).toEqual(["still due"]);
+    expect(received.json.expired_dropped).toBe(1);
+
+    const after = await callTool(alpha, "mesh_inbox", { limit: 1 });
+    expect(after.json.unread).toBe(0);
+    // The one that ran out was never handed out and never will be.
+    expect(after.json.never_handed_out).toBe(1);
+  });
+
   it("is announced as read-only", async () => {
     const tool = (await alpha.listTools()).tools.find((t) => t.name === "mesh_inbox");
     expect(tool?.annotations?.readOnlyHint).toBe(true);

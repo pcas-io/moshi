@@ -95,10 +95,10 @@ describe("reads", () => {
 
   it("an inbox is empty, not everything, when nothing is known", () => {
     stored({});
-    expect(listInbox(db, { key: "", since: null, limit: 10 })).toEqual({ rows: [], unread: 0 });
+    expect(listInbox(db, { key: "", since: null, limit: 10 })).toEqual({ rows: [], unread: 0, neverHandedOut: 0 });
     db.prepare("DELETE FROM _migrations WHERE name = '0010_message_reads.sql'").run();
     expect(readsCutover(db)).toBeNull();
-    expect(listInbox(db, { key: "alpha", since: null, limit: 10 })).toEqual({ rows: [], unread: 0 });
+    expect(listInbox(db, { key: "alpha", since: null, limit: 10 })).toEqual({ rows: [], unread: 0, neverHandedOut: 0 });
     expect(readsCutover(new Database(":memory:"))).toBeNull();
   });
 
