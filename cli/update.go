@@ -44,10 +44,14 @@ func platformKey() string {
 }
 
 // baseURL strips the /mcp path off the configured server URL.
+// Never fatal: its callers are printing help when they call it. A URL with
+// no scheme used to end the process halfway through the "no token" message,
+// after the two options and before the line that says where to get one, with
+// an error naming the wrong problem.
 func baseURL(mcpURL string) string {
 	u, err := url.Parse(mcpURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		fatal("Invalid server URL: %s", mcpURL)
+		return mcpURL
 	}
 	return u.Scheme + "://" + u.Host
 }
@@ -55,6 +59,11 @@ func baseURL(mcpURL string) string {
 // A binary is fetched over https, or over http from this machine only. Hash
 // and binary come from the same server, so a plain-http update from anywhere
 // else would take both from whoever sits on the wire.
+//
+// This is a check on the SCHEME, not on the host: an https server may still
+// redirect to another https host, and that is on purpose — the promise is
+// "https only", not "this host only". What it does rule out is the hop that
+// leaves the encrypted transport.
 func secureURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
@@ -113,6 +122,20 @@ func verifiedDownload(client *http.Client, asset, want string) ([]byte, error) {
 	return data, nil
 }
 
+// secureURL guards the URL that was configured. Without this, nothing guards
+// the ones the server names afterwards: Go follows up to ten redirects to any
+// host and any scheme by default, https to http included. A redirect on
+// /cli/version and one on the binary moved BOTH onto plain http, where the
+// integrity check then compared the attacker's bytes against the attacker's
+// hash and passed. The transport has to hold for every hop, not just the
+// first one.
+func secureRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return fmt.Errorf("too many redirects")
+	}
+	return secureURL(req.URL.String())
+}
+
 type updatePlan struct {
 	upToDate bool
 	want     string
@@ -125,7 +148,7 @@ func planUpdate(mcpURL, self string) (updatePlan, error) {
 		return updatePlan{}, err
 	}
 	base := baseURL(mcpURL)
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 60 * time.Second, CheckRedirect: secureRedirect}
 	resp, err := client.Get(base + "/cli/version")
 	if err != nil {
 		return updatePlan{}, fmt.Errorf("Cannot reach the server (%s/cli/version): %v", base, err)
@@ -175,7 +198,10 @@ func cmdSelfUpdate(mcpURL string) {
 		return
 	}
 	fmt.Printf("↓ Updating %s → %s …\n", self[:12], plan.want[:12])
-	data, err := verifiedDownload(&http.Client{Timeout: 5 * time.Minute}, plan.asset, plan.want)
+	data, err := verifiedDownload(
+		&http.Client{Timeout: 5 * time.Minute, CheckRedirect: secureRedirect},
+		plan.asset, plan.want,
+	)
 	if err != nil {
 		fatal("%v", err)
 	}
