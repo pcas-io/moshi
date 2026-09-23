@@ -92,6 +92,8 @@ describe("buildAttentionItems", () => {
     expect(items[0]!.kind).toBe("open_incident");
     expect(items[0]!.agent).toBe("sec-warden");
     expect(items[0]!.text).toBe("reports 2 agents still on pre-rotation tokens, still unanswered");
+    // The band's link points at the thread, like every other one.
+    expect(items[0]!.href).toMatch(/^\/conversations\?id=[^#]+#thread$/);
   });
 
   it("clears an incident once somebody else replies in its thread", () => {

@@ -17,6 +17,7 @@ import type { FC } from "hono/jsx";
 import { PRESENCE_TTL_SECONDS } from "../../types.js";
 import type { Presence } from "../../services/presence.js";
 import type { AttentionItem } from "../../services/attention.js";
+import { threadHref } from "../../services/thread-link.js";
 import { V2Layout } from "./layout.js";
 import { V2_TOKENS } from "./tokens.js";
 import {
@@ -453,7 +454,7 @@ export const LatestConversationSection: FC<LatestConversationProps> = ({ thread,
           style={`padding:14px 22px;border-top:1px solid ${T.lineSoft};display:flex;gap:12px;align-items:center;flex-wrap:wrap`}
         >
           <a
-            href={`/conversations?id=${encodeURIComponent(thread.correlation_id)}`}
+            href={threadHref(thread.correlation_id)}
             style="font-size:14px;font-weight:600"
           >
             Read the whole thread →
