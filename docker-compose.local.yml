@@ -8,9 +8,13 @@
 # one thing that may talk to the container. Here the port has to be
 # published, and a browser drops a Secure cookie that arrives over plain
 # http, which turned every sign-in into "This sign-in page had expired".
+#
+# Bound to 127.0.0.1, not to every interface: this file also turns the Secure
+# flag off, and on a laptop on an office network a bare port would offer the
+# dashboard and its sign-in form to the whole LAN in cleartext.
 services:
   moshi:
     ports:
-      - "${MOSHI_PORT:-8080}:80"
+      - "127.0.0.1:${MOSHI_PORT:-8080}:80"
     environment:
       - MESH_COOKIE_SECURE=0

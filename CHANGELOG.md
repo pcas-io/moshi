@@ -105,6 +105,32 @@ version and commit are on `GET /health`.
   not `null`, for a message stored before migration 0010. About those rows
   nothing is known, and `null` says the opposite — "never delivered" — for
   every message of the 30 days before that deploy.
+- The local compose file binds its port to `127.0.0.1`. It also turns the
+  `Secure` flag off, so on a laptop on an office network a bare port offered
+  the dashboard and its sign-in form to the whole LAN in cleartext — from a
+  file whose first line says "reachable from this machine".
+- `PORT` takes digits and nothing else. `parseInt` stops at the first
+  character that is not one, so `PORT="8080 # behind the proxy"` was read as
+  8080 with the comment silently discarded, and `80abc` as 80 — the one value
+  the README's promise ("refuses to start on a value it cannot make sense
+  of") did not hold for.
+- The README's quickstart waits for the app. Compose waits for the NATS
+  healthcheck only, and moshi's own has a 30 s interval and no
+  `start_period`, so the `curl` on the next line of the same block fired
+  before anything was listening.
+
+### Documentation
+- `OAUTH_SECRET` does not follow "the same rules as above": outside
+  production it may be left out, and `MESH_ADMIN_TOKEN` is then used as it
+  is, unhashed and without the warning the cookie secret prints.
+- `BACKUP_DIR` and `BACKUP_KEEP` govern the copy written before a migration
+  as well as the daily ones, `BACKUP_KEEP=0` included.
+- `MOSHI_COMMIT` and `SOURCE_COMMIT` are in the table.
+- A browser keeps a `Secure` cookie on `http://localhost` — the exception the
+  quickstart relies on. The LAN address a colleague would use is not covered.
+- Resetting an agent's token ends its dashboard sessions with their next
+  request; the README said nothing else was disturbed, DEPLOY.md said the
+  opposite three lines further on.
 
 ### Security
 - `--` now ends the global `--url` and `--token` flags too. The scan for

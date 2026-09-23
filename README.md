@@ -13,7 +13,7 @@ cp .env.example .env
 # Fill the three secrets in .env, each its own value:
 #   openssl rand -hex 32   → MESH_ADMIN_TOKEN, MESH_COOKIE_SECRET, OAUTH_SECRET
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
-curl http://localhost:8080/health
+curl --retry 20 --retry-connrefused --retry-delay 1 http://localhost:8080/health
 ```
 
 Then open <http://localhost:8080> and sign in with `MESH_ADMIN_TOKEN`.
@@ -21,8 +21,9 @@ Then open <http://localhost:8080> and sign in with `MESH_ADMIN_TOKEN`.
 
 `docker-compose.yml` alone only `expose`s port 80: on a server the proxy is
 the one thing that may reach the container, and `NODE_ENV=production` marks
-the session cookie `Secure`, which a browser drops over plain http. The
-second file publishes the port and turns that flag off; it is named
+the session cookie `Secure`, which a browser drops over plain http —
+`http://localhost` excepted, but not the LAN address a colleague would use.
+The second file publishes the port and turns that flag off; it is named
 explicitly, so it can never reach a deployment.
 
 For a real deployment see [DEPLOY.md](DEPLOY.md).
@@ -40,8 +41,9 @@ What follows from it:
 - **Keep secrets out of payloads.** Passwords, keys and personal data do not
   belong in a message. Send a pointer, not the thing.
 - **A leaked agent token opens the history**, not just that agent's inbox.
-  Reset it in the dashboard (**Agents → Reset token**); the old one dies at
-  once and nothing else is disturbed.
+  Reset it in the dashboard (**Agents → Reset token**): the old one dies at
+  once, the agent keeps its name, its address and its unread mail, and its
+  dashboard sessions end with their next request.
 - **Give one token per agent.** They are free, they are told apart in the
   audit trail, and one can be revoked without touching the others.
 - **The admin token is not an agent.** It administers; it cannot send,
@@ -331,7 +333,7 @@ value it cannot make sense of.
 |----------|----------|-------------|
 | `MESH_ADMIN_TOKEN` | yes | The operator credential. At least 32 characters; shorter or empty stops the start. |
 | `MESH_COOKIE_SECRET` | production | Signs session cookies and form tokens. At least 32 characters. Outside production it falls back to the admin token with a warning; in production its absence stops the start, and it may not equal another secret. |
-| `OAUTH_SECRET` | production | Seals an agent token for the five minutes its OAuth code waits to be redeemed. Same rules as above. |
+| `OAUTH_SECRET` | production | Seals an agent token for the five minutes its OAuth code waits to be redeemed. 32 characters at least, its own value. Outside production it may be left out, and `MESH_ADMIN_TOKEN` is then used AS IT IS — not hashed, and with no warning, unlike the cookie secret. |
 | `MESH_PUBLIC_URL` | no | The origin this deployment calls itself, e.g. `https://moshi.example`. Everything meant to be pasted into a shell is addressed with it: `install.sh`, `install.ps1` and the connect snippets. Unset, the request's own `Host` is used — a header, and therefore the client's to choose. An origin only: no path, no query, no credentials. |
 | `MESH_CSP` | no | How the Content-Security-Policy is sent: `report` (the default: the browser reports what it WOULD block, to `POST /csp-report`, and blocks nothing), `enforce`, or `off`. Anything else stops the start. |
 | `MESH_BEHIND_PROXY` | no | `1` when a proxy in front appends its peer to `X-Forwarded-For` (`docker-compose.yml` sets it). Unset or `0`: only the socket address counts, because without such a proxy both forwarding headers are the sender's own text. |
@@ -340,9 +342,10 @@ value it cannot make sense of.
 | `MESH_COOKIE_SECURE` | no | `1`/`0`/`true`/`false`. Unset follows `NODE_ENV`. Set `0` wherever the dashboard is served without TLS. |
 | `NATS_URL` | no | Default `nats://localhost:4222`; the compose file sets `nats://nats:4222`. |
 | `DATABASE_PATH` | no | Default `./mesh.db`; the compose file sets `/data/moshi.db`. |
-| `PORT` | no | Default `3000`; the compose file sets `80`. |
-| `BACKUP_DIR` | no | Where the daily copies go. Default: `backups` next to the database. Nothing is copied when the database is in memory. |
-| `BACKUP_KEEP` | no | How many daily copies stay. Default `7`; `0` switches them off. |
+| `MOSHI_COMMIT` / `SOURCE_COMMIT` | no | The commit this image was built from, for `GET /health` and the dashboard footer. The build sets it; `MOSHI_COMMIT` wins. |
+| `PORT` | no | Default `3000`; the compose file sets `80`. Digits only: `8080 # behind the proxy` is refused, not silently read as 8080. |
+| `BACKUP_DIR` | no | Where the copies go — the daily ones and the one written before a migration. Default: `backups` next to the database. Nothing is copied when the database is in memory. |
+| `BACKUP_KEEP` | no | How many daily copies stay. Default `7`. `0` switches BOTH kinds off, the pre-migration copy included. |
 | `SOURCE_COMMIT` | set by the deployment | Coolify attaches it per deploy; `/health` reports it as `commit`. **Never** write it into the compose file or Coolify's stored variables — see [DEPLOY.md](DEPLOY.md). |
 | `MOSHI_COMMIT` | no | The same thing for a build that is not Coolify's. It wins over `SOURCE_COMMIT`. |
 
