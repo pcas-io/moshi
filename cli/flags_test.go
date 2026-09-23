@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -93,4 +94,116 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// The bug: the global scan ran over every argument and knew nothing about
+// "--". A message that contained "--url http://evil/mcp" moved the real
+// bearer token to that host, and the CLI printed a success line.
+func TestParseGlobalsStopsAtTheDoubleDash(t *testing.T) {
+	g, err := parseGlobals(
+		[]string{"send", "ops", "--", "please", "--url", "http://evil.example/mcp", "fix", "the", "build"},
+		"bt_real",
+	)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if g.url != "" {
+		t.Fatalf("a payload named the server: %q", g.url)
+	}
+	if g.token != "bt_real" {
+		t.Fatalf("token changed: %q", g.token)
+	}
+	want := []string{"send", "ops", "--", "please", "--url", "http://evil.example/mcp", "fix", "the", "build"}
+	if strings.Join(g.rest, " ") != strings.Join(want, " ") {
+		t.Fatalf("rest = %q", g.rest)
+	}
+	// And the command's own parser turns that into the payload it was.
+	p, err := parseArgs(g.rest[2:], []string{"type", "context"})
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if got := strings.Join(p.rest, " "); got != "please --url http://evil.example/mcp fix the build" {
+		t.Fatalf("payload = %q", got)
+	}
+}
+
+func TestParseGlobalsKeepsTheTokenAPayloadNames(t *testing.T) {
+	g, err := parseGlobals([]string{"send", "ops", "--", "--token", "bt_attacker", "hello"}, "bt_real")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if g.token != "bt_real" {
+		t.Fatalf("a payload chose the identity: %q", g.token)
+	}
+}
+
+func TestParseGlobalsTakesTheFlagsBeforeTheDoubleDash(t *testing.T) {
+	g, err := parseGlobals(
+		[]string{"--url", "https://mesh.example/mcp", "--token", "bt_x", "send", "ops", "hi"},
+		"bt_env",
+	)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if g.url != "https://mesh.example/mcp" || g.token != "bt_x" {
+		t.Fatalf("url=%q token=%q", g.url, g.token)
+	}
+	if strings.Join(g.rest, " ") != "send ops hi" {
+		t.Fatalf("rest = %q", g.rest)
+	}
+}
+
+func TestParseGlobalsTakesFlagEqualsValue(t *testing.T) {
+	g, err := parseGlobals([]string{"--url=https://mesh.example/mcp", "--token=bt_y", "status"}, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if g.url != "https://mesh.example/mcp" || g.token != "bt_y" {
+		t.Fatalf("url=%q token=%q", g.url, g.token)
+	}
+}
+
+func TestParseGlobalsRefusesAFlagWithoutAValue(t *testing.T) {
+	for _, flag := range []string{"--url", "--token"} {
+		if _, err := parseGlobals([]string{"send", "ops", flag}, ""); err == nil {
+			t.Fatalf("%s without a value was accepted", flag)
+		}
+	}
+}
+
+func TestParseGlobalsLeavesEverythingElseInOrder(t *testing.T) {
+	g, err := parseGlobals([]string{"receive", "--limit", "5", "-", "-5", "a--b"}, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if strings.Join(g.rest, " ") != "receive --limit 5 - -5 a--b" {
+		t.Fatalf("rest = %q", g.rest)
+	}
+}
+
+// get, history and status used to go through no parser at all: a mistyped
+// flag became the message id the server was asked for.
+func TestNoFlagsRefusesAFlagAndKeepsTheRest(t *testing.T) {
+	if got := parseArgsRestOrNil([]string{"msg_1"}); strings.Join(got, " ") != "msg_1" {
+		t.Fatalf("rest = %q", got)
+	}
+	if _, err := parseArgs([]string{"--limit", "5", "msg_1"}, nil); err == nil {
+		t.Fatal("an unknown flag was accepted")
+	}
+	// "--" still makes it text, for an id that begins with a dash.
+	p, err := parseArgs([]string{"--", "--weird-id"}, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if strings.Join(p.rest, " ") != "--weird-id" {
+		t.Fatalf("rest = %q", p.rest)
+	}
+}
+
+func parseArgsRestOrNil(args []string) []string {
+	p, err := parseArgs(args, nil)
+	if err != nil {
+		return nil
+	}
+	return p.rest
 }
