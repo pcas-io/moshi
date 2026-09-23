@@ -103,6 +103,30 @@ describe("loadConfig", () => {
       }
     });
 
+    // The origin everything meant for a shell is addressed with. Unset, the
+    // request's Host is used — and a Host is the client's to choose.
+    it("reads MESH_PUBLIC_URL as an origin, and nothing else", () => {
+      const origin = (env: NodeJS.ProcessEnv) => {
+        const result = loadConfig(env);
+        if (isConfigError(result)) throw new Error(result.errors.join("; "));
+        return result.publicUrl;
+      };
+      expect(origin(VALID_PROD_ENV)).toBe("");
+      expect(origin({ ...VALID_PROD_ENV, MESH_PUBLIC_URL: "" })).toBe("");
+      expect(origin({ ...VALID_PROD_ENV, MESH_PUBLIC_URL: " https://moshi.example " })).toBe("https://moshi.example");
+      expect(origin({ ...VALID_PROD_ENV, MESH_PUBLIC_URL: "https://moshi.example/" })).toBe("https://moshi.example");
+      expect(origin({ ...VALID_PROD_ENV, MESH_PUBLIC_URL: "http://localhost:8080" })).toBe("http://localhost:8080");
+    });
+
+    it("refuses a MESH_PUBLIC_URL that is not an origin", () => {
+      for (const bad of ["moshi.example", "ftp://moshi.example", "https://moshi.example/install.sh",
+        "https://user:pw@moshi.example", "https://moshi.example?x=1", "not a url"]) {
+        const result = loadConfig({ ...VALID_PROD_ENV, MESH_PUBLIC_URL: bad });
+        expect(isConfigError(result), bad).toBe(true);
+        if (isConfigError(result)) expect(result.errors.join(" ")).toContain("MESH_PUBLIC_URL");
+      }
+    });
+
     it("applies defaults for NATS_URL, DATABASE_PATH, and PORT", () => {
       const minimal: NodeJS.ProcessEnv = { MESH_ADMIN_TOKEN: "a".repeat(32) };
       const result = loadConfig(minimal);

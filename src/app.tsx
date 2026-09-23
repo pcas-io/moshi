@@ -96,6 +96,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
       MESH_COOKIE_SECRET: config.meshCookieSecret || undefined,
       OAUTH_SECRET: config.oauthSecret || undefined,
       DATABASE_PATH: config.databasePath,
+      MESH_PUBLIC_URL: config.publicUrl || undefined,
     };
     await next();
   });

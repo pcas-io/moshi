@@ -6,6 +6,9 @@ export interface Env {
   MESH_COOKIE_SECRET?: string;
   OAUTH_SECRET?: string;
   DATABASE_PATH?: string;
+  /** The configured public origin, or absent: then the request's own Host
+   *  is used. See `requestOrigin`. */
+  MESH_PUBLIC_URL?: string;
 }
 
 // === Constants ===
