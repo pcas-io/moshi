@@ -9,6 +9,7 @@ import type { ConversationSummary, ConversationThread, MessageView } from "../..
 import type { PaginatedResult } from "../../types.js";
 import { DEFAULT_PREVIEW_CHARS, PRESENCE_TTL_SECONDS } from "../../types.js";
 import { MCP_TOOL_CATALOG } from "../../mcp/catalog.js";
+import { threadHref } from "../../services/thread-link.js";
 import { CONTAINER_APP, V2Layout } from "./layout.js";
 import { V2Avatar, kindLabel } from "./components.js";
 import { V2_FONT_FAMILY_MONO, V2_TOKENS, kindColors } from "./tokens.js";
@@ -151,36 +152,82 @@ function metaLine(thread: ConversationSummary, now: number): string {
 // ── Styles that an inline attribute cannot express ──────────────
 // `d-row` from components.tsx fills with `sunk`, which is this panel's own
 // ground — invisible here. A thread row lifts to `card` instead.
+//
 // The split is as tall as the viewport leaves (header, footer and the gap
 // above the footer: 64 + 84 + 12 px), never taller: with 50 threads the list
 // panel was 6283 px tall, both panes stretched to it, the inner scrollers
 // never scrolled, and on a phone the open thread began some 6400 px down.
-// Stacked (below about 790 px), the list takes at most 45dvh and the thread
-// the rest; a row link jumps to #thread, so a tap lands on the thread.
+// Where the viewport is shorter than that calculation assumes, the split
+// keeps its 420 px floor and the PAGE scrolls — nothing is ever cut off,
+// because everything inside the split is bounded by the split.
+//
+// The two panes divide that height; which way is `flex-direction`, never
+// `flex-wrap`. A wrapped flex line is not bounded by its container: with
+// `overflow:hidden` above it, the second line kept its CONTENT height
+// (17 836 px with a long thread on a 320 px screen), the thread's own
+// scroller never scrolled, and every message past the first screenful was
+// unreachable by scrolling, by wheel and by keyboard. Direction also makes
+// the breakpoint the only thing that decides the layout, so it cannot
+// disagree with a wrap point it does not control.
 const CONVOS_CSS = `
 .d-thread { display: block; text-decoration: none; color: inherit; }
 .d-thread:hover { background: var(--card); }
 .d-search::placeholder { color: ${T.faint}; }
-.d-list-panel { flex: 1 1 330px; max-width: 400px; min-width: 290px; min-height: 0; max-height: 45dvh; }
-.d-thread-pane { flex: 1 1 460px; min-width: 0; min-height: 0; }
-/* Side by side (the width at which the two flex bases stop fitting): each
-   pane takes the split's height and scrolls inside. Stacked, the list keeps
-   its 45dvh share and the thread takes the rest. */
-@media (min-width: 790px) {
-  .d-list-panel, .d-thread-pane { max-height: 100%; }
+
+.d-split {
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: stretch; gap: 0;
+  height: calc(100dvh - 160px); min-height: 420px;
+  /* The backstop. Nothing should reach it: both panes are sized from this
+     height. A pane's own header and footer have a floor of their own, so on
+     a very short viewport the remainder is scrolled here rather than lost. */
+  overflow: hidden auto;
+  border-left: 1px solid ${T.line}; border-right: 1px solid ${T.line};
+  background: ${T.card};
+}
+/* A zero flex-basis with min-height 0: each pane is a share of the split's
+   height (2 : 3), never its own content height, so both inner scrollers
+   scroll. A percentage max-height would not do it — percentages resolve
+   against a height this box only has once min-height has not bound. */
+.d-list-panel {
+  flex: 2 1 0; min-width: 0; min-height: 0;
+  border-bottom: 1px solid ${T.line};
+  display: flex; flex-direction: column; background: ${T.sunk};
+}
+.d-thread-pane { flex: 3 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* Nothing opened: the empty pane would take three fifths of a phone screen
+   to say so. The list takes all of it instead. */
+.d-split[data-open="0"] .d-list-panel { flex: 1 1 0; border-bottom: none; }
+.d-split[data-open="0"] .d-thread-pane { display: none; }
+
+/* Stacked, the pane's own header and footer decide how much is left to read
+   in: at 320 px they took 366 of 383 px and left room for one line. The
+   prose keeps its headline and its command, and the meta line stops at two
+   lines. Side by side there is height to spare, so both come back. */
+.d-pane-head { padding: 18px clamp(16px, 2.4vw, 28px); }
+.d-pane-foot { padding: 16px clamp(16px, 2.4vw, 28px); }
+@media (max-width: 849px) {
+  .d-pane-head { padding: 12px 16px; }
+  .d-pane-foot { padding: 12px 16px; }
+  .d-foot-why { display: none; }
+  .d-pane-meta {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  }
+}
+
+/* Side by side. 850 px, not 790: the flex bases (330 + 460) are the split's
+   CONTENT width, and CONTAINER_APP's gutter plus the two borders cost
+   another 54 px — below 843 px the panes measurably still stack. */
+@media (min-width: 850px) {
+  .d-split { flex-direction: row; }
+  .d-list-panel {
+    flex: 1 1 330px; max-width: 400px; min-width: 290px;
+    border-bottom: none; border-right: 1px solid ${T.line};
+  }
+  .d-thread-pane { flex: 1 1 460px; }
+  .d-split[data-open="0"] .d-list-panel { flex: 1 1 330px; }
+  .d-split[data-open="0"] .d-thread-pane { display: flex; }
 }
 `;
-
-const SPLIT_STYLE =
-  // `flex:0 0 auto`, not `flex:1`: in a column flex container flex-basis is
-  // the main size, so `flex:1` (basis 0, grow 1) made `height` moot and the
-  // split grew to its content again — 5254 px with 50 threads.
-  "flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:stretch;gap:0;" +
-  "height:calc(100dvh - 160px);min-height:420px;overflow:hidden;" +
-  `border-left:1px solid ${T.line};border-right:1px solid ${T.line};background:${T.card}`;
-
-const PANEL_STYLE =
-  `border-right:1px solid ${T.line};display:flex;flex-direction:column;background:${T.sunk}`;
 
 const SEARCH_STYLE =
   `width:100%;margin-top:14px;background:${T.card};border:1px solid ${T.lineStrong};` +
@@ -324,13 +371,13 @@ const MessageRow: FC<{
 
 /** Replaces the READ-ONLY · ADR-004 badge: the reason, then the command. */
 const DetailFooter: FC<{ lastMessageId?: string }> = ({ lastMessageId }) => (
-  <div style={`padding:16px clamp(16px,2.4vw,28px);border-top:1px solid ${T.lineSoft};background:${T.sunk}`}>
+  <div class="d-pane-foot" style={`border-top:1px solid ${T.lineSoft};background:${T.sunk}`}>
     <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
       <div style="flex:1 1 280px;min-width:0">
         <div style="font-size:13.5px;font-weight:600;margin-bottom:3px">
           Reading only — replies come from the agents themselves
         </div>
-        <div style={`font-size:13px;color:${T.faint}`}>
+        <div class="d-foot-why" style={`font-size:13px;color:${T.faint}`}>
           That's deliberate: every message has a verified sender. To answer, run this from your
           machine or let an agent call{" "}
           {/* 12.5px is below the floor for `dim`, so the tool name takes `faint`. */}
@@ -365,10 +412,6 @@ const DetailFooter: FC<{ lastMessageId?: string }> = ({ lastMessageId }) => (
   </div>
 );
 
-/** The container of the open thread. Rendered by the page; its CHILDREN are
- *  ConversationThreadSection, which is also what the fragment returns. */
-const PANE_STYLE = "display:flex;flex-direction:column";
-
 export interface ConversationThreadSectionProps {
   thread: ConversationThread | null;
   /** `?id=` that matched nothing. */
@@ -391,7 +434,8 @@ export const ConversationThreadSection: FC<ConversationThreadSectionProps> = ({ 
   return (
     <>
       <div
-        style={"display:flex;align-items:center;gap:14px;padding:18px clamp(16px,2.4vw,28px);" +
+        class="d-pane-head"
+        style={"display:flex;align-items:center;gap:14px;" +
           `border-bottom:1px solid ${T.lineSoft};flex-wrap:wrap`}
       >
         <div style="flex:1;min-width:200px">
@@ -400,7 +444,7 @@ export const ConversationThreadSection: FC<ConversationThreadSectionProps> = ({ 
               <div style="font-size:16px;font-weight:600;overflow-wrap:anywhere">{parties.title}</div>
               {/* A context is free text up to its own limit: let it break rather
                   than push the pane wider than the split. */}
-              <div style={`font-size:13px;color:${T.dim};overflow-wrap:anywhere`}>
+              <div class="d-pane-meta" style={`font-size:13px;color:${T.dim};overflow-wrap:anywhere`}>
                 {metaLine(thread, now)}
               </div>
             </>
@@ -501,8 +545,7 @@ export const ConversationListSection: FC<ConversationListSectionProps> = ({
   const threads = result.data;
   const filterQs = filterQueryString(query, filterAgent);
   const pageQs = result.offset > 0 ? `${filterQs ? `${filterQs}&` : ""}offset=${result.offset}` : filterQs;
-  const threadHref = (id: string): string =>
-    `/conversations?id=${encodeURIComponent(id)}${pageQs ? `&${pageQs}` : ""}#thread`;
+  const rowHref = (id: string): string => threadHref(id, pageQs);
   const pageHref = (offset: number): string =>
     offset > 0 ? `/conversations?offset=${offset}${filterQs ? `&${filterQs}` : ""}`
       : `/conversations${filterQs ? `?${filterQs}` : ""}`;
@@ -519,7 +562,7 @@ export const ConversationListSection: FC<ConversationListSectionProps> = ({
           <ThreadRow
             thread={thread}
             selected={openedId === thread.thread_id}
-            href={threadHref(thread.thread_id)}
+            href={rowHref(thread.thread_id)}
             agentRoles={agentRoles}
             now={now}
           />
@@ -587,9 +630,14 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
       <div style={`${CONTAINER_APP};width:100%;flex:1;display:flex;flex-direction:column`}>
         {/* The one entrance animation on this screen. Never on the rows, and
             never inside a live container: it would replay on every refresh. */}
-        <div class="m-rise" style={SPLIT_STYLE}>
+        {/* `data-open` is what the stylesheet stacks by: with nothing
+            opened the thread pane is a sentence, and on a phone it would
+            take three fifths of the screen to say it. */}
+        <div class="m-rise d-split" data-open={opened || unknownId ? "1" : "0"}>
           {/* Left: the thread panel */}
-          <div class="d-list-panel" style={PANEL_STYLE}>
+          {/* No inline style on either pane: the breakpoint changes their
+              flex and their border, and an inline declaration would win. */}
+          <div class="d-list-panel">
             <div style={`padding:22px 20px 16px;border-bottom:1px solid ${T.lineSoft}`}>
               <h1 style="margin:0 0 4px;font-size:21px;font-weight:600;letter-spacing:-0.02em">
                 Conversations
@@ -651,7 +699,6 @@ export const V2ConversationsPage: FC<V2ConversationsProps> = ({
             data-live-thread={opened ? opened.thread_id : undefined}
             data-live-mark={opened ? "rows" : undefined}
             data-live-noun={opened ? "message" : undefined}
-            style={PANE_STYLE}
           >
             <ConversationThreadSection thread={opened} unknownId={unknownId} agentRoles={agentRoles} now={now} />
           </div>
