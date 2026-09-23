@@ -91,14 +91,21 @@ const MAX_TTL_MS = FIELD_LIMITS.TTL_SECONDS_MAX * 1000;
  *  that still counted. */
 const STILL_DUE =
   "r.read_at IS NULL AND m.created_at >= @oldestDue AND CAST(strftime('%s', m.created_at) AS INTEGER) + m.ttl_seconds >= @nowSeconds";
+/** Never handed out, deadline or no deadline: STILL_DUE plus what ran out
+ *  before it was read. The same `@oldestDue` bound, for the same reason. */
+const NEVER_READ = "r.read_at IS NULL AND m.created_at >= @oldestDue";
 
 /** What was sent to an agent, newest first, and how much of it mesh_receive
  *  can still hand out. Two halves (each on its own index, each with its own
  *  LIMIT) joined by UNION ALL: one query over both used to walk every
  *  broadcast of the month. */
-export function listInbox(db: Database.Database, q: InboxQuery, now: number = Date.now()): { rows: InboxRow[]; unread: number } {
+export function listInbox(
+  db: Database.Database,
+  q: InboxQuery,
+  now: number = Date.now(),
+): { rows: InboxRow[]; unread: number; neverHandedOut: number } {
   const cutover = readsCutover(db);
-  if (!q.key || cutover === null) return { rows: [], unread: 0 };
+  if (!q.key || cutover === null) return { rows: [], unread: 0, neverHandedOut: 0 };
   const since = q.since && q.since > cutover ? q.since : cutover;
   const bind = {
     key: q.key,
@@ -116,12 +123,22 @@ export function listInbox(db: Database.Database, q: InboxQuery, now: number = Da
   // Bounded: the caller wants "how many are still due", and past the cap
   // "more than this". A full COUNT over a month of history cost 150 ms of
   // blocked event loop, and better-sqlite3 blocks every other request with it.
-  const count = (where: string) =>
+  const count = (where: string, due: string) =>
     (db.prepare(
-      `SELECT COUNT(*) AS n FROM (SELECT 1 FROM messages m ${READ_JOIN} WHERE ${where} AND ${STILL_DUE}` +
+      `SELECT COUNT(*) AS n FROM (SELECT 1 FROM messages m ${READ_JOIN} WHERE ${where} AND ${due}` +
         ` ORDER BY m.created_at DESC LIMIT ${UNREAD_CAP + 1})`,
     ).get(bind) as { n: number }).n;
-  return { rows: rows.map(({ rid: _rid, ...row }) => row), unread: Math.min(UNREAD_CAP + 1, count(DIRECT) + count(BROADCASTS)) };
+  const both = (due: string) => Math.min(UNREAD_CAP + 1, count(DIRECT, due) + count(BROADCASTS, due));
+  // Both are inbox-wide and bounded the same way. `never_handed_out` used to
+  // be counted while mapping the returned page, so `limit` moved a number
+  // documented as a property of the inbox: 17 unread and limit 10 answered
+  // never_handed_out 10, and an agent that trusts the wording concludes seven
+  // were already handed to it.
+  return {
+    rows: rows.map(({ rid: _rid, ...row }) => row),
+    unread: both(STILL_DUE),
+    neverHandedOut: both(NEVER_READ),
+  };
 }
 
 /** What a sender can learn about a stored message: for a direct one when
