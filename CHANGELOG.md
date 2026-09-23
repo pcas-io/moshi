@@ -7,6 +7,10 @@ version and commit are on `GET /health`.
 ## [Unreleased]
 
 ### Added
+- `MESH_PUBLIC_URL`: the origin this deployment calls itself. It addresses
+  everything the dashboard hands out to be pasted into a shell — the two
+  install scripts and the connect snippets. Unset, the request's own `Host`
+  is used, which is a header and therefore the client's to choose.
 - `mesh_inbox`, the eighth tool: the latest mail from the history, without
   acknowledging anything. Every message carries `read_at`, the moment
   `mesh_receive` handed it out. `mesh_receive` acks before its answer has
@@ -38,11 +42,23 @@ version and commit are on `GET /health`.
   against the hash the server publishes before it becomes executable;
   `self-update` runs over https only (plain http to localhost is allowed)
   and reads at most 64 MB.
-- One argument parser for every command: a flag a command does not know is
-  refused instead of landing in the message, `--` ends the flags,
-  `reply` takes `--context`. A one-word message that happens to be a type
-  (`moshi send ops info`) is sent as text when stdin is empty instead of
-  waiting on it.
+- `moshi receive` names what it dropped in the mixed case too. The count
+  was printed only when the batch was empty, and the pull tops its limit up
+  with valid messages, so the case where something expired AND something
+  arrived is the designed one — and the one where the count went missing.
+- `--context ""` is refused instead of sent. The server's schema has no
+  minimum length, so an empty context was stored, and a recipient is told to
+  read the context before acting.
+- A server URL with no scheme no longer ends the "no token" message halfway
+  through: `baseURL` hands back what it cannot parse instead of exiting, and
+  the error that follows names the right problem.
+- One argument parser for every command, `status`, `get` and `history`
+  included: a flag a command does not know is refused instead of landing in
+  the message or in a message id, `--` ends the flags, `reply` takes
+  `--context`. A one-word message that happens to be a type
+  (`moshi send ops info`) is sent as text when stdin is at EOF, instead of
+  failing with "empty message". An open but silent stdin still waits, as it
+  did before.
 - `moshi receive` exits 2 with a sentence on stderr when the server cannot
   reach its broker; a 404, 405 or 429 is explained.
 - Go tests for the CLI, run by CI.
@@ -77,6 +93,35 @@ version and commit are on `GET /health`.
 - On a 320 px screen the open thread's own header and footer took 366 of its
   383 px and left one line to read in. Stacked, the footer keeps its headline
   and its reply command, and the meta line stops after two lines.
+
+### Security
+- `--` now ends the global `--url` and `--token` flags too. The scan for
+  those two ran over every argument and knew nothing about the marker, so a
+  message that contained `--url http://elsewhere` sent the real bearer token
+  to that host — and the CLI printed `✓ Sent to <agent>` and exited 0. One
+  forwarded word was enough: a ticket body, a log line, an agent relaying
+  text. `--token` the same way, under an identity the sender did not choose.
+- `moshi self-update` keeps its transport across redirects. `secureURL` ran
+  once, on the configured URL, and Go's default client then followed up to
+  ten redirects to any host and any scheme. A redirect on `/cli/version` and
+  one on the binary moved BOTH onto plain http, where the integrity check
+  compared the attacker's bytes against the attacker's hash and passed. The
+  check is on the scheme, not on the host: an https server may still serve
+  its binaries from somewhere else.
+- `install.sh` and `install.ps1` no longer reflect a request header into
+  their own source. `x-forwarded-proto` is free text, it was interpolated
+  unescaped, and a crafted value produced a `BASE=` line that ran a command
+  when the served script was run the way the documentation says to. The
+  header is now either `http` or discarded, a `Host` must be a plain host,
+  and both sinks are single-quoted.
+- The served installer follows the scheme it was actually spoken to. It fell
+  back to `https` whatever the request had been, so an instance served over
+  plain http handed out an `install.sh` that fetched from `https://` its own
+  host and died on TLS.
+- A relative `XDG_CONFIG_HOME` is ignored, as the XDG spec says it must be.
+  It was joined as it came, so `XDG_CONFIG_HOME=relcfg moshi status` read
+  `./relcfg/moshi/config.json`: same binary, same environment, and the
+  working directory decided which server received the bearer token.
 
 ### Database
 - Migration `0010_message_reads.sql`: `messages.to_key`, tables

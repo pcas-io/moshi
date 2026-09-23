@@ -113,7 +113,8 @@ $ moshi send deploy-bot "rollback please"
 it makes it executable, and remembers the server in
 `~/.config/moshi/config.json`, so `MESH_URL` is not needed. Update later
 with `moshi self-update` — it compares against the build the server ships
-and replaces the binary in place, over https only.
+and replaces the binary in place, over https only — on every hop, so a
+redirect cannot move the download onto plain http.
 
 ## Your first conversation
 

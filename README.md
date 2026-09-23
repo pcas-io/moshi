@@ -332,6 +332,7 @@ value it cannot make sense of.
 | `MESH_ADMIN_TOKEN` | yes | The operator credential. At least 32 characters; shorter or empty stops the start. |
 | `MESH_COOKIE_SECRET` | production | Signs session cookies and form tokens. At least 32 characters. Outside production it falls back to the admin token with a warning; in production its absence stops the start, and it may not equal another secret. |
 | `OAUTH_SECRET` | production | Seals an agent token for the five minutes its OAuth code waits to be redeemed. Same rules as above. |
+| `MESH_PUBLIC_URL` | no | The origin this deployment calls itself, e.g. `https://moshi.example`. Everything meant to be pasted into a shell is addressed with it: `install.sh`, `install.ps1` and the connect snippets. Unset, the request's own `Host` is used — a header, and therefore the client's to choose. An origin only: no path, no query, no credentials. |
 | `MESH_CSP` | no | How the Content-Security-Policy is sent: `report` (the default: the browser reports what it WOULD block, to `POST /csp-report`, and blocks nothing), `enforce`, or `off`. Anything else stops the start. |
 | `MESH_BEHIND_PROXY` | no | `1` when a proxy in front appends its peer to `X-Forwarded-For` (`docker-compose.yml` sets it). Unset or `0`: only the socket address counts, because without such a proxy both forwarding headers are the sender's own text. |
 | `MESH_ADMIN_TOKEN_PREVIOUS` | no | The old admin token during a rotation. At least 32 characters when set; empty means none. |
