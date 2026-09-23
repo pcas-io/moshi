@@ -101,13 +101,60 @@ describe.skipIf(platform() === "win32")("install.sh", () => {
   });
 
   it("refuses to run against a server that has no build for this platform", async () => {
-    const script = (await (await fetch(`${base}/install.sh`, { headers: { "x-forwarded-proto": "http" } })).text()).replace(`BASE="${base}"`, `BASE="${base}/nope"`);
+    const script = (await (await fetch(`${base}/install.sh`, { headers: { "x-forwarded-proto": "http" } })).text()).replace(`BASE='${base}'`, `BASE='${base}/nope'`);
     const home = mkdtempSync(join(tmpdir(), "moshi-home-"));
     const { code, out } = await sh(script, { HOME: home, MOSHI_BIN_DIR: join(home, "bin"), PATH: process.env.PATH ?? "" });
     expect(code).not.toBe(0);
     expect(out).toMatch(/no build|not found|cannot|failed/i);
     expect(existsSync(join(home, "bin", "moshi"))).toBe(false);
     rmSync(home, { recursive: true, force: true });
+  });
+
+  // The header this used to reflect verbatim. `x-forwarded-proto` is free
+  // text that any proxy may append to, and this value is interpolated into
+  // shell source that the docs tell people to pipe into sh. A crafted one
+  // produced `BASE="http"; touch …; :; x="://127.0.0.1:1234"` and ran that
+  // command. The header now has to be exactly `http` or it is discarded.
+  it("takes no shell out of x-forwarded-proto", async () => {
+    const marker = join(tmpdir(), `moshi-inject-${process.pid}`);
+    for (const proto of [
+      `http"; touch "${marker}"; :; x="`,
+      "javascript:x",
+      "https evil",
+      "HTTPS",
+      "",
+    ]) {
+      const script = await (await fetch(`${base}/install.sh`, { headers: { "x-forwarded-proto": proto } })).text();
+      const line = /^BASE=.*$/m.exec(script)?.[0] ?? "";
+      expect(line).toMatch(/^BASE='https?:\/\/[A-Za-z0-9.\-:[\]]+'$/);
+      expect(line).not.toContain(marker);
+      expect(script).not.toContain(marker);
+    }
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  // A Host that is not a host is not repaired, it is dropped: whatever is
+  // served then names the deployment's own origin, not the caller's.
+  it("takes no shell out of the Host header either", async () => {
+    for (const host of ["evil.example/../x", "a b", "host'; id; '", "x".repeat(300)]) {
+      const res = await fetch(`${base}/install.sh`, { headers: { host } }).catch(() => null);
+      if (!res) continue; // node's parser refuses some of these outright
+      const script = await res.text();
+      const line = /^BASE=.*$/m.exec(script)?.[0] ?? "";
+      expect(line).toMatch(/^BASE='https?:\/\/[A-Za-z0-9.\-:[\]]+'$/);
+    }
+  });
+
+  // A plain-http instance used to serve an installer that fetched from
+  // https://<its own host> and died on TLS: the scheme fell back to https
+  // whatever the request had been.
+  it("follows the scheme it was actually spoken to", async () => {
+    const plain = await (await fetch(`${base}/install.sh`)).text();
+    expect(/^BASE=.*$/m.exec(plain)?.[0]).toBe(`BASE='${base}'`);
+    expect(base.startsWith("http://")).toBe(true);
+
+    const proxied = await (await fetch(`${base}/install.sh`, { headers: { "x-forwarded-proto": "https" } })).text();
+    expect(/^BASE=.*$/m.exec(proxied)?.[0]).toMatch(/^BASE='https:\/\//);
   });
 
   it("publishes the hash the script compares against, and the PowerShell script does the same", async () => {

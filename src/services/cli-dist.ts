@@ -61,13 +61,54 @@ function platformKey(name: string): string {
   return name.replace(/^moshi-/, "").replace(/\.exe$/, "");
 }
 
-/** Public origin of this deployment as seen by the client (honours the
- *  proxy's x-forwarded-proto). Shared with the dashboard setup snippets so
- *  a self-hosted moshi never advertises someone else's domain (C5). */
-export function requestOrigin(c: { req: { header: (n: string) => string | undefined } }): string {
-  const proto = c.req.header("x-forwarded-proto") ?? "https";
-  const host = c.req.header("host") ?? "moshi.enki.run";
-  return `${proto}://${host}`;
+/** The fallback when neither MESH_PUBLIC_URL nor a usable Host says
+ *  otherwise. `DEFAULT_LOGIN_HOST` in views/login.tsx is the same value. */
+export const DEFAULT_ORIGIN = "https://moshi.enki.run";
+
+/** A host is a name or an address, optionally with a port, and nothing else.
+ *  Everything this value reaches is a document someone pastes into a shell. */
+const HOST_RULE = /^(?:[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
+
+/**
+ * Public origin of this deployment as seen by the client.
+ *
+ * In order: MESH_PUBLIC_URL, which the operator sets and nobody else can
+ * reach; then the request's own scheme and Host; then DEFAULT_ORIGIN.
+ *
+ * "The request's own scheme" is `x-forwarded-proto` where a proxy set it,
+ * else the scheme this process was actually spoken to. It used to fall back
+ * to https unconditionally, so an instance served over plain http — which
+ * QUICKSTART now names as a way to run moshi — handed out an install.sh that
+ * fetched from https://127.0.0.1:8080 and died on TLS.
+ *
+ * Both headers are VALIDATED, because this value is interpolated into the
+ * install scripts and into the setup snippets. `x-forwarded-proto` is free
+ * text that any proxy may append to, and a value of
+ * `http"; touch /tmp/x; :; x="` produced a `BASE=` line in install.sh that
+ * ran that command when the served script was run the way the docs say to.
+ * Anything but a bare `http` or `https`, and anything but a plain host, is
+ * discarded rather than repaired.
+ */
+export function requestOrigin(c: {
+  req: { header: (n: string) => string | undefined; url?: string };
+  env?: { MESH_PUBLIC_URL?: string };
+}): string {
+  const configured = c.env?.MESH_PUBLIC_URL;
+  if (configured) return configured;
+  const host = c.req.header("host");
+  if (!host || host.length > 255 || !HOST_RULE.test(host)) return DEFAULT_ORIGIN;
+  return `${requestProto(c)}://${host}`;
+}
+
+function requestProto(c: { req: { header: (n: string) => string | undefined; url?: string } }): "http" | "https" {
+  const forwarded = c.req.header("x-forwarded-proto");
+  if (forwarded === "http" || forwarded === "https") return forwarded;
+  if (forwarded !== undefined) return "https"; // anything else: not a scheme
+  try {
+    return c.req.url && new URL(c.req.url).protocol === "http:" ? "http" : "https";
+  } catch {
+    return "https";
+  }
 }
 
 function installSh(base: string): string {
@@ -81,7 +122,10 @@ function installSh(base: string): string {
 # the CLI needs no MESH_URL. Hash and binary come from the same server: this
 # proves the download arrived whole, not who built it.
 set -eu
-BASE="${base}"
+# Single quotes: this value comes from a request header unless the operator
+# set MESH_PUBLIC_URL. requestOrigin already refuses everything that is not a
+# scheme and a bare host, and a quote cannot survive both.
+BASE='${base}'
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 arch=$(uname -m)
 case "$os" in
@@ -146,7 +190,7 @@ function installPs1(base: string): string {
 # The binary is checked against the SHA-256 the server publishes at
 # /cli/version, and the server is remembered in %APPDATA%\\moshi\\config.json.
 $ErrorActionPreference = "Stop"
-$base = "${base}"
+$base = '${base}'
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
 $key = "windows-$arch"
 $asset = "moshi-windows-$arch.exe"

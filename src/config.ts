@@ -32,6 +32,10 @@ export interface Config {
   /** Content-Security-Policy: "report" (say what would be blocked, block
    *  nothing), "enforce", or "off". MESH_CSP, default "report". */
   cspMode: "enforce" | "report" | "off";
+  /** The origin this deployment hands out in anything meant to be pasted
+   *  into a shell. MESH_PUBLIC_URL; empty means "take the request's Host",
+   *  which is the client's to choose. */
+  publicUrl: string;
   /** Where the daily copies of the database go; null when it is not a file. */
   backupDir: string | null;
   /** How many daily copies stay. 0 switches backups off. */
@@ -171,6 +175,28 @@ export function loadConfig(
   if (behindProxyRaw !== "" && !behindProxy && behindProxyRaw !== "0" && behindProxyRaw !== "false") {
     errors.push(`MESH_BEHIND_PROXY must be 1, 0, true or false (got "${env.MESH_BEHIND_PROXY}")`);
   }
+  // What this deployment calls itself. Everything the dashboard hands out to
+  // be pasted into a shell — install.sh, the connect snippets — is addressed
+  // with it. Unset, the request's own Host is used, which is a header and
+  // therefore the client's to choose.
+  const publicUrlRaw = (env.MESH_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
+  let publicUrl = "";
+  if (publicUrlRaw !== "") {
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(publicUrlRaw);
+    } catch {
+      parsed = null;
+    }
+    if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:") || !parsed.host) {
+      errors.push(`MESH_PUBLIC_URL must be an http(s) URL, e.g. https://moshi.example (got "${env.MESH_PUBLIC_URL}")`);
+    } else if (parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password) {
+      errors.push(`MESH_PUBLIC_URL is an origin, without a path, a query or credentials (got "${env.MESH_PUBLIC_URL}")`);
+    } else {
+      publicUrl = `${parsed.protocol}//${parsed.host}`;
+    }
+  }
+
   // The switch an operator reaches for when a policy breaks a page: report
   // instead of block, without a code change.
   const cspRaw = (env.MESH_CSP ?? "").trim().toLowerCase();
@@ -197,6 +223,7 @@ export function loadConfig(
     behindProxy,
     commit: resolveCommit(env),
     cspMode,
+    publicUrl,
   };
 }
 

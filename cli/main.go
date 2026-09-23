@@ -46,31 +46,13 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Parse global flags
-	urlFlag := ""
-	token := env("MESH_TOKEN", "")
-	var remaining []string
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--url":
-			if i+1 < len(args) {
-				urlFlag = args[i+1]
-				i++
-			} else {
-				fatal("--url needs a value, e.g. --url https://mesh.example.com")
-			}
-		case "--token":
-			if i+1 < len(args) {
-				token = args[i+1]
-				i++
-			} else {
-				fatal("--token needs a value, e.g. --token bt_...")
-			}
-		default:
-			remaining = append(remaining, args[i])
-		}
+	// The two shared flags, up to "--". See parseGlobals: past that marker a
+	// message that says "--url" is a message, not a place to send the token.
+	g, err := parseGlobals(args, env("MESH_TOKEN", ""))
+	if err != nil {
+		fatal("%v", err)
 	}
+	urlFlag, token, remaining := g.url, g.token, g.rest
 
 	if len(remaining) > 0 && (remaining[0] == "--version" || remaining[0] == "-v" || remaining[0] == "version") {
 		printVersion()
@@ -111,7 +93,7 @@ func main() {
 
 	switch cmd {
 	case "status", "s":
-		cmdStatus(url, token)
+		cmdStatus(url, token, cmdArgs)
 	case "send":
 		cmdSend(url, token, cmdArgs)
 	case "receive", "recv", "r":

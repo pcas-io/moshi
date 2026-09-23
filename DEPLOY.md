@@ -373,9 +373,10 @@ builds the image and swaps the container. What that looks like from outside:
   dashboard tabs lose their event stream and reconnect on their own; MCP
   clients see one failed call.
 - Pending migrations run at start-up, and a copy of the database is written
-  before the first of them (`/data/backups/moshi-pre-migration-*.db`, three
-  kept). A migration that fails leaves nothing behind and stops the start,
-  so the old container keeps serving.
+  before the first of them — see [Backups](#backups) for its name and how
+  many are kept, so there is one place to keep right. A migration that fails
+  leaves nothing behind and stops the start, so the old container keeps
+  serving.
 - `npm run verify:deploy` says whether what answers is what was merged.
 
 Rollback = redeploy a previous commit from the Coolify deployments list. A
@@ -425,7 +426,8 @@ of the three set, the CLI says so and exits 1.
 `install.sh` and `install.ps1` fetch the binary, compare its SHA-256 with
 what the server publishes at `/cli/version`, and only then make it
 executable. `moshi self-update` does the same, over https only (plain http
-to `localhost` is allowed), with a 64 MB bound on the download. This proves
+to `localhost` is allowed) — on every hop, redirects included, which Go's
+default client does not do — with a 64 MB bound on the download. This proves
 that the download arrived whole. It does not prove who built it: hash and
 binary come from the same server. A signature with a key held outside the
 server is a separate step.

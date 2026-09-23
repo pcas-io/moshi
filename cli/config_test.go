@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +62,39 @@ func TestConfigPathHonoursXDGAndFallsBackToHome(t *testing.T) {
 	t.Setenv("HOME", "/tmp/home")
 	if got := configPath(); got != filepath.Join("/tmp/home", ".config", "moshi", "config.json") {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// The XDG spec says a relative XDG_CONFIG_HOME must be ignored. It was
+// joined as it came, so the working directory decided which server the
+// bearer token went to: from one directory the CLI talked to the server a
+// ./relcfg/moshi/config.json named, from another it said none was configured.
+func TestConfigPathIgnoresARelativeXDGConfigHome(t *testing.T) {
+	for _, rel := range []string{"relcfg", "./relcfg", "../relcfg", "a/b"} {
+		t.Setenv("XDG_CONFIG_HOME", rel)
+		got := configPath()
+		if got != "" && !filepath.IsAbs(got) {
+			t.Fatalf("XDG_CONFIG_HOME=%q gave the relative path %q", rel, got)
+		}
+		if strings.Contains(got, "relcfg") {
+			t.Fatalf("XDG_CONFIG_HOME=%q was used anyway: %q", rel, got)
+		}
+	}
+	abs := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", abs)
+	if got := configPath(); got != filepath.Join(abs, "moshi", "config.json") {
+		t.Fatalf("an absolute one was not used: %q", got)
+	}
+}
+
+// baseURL is called while the CLI is printing help. It used to exit there.
+func TestBaseURLDoesNotEndTheProcessOnANonURL(t *testing.T) {
+	for _, in := range []string{"moshi.example", "", "://x", "not a url"} {
+		if got := baseURL(in); got != in {
+			t.Fatalf("baseURL(%q) = %q, want it handed back unchanged", in, got)
+		}
+	}
+	if got := baseURL("https://moshi.example/mcp"); got != "https://moshi.example" {
+		t.Fatalf("baseURL = %q", got)
 	}
 }

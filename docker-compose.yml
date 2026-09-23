@@ -28,6 +28,11 @@ services:
       # "report" sends the policy Report-Only: the browser says what it WOULD
       # block (POST /csp-report) and blocks nothing.
       - MESH_CSP=${MESH_CSP:-}
+      # What this deployment calls itself, e.g. https://moshi.example. It
+      # addresses everything the dashboard hands out to be pasted into a
+      # shell: install.sh, install.ps1, the connect snippets. Empty means the
+      # request's own Host is used, and a Host is the client's to choose.
+      - MESH_PUBLIC_URL=${MESH_PUBLIC_URL:-}
       - DATABASE_PATH=/data/moshi.db
       # Daily copies of the database. Empty means the defaults: next to the
       # database (/data/backups), seven of them. BACKUP_KEEP=0 switches them off.

@@ -17,7 +17,11 @@ import (
 // (on Windows %APPDATA%\moshi\config.json). install.sh and install.ps1 write
 // the same file.
 func configPath() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+	// The XDG spec: a value that is not absolute must be ignored. It was
+	// joined as it came, so `XDG_CONFIG_HOME=relcfg moshi status` read
+	// ./relcfg/moshi/config.json — same binary, same environment, and the
+	// working directory decided which server got the bearer token.
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(xdg) {
 		return filepath.Join(xdg, "moshi", "config.json")
 	}
 	if runtime.GOOS == "windows" {
