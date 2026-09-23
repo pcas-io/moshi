@@ -20,7 +20,10 @@ describe("docker-compose.local.yml", () => {
   it("publishes a port and turns the Secure cookie off, and the deployed file does neither", () => {
     // The README's quickstart could not work: docker-compose.yml only
     // `expose`s port 80, so `curl http://localhost:80/health` reached nothing.
-    expect(local).toMatch(/- "\$\{MOSHI_PORT:-8080\}:80"/);
+    // On 127.0.0.1, never on every interface: this file also turns the
+    // Secure flag off, so a bare port would offer the dashboard and its
+    // sign-in form to the whole LAN in cleartext.
+    expect(local).toMatch(/- "127\.0\.0\.1:\$\{MOSHI_PORT:-8080\}:80"/);
     expect(local).toMatch(/- MESH_COOKIE_SECURE=0/);
     expect(compose).not.toMatch(/\n    ports:\n/);
     expect(compose).toMatch(/\n    expose:\n/);
@@ -29,7 +32,10 @@ describe("docker-compose.local.yml", () => {
   it("is named explicitly in the README, so it can never reach a deployment", () => {
     const readme = readFileSync("README.md", "utf-8");
     expect(readme).toContain("docker compose -f docker-compose.yml -f docker-compose.local.yml up -d");
-    expect(readme).toContain("curl http://localhost:8080/health");
+    // Compose waits for the NATS healthcheck only, and moshi's own has a
+    // 30 s interval and no start_period: without the retries the next line
+    // of the same block fires before the app is listening.
+    expect(readme).toMatch(/curl --retry \d+ --retry-connrefused --retry-delay \d+ http:\/\/localhost:8080\/health/);
   });
 });
 
