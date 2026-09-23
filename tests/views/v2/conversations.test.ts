@@ -342,25 +342,87 @@ describe("V2ConversationsPage — the split has to know the viewport width", () 
   // began some 6400 px down, after every tap.
   it("bounds the split to the viewport so that list and thread scroll inside", async () => {
     const html = await render(page([thread()]));
-    const split = /class="m-rise" style="([^"]*)"/.exec(html)?.[1] ?? "";
-    expect(split).toMatch(/height:calc\(100dvh - \d+px\)/);
-    expect(split).toMatch(/min-height:\d+px/);
-    expect(split).not.toMatch(/min-height:760px/);
-    expect(split).toContain("overflow:hidden");
+    const split = /\.d-split\s*\{([^}]*)\}/.exec(html)?.[1] ?? "";
+    expect(html).toMatch(/class="m-rise d-split"/);
+    expect(split).toMatch(/height:\s*calc\(100dvh - \d+px\)/);
+    expect(split).toMatch(/min-height:\s*\d+px/);
+    expect(split).not.toMatch(/min-height:\s*760px/);
+    // A split with a definite height needs `flex: 0 0 auto`: with `flex: 1`
+    // the basis IS the main size, `height` stops counting and the box grows
+    // to its content again (5254 px with 50 threads).
+    expect(split).toMatch(/flex:\s*0 0 auto/);
+    // The backstop under the panes. `hidden` alone once cut a stacked thread
+    // off at the first screenful.
+    expect(split).toMatch(/overflow:\s*hidden auto/);
   });
 
-  it("caps the stacked list on a phone and puts the open thread within reach", async () => {
+  // The regression this pins: the panes used to WRAP. A wrapped flex line is
+  // not bounded by its container, so under 850 px the thread pane kept its
+  // content height (17 836 px on a 320 px screen) inside a 640 px split with
+  // `overflow:hidden` — its own scroller never scrolled and every message
+  // past the first screenful was unreachable by wheel, page and keyboard.
+  // Measured in Chromium at 320, 360, 390, 414, 768, 790, 843, 849, 850, 900,
+  // 1280 and 1920 px: with these rules the thread scroller reaches its last
+  // row at every one of them and the list stays reachable.
+  it("divides the split by direction, never by wrapping", async () => {
     const opened = thread();
     const html = await render({ ...page([opened]), opened });
-    // The list panel: at most a share of the viewport when the panes stack.
-    expect(html).toMatch(/class="d-list-panel"/);
-    expect(html).toMatch(/\.d-list-panel\s*\{[^}]*max-height:\s*45dvh/);
+    const split = /\.d-split\s*\{([^}]*)\}/.exec(html)?.[1] ?? "";
+    expect(split).toMatch(/flex-direction:\s*column/);
+    expect(split).not.toMatch(/flex-wrap/);
+
+    // Both panes take a SHARE of that height — a zero basis, not a content
+    // height, and `min-height: 0` so each inner scroller can scroll.
+    const list = /\.d-list-panel\s*\{([^}]*)\}/.exec(html)?.[1] ?? "";
+    const pane = /\.d-thread-pane\s*\{([^}]*)\}/.exec(html)?.[1] ?? "";
+    expect(list).toMatch(/flex:\s*\d+ 1 0/);
+    expect(list).toMatch(/min-height:\s*0/);
+    expect(pane).toMatch(/flex:\s*\d+ 1 0/);
+    expect(pane).toMatch(/min-height:\s*0/);
+    // Neither pane may carry an inline style: the breakpoint changes their
+    // flex and their border, and an inline declaration would win over it.
+    expect(html).toMatch(/class="d-list-panel"[^>]*>/);
+    expect(html).not.toMatch(/class="d-list-panel"[^>]*style=/);
+    expect(html).not.toMatch(/class="d-thread-pane"[^>]*style=/);
+  });
+
+  it("switches to two columns past the width where they actually fit", async () => {
+    const opened = thread();
+    const html = await render({ ...page([opened]), opened });
+    // 790 px was 54 px early: the flex bases (330 + 460) are the split's
+    // CONTENT width, and CONTAINER_APP's gutter plus two borders cost the
+    // rest. Measured in Chromium: stacked at 838, 840, 842 and 849 px.
+    expect(html).toMatch(/@media \(min-width: 850px\)\s*\{[^@]*flex-direction:\s*row/);
+    expect(html).not.toMatch(/@media \(min-width: 790px\)/);
     // The thread pane is a target, and every row link points at it.
     expect(html).toContain('id="thread"');
     expect(html).toMatch(/href="\/conversations\?id=thr_1[^"]*#thread"/);
-    expect(html).toMatch(/\.d-thread-pane\s*\{[^}]*min-height:\s*0/);
-    // Side by side each pane takes the split's height and scrolls inside it.
-    expect(html).toMatch(/@media \(min-width: 790px\)\s*\{[^}]*max-height:\s*100%/);
+  });
+
+  it("gives the whole split to the list when nothing is opened", async () => {
+    const closed = await render({ ...page([thread()]), opened: null });
+    expect(closed).toMatch(/class="m-rise d-split" data-open="0"/);
+    expect(closed).toMatch(/\.d-split\[data-open="0"\] \.d-thread-pane \{ display: none/);
+
+    const opened = thread();
+    const open = await render({ ...page([opened]), opened });
+    expect(open).toMatch(/class="m-rise d-split" data-open="1"/);
+    // An id that matched nothing still has something to say.
+    const unknown = await render({ ...page([thread()]), unknownId: "thr_gone" });
+    expect(unknown).toMatch(/class="m-rise d-split" data-open="1"/);
+  });
+
+  // At 320 px the pane's own header and footer took 366 of its 383 px and
+  // left 48 px to read in — one line of one message.
+  it("makes the pane's own chrome compact where the pane is short", async () => {
+    const opened = thread();
+    const html = await render({ ...page([opened]), opened });
+    expect(html).toMatch(/@media \(max-width: 849px\)\s*\{[^@]*\.d-foot-why \{ display: none/);
+    expect(html).toMatch(/class="d-pane-head"/);
+    expect(html).toMatch(/class="d-pane-foot"/);
+    expect(html).toMatch(/class="d-foot-why"/);
+    // The headline and the reply command are never the part that goes.
+    expect(html).toContain("Reading only");
   });
 });
 

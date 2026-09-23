@@ -256,6 +256,9 @@ describe("V2HomePage — the two cards", () => {
     expect(html).toContain("triage-1 and ops-kai · incident #2214");
     expect(html).toContain("Read the whole thread →");
     expect(html).toContain("6 messages");
+    // Home used to link without the anchor, so on a phone the tap landed on
+    // the thread list rather than on the conversation it named.
+    expect(html).toMatch(/href="\/conversations\?id=[^"#]+#thread"/);
   });
 
   it("shows only the last four messages but counts the whole thread", async () => {

@@ -13,6 +13,7 @@
 
 import type Database from "better-sqlite3";
 import { incidentTypeSql } from "./dashboard-stats.js";
+import { threadHref } from "./thread-link.js";
 import type { HealthResult } from "./health.js";
 
 const MS_PER_HOUR = 60 * 60 * 1000;
@@ -131,7 +132,7 @@ function openIncidents(db: Database.Database, now: Date, limit: number): Attenti
     kind: "open_incident" as const,
     agent: r.from_agent,
     text: `reports ${shorten(r.context || r.payload)}, still unanswered`,
-    href: `/conversations?id=${encodeURIComponent(r.correlation_id ?? r.id)}`,
+    href: threadHref(r.correlation_id ?? r.id),
   }));
 }
 
