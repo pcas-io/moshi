@@ -56,6 +56,28 @@ version and commit are on `GET /health`.
 - `mesh_receive` hands a message to an agent once, also when the broker
   delivers it again.
 
+### Fixed
+- Conversations on a narrow screen. The two panes used to WRAP inside a split
+  of a fixed height with `overflow: hidden`, and a wrapped flex line is not
+  bounded by its container: below 850 px the thread pane kept its content
+  height — 17 836 px with a long thread on a 320 px screen — its own scroller
+  never scrolled, and every message past the first screenful was unreachable
+  by wheel, by page scroll and by keyboard. The panes now divide the split by
+  `flex-direction`, each from a zero flex basis, so both scroll inside it.
+  Measured in Chromium at 320, 360, 390, 414, 768, 790, 843, 849, 850, 900,
+  1280 and 1920 px: the last message is reachable at every one, and the thread
+  list stays reachable with it.
+- The breakpoint sat at 790 px, 54 px before the panes actually stopped
+  stacking, so between 790 and 843 px one of the two was pushed out of the
+  clipped split entirely. Direction leaves nothing for a wrap point to
+  disagree with; the switch is at 850 px, where the two flex bases fit.
+- Home's card and the attention band linked to a conversation without
+  `#thread`, the Conversations rows with it, so which entry point a reader had
+  followed decided where the tap landed. One `threadHref` for all three.
+- On a 320 px screen the open thread's own header and footer took 366 of its
+  383 px and left one line to read in. Stacked, the footer keeps its headline
+  and its reply command, and the meta line stops after two lines.
+
 ### Database
 - Migration `0010_message_reads.sql`: `messages.to_key`, tables
   `message_reads` and `send_attempts`, indexes on `activity_log` and
