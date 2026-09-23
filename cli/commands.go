@@ -30,7 +30,20 @@ func isKnownType(s string) bool {
 
 // ── Commands ────────────────────────────────────────────────────
 
-func cmdStatus(url, token string) {
+// status, get and history take no flags of their own. They went through no
+// parser at all, so `moshi get --url msg_1` or a mistyped `--limit` was
+// silently taken as an argument and the command asked the server for a
+// message called "--limit". Refusing it names the mistake where it was made.
+func noFlags(command string, args []string) []string {
+	p, err := parseArgs(args, nil)
+	if err != nil {
+		fatal("%s: %v", command, err)
+	}
+	return p.rest
+}
+
+func cmdStatus(url, token string, args []string) {
+	noFlags("status", args)
 	result := mcpCall(url, token, "mesh_status", map[string]any{})
 	agents, _ := result["agents"].([]any)
 
@@ -104,6 +117,12 @@ func cmdSend(url, token string, args []string) {
 	}
 	msgType := p.flags["type"]
 	if c, ok := p.flags["context"]; ok {
+		// An empty one passes the server's schema and is stored. Context is
+		// mandatory for a reason: a recipient is told to read it before
+		// acting. Refusing beats silently putting the hostname there.
+		if strings.TrimSpace(c) == "" {
+			fatal("--context needs a value: what you are doing, e.g. --context \"deploy of web-01\"")
+		}
 		context = c
 	}
 	payloadArgs := p.rest
@@ -261,12 +280,19 @@ func cmdReceive(url, token string, args []string) {
 	}
 
 	fmt.Printf("\n%d message(s)\n", len(messages))
+	// Also here, not only in the empty case: the pull tops its limit up with
+	// valid messages, so a batch that dropped expired ones is the designed
+	// case and the one where the count went missing.
+	if n := num(result["expired_dropped"]); n > 0 {
+		hint(fmt.Sprintf("%d message(s) had expired before you read them and were dropped.", n))
+	}
 	if n := num(result["inbox_pending"]); n > 0 {
 		hint(fmt.Sprintf("%d more message(s) waiting: moshi receive", n))
 	}
 }
 
 func cmdGet(url, token string, args []string) {
+	args = noFlags("get", args)
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "moshi get: message ID missing.")
 		fmt.Fprintln(os.Stderr, "")
@@ -309,6 +335,9 @@ func cmdReply(url, token string, args []string) {
 		context = "moshi@" + hostname
 	}
 	if c, ok := p.flags["context"]; ok {
+		if strings.TrimSpace(c) == "" {
+			fatal("--context needs a value: what you are doing, e.g. --context \"deploy of web-01\"")
+		}
 		context = c
 	}
 	rest := p.rest
@@ -341,6 +370,7 @@ func cmdReply(url, token string, args []string) {
 }
 
 func cmdHistory(url, token string, args []string) {
+	args = noFlags("history", args)
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "moshi history: thread ID missing.")
 		fmt.Fprintln(os.Stderr, "")
