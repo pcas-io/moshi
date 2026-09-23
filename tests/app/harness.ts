@@ -27,6 +27,9 @@ export const TEST_CONFIG: Config = {
   behindProxy: true,
   commit: "unknown",
   cspMode: "report",
+  // Empty on purpose: the app then takes the origin from the request, which
+  // is the path the header validation guards.
+  publicUrl: "",
   backupDir: null,
   backupKeep: 0,
 };
