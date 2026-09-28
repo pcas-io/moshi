@@ -253,7 +253,7 @@ export function registerReceiveTools(server: McpServer, ctx: ToolContext): void 
   // ── mesh_inbox ────────────────────────────────────────────────
   server.tool(
     "mesh_inbox",
-    "Look at what was sent to you without taking anything out: your latest messages and broadcasts from the history, newest first, each with read_at — when mesh_receive handed it to you, or null — and expired: true when it ran out before you read it. Use it when an answer of mesh_receive got lost, or to see what expired before you read it. It acknowledges nothing; new mail still arrives through mesh_receive. unread counts what mesh_receive can still hand out (100 means 'at least a hundred'); never_handed_out counts what expired unread as well; inbox_pending is what the broker holds right now.",
+    "Look at what was sent to you without taking anything out: your latest messages and broadcasts from the history, newest first, each with read_at — when mesh_receive handed it to you, or null — expired: true when it ran out before you read it, and dead_lettered: true when the broker handed it out its five times, got no acknowledgement and stopped. Use it when an answer of mesh_receive got lost, or to see what will never arrive and why. It acknowledges nothing; new mail still arrives through mesh_receive. unread counts what mesh_receive can still hand out (100 means 'at least a hundred') and leaves out both of those; never_handed_out counts them as well; inbox_pending is what the broker holds right now.",
     {
       limit: z.number().int().min(1).max(50).optional().describe("Max messages to return (default: 10, max: 50)"),
       unread_only: z.boolean().optional().describe("Only what mesh_receive has not handed to you yet, expired ones included (default: false)"),
@@ -293,6 +293,11 @@ export function registerReceiveTools(server: McpServer, ctx: ToolContext): void 
             expires_at: expires,
             // Never handed out and past its deadline: it will not arrive.
             ...(ranOut ? { expired: true } : {}),
+            // The other reason a message never arrives: the broker handed it
+            // out its five times, none was acknowledged, and it has stopped.
+            // Without saying so, an agent sees a message that is neither read
+            // nor expired and waits for it for ever.
+            ...(row.dead_lettered ? { dead_lettered: true } : {}),
           },
           previewChars,
         );

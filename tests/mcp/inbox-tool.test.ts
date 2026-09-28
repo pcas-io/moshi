@@ -9,11 +9,15 @@ import { createHarness, callTool } from "./harness";
 import type { Harness, ToolCall } from "./harness";
 import { ADMIN_NOT_AGENT_HINT } from "../../src/mcp/shared";
 import { DEFAULT_PREVIEW_CHARS } from "../../src/types";
+import { recordDeadLetter } from "../../src/services/dead-letter";
 
 const CTX = "inbox test";
 interface InboxRow { id: string; from: string; to: string; payload: string; read_at: string | null; expires_at: string; expired?: boolean; payload_truncated: boolean; payload_length: number }
 const rowsOf = (reply: ToolCall) => reply.json.messages as InboxRow[];
 const payloadsOf = (reply: ToolCall) => rowsOf(reply).map((m) => m.payload);
+/** The stream sequence the publish ack stored, which the advisory names. */
+const seqOf = (db: { prepare: (s: string) => { get: (...a: unknown[]) => unknown } }, id: string) =>
+  (db.prepare("SELECT stream_seq FROM messages WHERE id = ?").get(id) as { stream_seq: number }).stream_seq;
 
 describe("mesh_inbox", () => {
   let h: Harness;
@@ -209,6 +213,70 @@ describe("mesh_inbox", () => {
     expect(after.json.unread).toBe(0);
     // The one that ran out was never handed out and never will be.
     expect(after.json.never_handed_out).toBe(1);
+  });
+
+  // The broker hands a message out five times; when none is acknowledged it
+  // stops for good. `unread` counts what mesh_receive can STILL hand out, so
+  // it has to leave that one out — an agent that loops on `unread > 0` used
+  // to spin on a message that was never going to arrive.
+  it("stops counting a message the broker has given up on", async () => {
+    const gone = await toAlpha("the broker gave up on this one");
+    await toAlpha("still due");
+
+    const before = await callTool(alpha, "mesh_inbox", { limit: 10 });
+    expect(before.json.unread).toBe(2);
+    expect(before.json.never_handed_out).toBe(2);
+
+    recordDeadLetter(
+      h.db,
+      h.activity,
+      { consumer: "agent-alpha", streamSeq: seqOf(h.db, gone.json.id as string), deliveries: 5 },
+    );
+
+    const after = await callTool(alpha, "mesh_inbox", { limit: 10 });
+    expect(after.json.unread).toBe(1);
+    // It was never handed out and never will be — like an expired one, it
+    // stays in this count.
+    expect(after.json.never_handed_out).toBe(2);
+    // And the message says why it is never arriving.
+    const byId = Object.fromEntries(rowsOf(after).map((m) => [m.id, m as InboxRow & { dead_lettered?: boolean }]));
+    expect(byId[gone.json.id as string].dead_lettered).toBe(true);
+    expect(byId[gone.json.id as string].expired).toBeUndefined();
+    expect(Object.values(byId).filter((m) => m.dead_lettered)).toHaveLength(1);
+  });
+
+  // The decisive one: a name is a label, and a rename rewrites the message
+  // history but no audit row. Subtracting by name would start counting the
+  // message again the moment the agent is renamed.
+  it("keeps it subtracted across a rename", async () => {
+    const gone = await toAlpha("the broker gave up on this one");
+    recordDeadLetter(
+      h.db,
+      h.activity,
+      { consumer: "agent-alpha", streamSeq: seqOf(h.db, gone.json.id as string), deliveries: 5 },
+    );
+    expect((await callTool(alpha, "mesh_inbox", {})).json.unread).toBe(0);
+
+    const a = h.agents.getByName("alpha")!;
+    expect(h.agents.rename(a.id, "alpha-two")).toBe(true);
+    const renamed = await h.connect("alpha-two");
+    const after = await callTool(renamed, "mesh_inbox", {});
+    expect(after.json.unread).toBe(0);
+    expect(after.json.never_handed_out).toBe(1);
+    expect(rowsOf(after)[0]!.id).toBe(gone.json.id);
+  });
+
+  // Somebody else's dead letter is not this reader's business.
+  it("subtracts only the reader's own", async () => {
+    const gone = await toAlpha("for alpha");
+    recordDeadLetter(
+      h.db,
+      h.activity,
+      { consumer: "agent-beta", streamSeq: seqOf(h.db, gone.json.id as string), deliveries: 5 },
+    );
+    const after = await callTool(alpha, "mesh_inbox", {});
+    expect(after.json.unread).toBe(1);
+    expect(rowsOf(after)[0]).not.toHaveProperty("dead_lettered");
   });
 
   it("is announced as read-only", async () => {

@@ -73,6 +73,34 @@ describe("recordDeadLetter", () => {
     }]);
   });
 
+  // A name is a label. A rename rewrites messages.from_agent and to_agent and
+  // leaves every audit row exactly as it was, so the "have I written this
+  // already?" lookup used to answer "no" after one and write a second row —
+  // and `unread` in mesh_inbox subtracts by the same lookup.
+  it("writes it once across a rename, and records the reader by key", () => {
+    const msg = stored(7);
+    expect(recordDeadLetter(db, activity, { consumer: "agent-beta", streamSeq: 7, deliveries: 5 })).toBe(true);
+    const written = db.prepare("SELECT agent_name, agent_key FROM activity_log WHERE action = ?").get(MESSAGE_DEAD_LETTER);
+    expect(written).toEqual({ agent_name: "beta", agent_key: "beta" });
+
+    const beta = agents.getByName("beta")!;
+    expect(agents.rename(beta.id, "beta-two")).toBe(true);
+    // The history now says beta-two; the audit row still says beta.
+    expect((db.prepare("SELECT to_agent FROM messages WHERE id = ?").get(msg.id) as { to_agent: string }).to_agent).toBe("beta-two");
+
+    expect(recordDeadLetter(db, activity, { consumer: "agent-beta", streamSeq: 7, deliveries: 5 })).toBe(false);
+    expect(rows()).toHaveLength(1);
+  });
+
+  // Rows from before migration 0011 have no key. They are still found.
+  it("still finds a row that was written before the key existed", () => {
+    stored(7);
+    recordDeadLetter(db, activity, { consumer: "agent-beta", streamSeq: 7, deliveries: 5 });
+    db.prepare("UPDATE activity_log SET agent_key = NULL WHERE action = ?").run(MESSAGE_DEAD_LETTER);
+    expect(recordDeadLetter(db, activity, { consumer: "agent-beta", streamSeq: 7, deliveries: 5 })).toBe(false);
+    expect(rows()).toHaveLength(1);
+  });
+
   it("writes it once, however often the broker says it", () => {
     stored(7);
     recordDeadLetter(db, activity, { consumer: "agent-beta", streamSeq: 7, deliveries: 5 });
