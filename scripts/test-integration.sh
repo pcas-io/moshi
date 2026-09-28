@@ -11,7 +11,7 @@ set -eu
 
 # The version docker-compose.yml runs. tests/deploy-files.test.ts keeps the two
 # together: bump both.
-IMAGE="${MOSHI_TEST_NATS_IMAGE:-nats:2.12.6-alpine}"
+IMAGE="${MOSHI_TEST_NATS_IMAGE:-nats:2.12.15-alpine}"
 NAME="moshi-it-nats-$$"
 
 # No --rm and a fixed port: the reconnect test stops and starts this very
