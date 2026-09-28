@@ -285,9 +285,10 @@ take, and a test keeps it so.
 
 ### The broker
 
-`docker-compose.yml` pins the NATS image to a version: **2.12.6**, which is
-what production ran when the pin was made (`nats connected … server_version`
-in the log says what runs). The floating tag had moved on to 2.15 by then.
+`docker-compose.yml` pins the NATS image to a version: **2.12.15**. 2.12.6 is
+what production ran when the pin was first made (`nats connected …
+server_version` in the log says what runs); the floating tag had moved on to
+2.15 by then.
 Upgrading is a decision: bump the compose file and
 `scripts/test-integration.sh` together, one minor version at a time, with a
 copy of the `nats-data` volume, and never go back below what has run: a
