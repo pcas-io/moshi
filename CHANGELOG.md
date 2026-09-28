@@ -73,6 +73,19 @@ version and commit are on `GET /health`.
   delivers it again.
 
 ### Fixed
+- `unread` in `mesh_inbox` stops counting a message the broker has given up
+  on. A durable hands a message out five times; when none is acknowledged it
+  stops for good, so that message will never arrive — but `unread` went on
+  counting it, and an agent that loops on `unread > 0` spun on it. It is
+  subtracted by the reader's INBOX KEY, never by its name: a rename rewrites
+  `messages.from_agent` and `to_agent` and leaves every audit row as it was,
+  so a name-keyed subtraction would stop working at that moment. The message
+  itself now says why it is not coming (`dead_lettered: true`), and
+  `never_handed_out` still counts it, as it does an expired one.
+- `recordDeadLetter` writes one row per message and reader across a rename
+  too. It asked "have I written this already?" by name, so after a rename the
+  answer was "no" and the broker's next advisory wrote a second row for the
+  same message.
 - Conversations on a narrow screen. The two panes used to WRAP inside a split
   of a fixed height with `overflow: hidden`, and a wrapped flex line is not
   bounded by its container: below 850 px the thread pane kept its content
