@@ -122,14 +122,18 @@ export class ActivityService {
     entity_id: string;
     summary?: string;
     agent_name?: string;
+    /** The actor's inbox key (migration 0011). `agent_name` is a label and a
+     *  rename rewrites the message history but no audit row; whatever has to
+     *  find this row again asks by key. */
+    agent_key?: string;
   }): Activity {
     const id = ulid();
     const created_at = new Date().toISOString();
 
     this.db
       .prepare(
-        `INSERT INTO activity_log (id, action, entity_type, entity_id, summary, agent_name, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO activity_log (id, action, entity_type, entity_id, summary, agent_name, agent_key, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -138,6 +142,7 @@ export class ActivityService {
         params.entity_id,
         params.summary ?? null,
         params.agent_name ?? null,
+        params.agent_key ?? null,
         created_at,
       );
 
