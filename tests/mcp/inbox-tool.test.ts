@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type Database from "better-sqlite3";
 import { createHarness, callTool } from "./harness";
 import type { Harness, ToolCall } from "./harness";
 import { ADMIN_NOT_AGENT_HINT } from "../../src/mcp/shared";
@@ -16,7 +17,7 @@ interface InboxRow { id: string; from: string; to: string; payload: string; read
 const rowsOf = (reply: ToolCall) => reply.json.messages as InboxRow[];
 const payloadsOf = (reply: ToolCall) => rowsOf(reply).map((m) => m.payload);
 /** The stream sequence the publish ack stored, which the advisory names. */
-const seqOf = (db: { prepare: (s: string) => { get: (...a: unknown[]) => unknown } }, id: string) =>
+const seqOf = (db: Database.Database, id: string) =>
   (db.prepare("SELECT stream_seq FROM messages WHERE id = ?").get(id) as { stream_seq: number }).stream_seq;
 
 describe("mesh_inbox", () => {
