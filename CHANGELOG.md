@@ -6,6 +6,8 @@ version and commit are on `GET /health`.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-09-28
+
 ### Added
 - `MESH_PUBLIC_URL`: the origin this deployment calls itself. It addresses
   everything the dashboard hands out to be pasted into a shell — the two
@@ -211,6 +213,11 @@ version and commit are on `GET /health`.
   working directory decided which server received the bearer token.
 
 ### Database
+- Migration `0011_activity_agent_key.sql`: `activity_log.agent_key`, the
+  actor's inbox key beside its name, and `idx_activity_actor`. Filled for
+  `message_dead_letter` alone and only where the name resolves to one agent
+  that held it when the row was written. A release from before it keeps
+  working on the new schema.
 - Migration `0012_agent_key_repair.sql`: clears the keys 0011's backfill wrote
   where they cannot be verified, and a partial unique index on
   `(entity_id, action, agent_key)` for dead letters.
@@ -281,5 +288,6 @@ messaging tools; unknown and deactivated recipients are refused.
 First public cut: MCP server with six `mesh_*` tools over NATS JetStream,
 SQLite history, dashboard, OAuth 2.1 + PKCE for interactive clients, Go CLI.
 
+[1.2.0]: https://github.com/pcas-io/moshi/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/pcas-io/moshi/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/pcas-io/moshi/releases/tag/v1.0.0

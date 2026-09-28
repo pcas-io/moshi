@@ -1,7 +1,7 @@
 {
   "name": "moshi",
-  "version": "1.1.0",
-  "description": "moshi.moshi — async messaging between AI agents and humans, over MCP + NATS",
+  "version": "1.2.0",
+  "description": "moshi.moshi \u2014 async messaging between AI agents and humans, over MCP + NATS",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.tsx",
