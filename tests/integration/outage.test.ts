@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { connect as natsConnect } from "nats";
 import { initDatabase } from "../../src/services/db";
-import { NatsService } from "../../src/services/nats";
+import { NatsService, JS_TIMEOUT_MS } from "../../src/services/nats";
 import { AgentService } from "../../src/services/agent";
 import { ActivityService } from "../../src/services/activity";
 import { PresenceService } from "../../src/services/presence";
@@ -135,12 +135,28 @@ describe.skipIf(!URL || !CONTAINER)("a broker that stops answering", () => {
   }, 30_000);
 
   it("reports the outage on /health at once, stays alive on /livez, and still serves the dashboard", async () => {
-    pause();
     const timed = async (path: string, headers: Record<string, string> = {}) => {
       const t0 = performance.now();
       const res = await app.request(path, { headers });
       return { res, ms: performance.now() - t0 };
     };
+
+    // First with the broker UP: what these pages cost on THIS runner. Twice,
+    // and the SECOND one counts — the first render pays a one-off warm-up
+    // (measured: 20 ms against 2 ms) that the outage run does not, and a
+    // baseline that carries it would hand the comparison 18 ms of slack it
+    // has not earned.
+    const PAGES = ["/", "/agents", "/log", "/conversations"];
+    const { cookie } = await signIn(app, ADMIN_TOKEN);
+    const healthy: Record<string, number> = {};
+    for (const path of PAGES) {
+      await timed(path, { Cookie: cookie, Accept: "text/html" });
+      const page = await timed(path, { Cookie: cookie, Accept: "text/html" });
+      expect(page.res.status, path).toBe(200);
+      healthy[path] = page.ms;
+    }
+
+    pause();
 
     const health = await timed("/health");
     expect(health.res.status).toBe(503);
@@ -151,16 +167,23 @@ describe.skipIf(!URL || !CONTAINER)("a broker that stops answering", () => {
     expect(live.res.status).toBe(200);
     expect(live.ms).toBeLessThan(200);
 
-    const { cookie } = await signIn(app, ADMIN_TOKEN);
-    for (const path of ["/", "/agents", "/log", "/conversations"]) {
+    for (const path of PAGES) {
       const page = await timed(path, { Cookie: cookie, Accept: "text/html" });
       expect(page.res.status, path).toBe(200);
-      // What this proves is that a page does not WAIT on the broker. One that
-      // did would pay JS_TIMEOUT_MS (1500 ms) at least. Measured here: 17 ms
-      // for the first page, 1 to 3 ms for the rest; a loaded CI runner took
-      // 504 ms for the first one and failed a 500 ms bound that was never
-      // about the cost of rendering.
-      expect(page.ms, path).toBeLessThan(1200);
+      // What this proves is that a page does not WAIT on the broker: one that
+      // did would pay JS_TIMEOUT_MS on top of what the same page costs with
+      // the broker up. So the bound is that baseline plus HALF the timeout —
+      // enough that a real wait (a full 1500 ms) always breaks it, and far
+      // more slack than runner noise needs, because the baseline was measured
+      // on the same runner moments earlier.
+      //
+      // An absolute bound could not do this. It cannot tell a slow runner
+      // from a broker wait, and twice it did not: 504 ms failed a 500 ms
+      // bound, then 1383 ms failed a 1200 ms bound — and 1383 ms is BELOW the
+      // 1500 ms a wait would have cost, so that run proved the very thing the
+      // test is there for and was reported as a failure.
+      expect(page.ms, `${path} (${Math.round(healthy[path]!)} ms with the broker up)`)
+        .toBeLessThan(healthy[path]! + JS_TIMEOUT_MS / 2);
     }
   }, 30_000);
 

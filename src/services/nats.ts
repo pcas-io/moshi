@@ -50,7 +50,9 @@ const KV_TTL_MS = 600_000;
 // How long one JetStream API call that READS may take. The nats.js default is 5 s, and
 // one agent request makes three to five such calls: with a broker that had
 // stopped answering, every request took 15 to 25 seconds (measured).
-const JS_TIMEOUT_MS = 1500;
+/** Exported so a test can name the cost of waiting on the broker instead
+ *  of hardcoding a number that drifts away from it. */
+export const JS_TIMEOUT_MS = 1500;
 // A publish gets more room. When it times out the outcome is UNKNOWN: the
 // bytes may sit in the socket and be stored the moment the broker breathes
 // again, while the sender is told "not delivered", writes no history row and
