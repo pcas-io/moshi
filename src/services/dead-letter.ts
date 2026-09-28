@@ -94,9 +94,18 @@ export function recordDeadLetter(
   ) as { id: string; from_agent: string } | undefined;
 
   const entityId = message?.id ?? `seq:${letter.streamSeq}`;
+  // By KEY first, by name only for a row written before migration 0011.
+  // Asked by name alone, a rename made the answer "no" and the broker's next
+  // advisory wrote a second row for the same message — and `unread` in
+  // mesh_inbox subtracts by the same key, so it would have started counting
+  // an undeliverable message again at the same moment.
   const noted = db
-    .prepare("SELECT 1 FROM activity_log WHERE entity_id = ? AND action = ? AND agent_name = ?")
-    .get(entityId, MESSAGE_DEAD_LETTER, name);
+    .prepare(
+      `SELECT 1 FROM activity_log
+        WHERE entity_id = ? AND action = ?
+          AND (agent_key = ? OR (agent_key IS NULL AND agent_name = ?))`,
+    )
+    .get(entityId, MESSAGE_DEAD_LETTER, reader.key, name);
   if (noted) return false;
 
   const what = message ? `${message.id} from ${message.from_agent}` : `a message (stream sequence ${letter.streamSeq})`;
@@ -108,6 +117,7 @@ export function recordDeadLetter(
       entity_id: entityId,
       summary: `${name} was handed ${what} ${letter.deliveries} times and never acknowledged it; the broker has stopped delivering it. ${tail}`,
       agent_name: name,
+      agent_key: reader.key,
     });
   } catch (err) {
     // Another process wrote it between the check and the insert: the unique

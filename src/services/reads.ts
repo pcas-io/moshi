@@ -12,6 +12,7 @@
 
 import type Database from "better-sqlite3";
 import { FIELD_LIMITS } from "../types.js";
+import { MESSAGE_DEAD_LETTER } from "./dead-letter.js";
 
 const MIGRATION = "0010_message_reads.sql";
 
@@ -59,6 +60,8 @@ export interface InboxRow {
   ttl_seconds: number;
   created_at: string;
   read_at: string | null;
+  /** 1 when the broker has given up on handing this one to this reader. */
+  dead_lettered: number;
 }
 
 export interface InboxQuery {
@@ -77,22 +80,39 @@ export interface InboxQuery {
 // no reads and would look unread for ever).
 const DIRECT = "m.to_key = @key AND m.created_at >= @since";
 const BROADCASTS = "m.to_agent = 'broadcast' AND m.to_key = '' AND m.created_at >= @since AND (m.from_key IS NULL OR m.from_key != @key)";
-const COLUMNS = "m.id, m.from_agent, m.to_agent, m.type, m.payload, m.context, m.correlation_id, m.reply_to, m.priority, m.ttl_seconds, m.created_at, r.read_at";
+/** The broker has stopped delivering this message to THIS reader. Keyed on
+ *  the inbox key: `activity_log.agent_name` is a label, and a rename rewrites
+ *  the message history but no audit row, so a name-keyed lookup silently
+ *  stops matching (migration 0011). One index seek on idx_activity_actor. */
+const DEAD_LETTERED =
+  "EXISTS (SELECT 1 FROM activity_log a WHERE a.entity_id = m.id AND a.action = @deadLetter AND a.agent_key = @key)";
+
+const COLUMNS =
+  "m.id, m.from_agent, m.to_agent, m.type, m.payload, m.context, m.correlation_id, m.reply_to, m.priority, m.ttl_seconds, m.created_at, r.read_at, " +
+  `${DEAD_LETTERED} AS dead_lettered`;
 const READ_JOIN = "LEFT JOIN message_reads r ON r.message_id = m.id AND r.reader_key = @key";
 /** How far `unread` counts. Above it the answer is `UNREAD_CAP + 1`, which
  *  reads as "more than this": an agent only acts on "is there any". */
 export const UNREAD_CAP = 99;
 /** The longest deadline a message can have. Nothing older is still due. */
 const MAX_TTL_MS = FIELD_LIMITS.TTL_SECONDS_MAX * 1000;
-/** Still deliverable: never handed out, and not past its deadline. The
+/** Still deliverable: never handed out, not past its deadline, and not given
+ *  up on. The
  *  `strftime` cannot use an index, so `@oldestDue` prunes by created_at
  *  first: nothing older than the longest deadline can still be due. Without
  *  it the count walked a month of expired broadcasts before the first one
  *  that still counted. */
 const STILL_DUE =
-  "r.read_at IS NULL AND m.created_at >= @oldestDue AND CAST(strftime('%s', m.created_at) AS INTEGER) + m.ttl_seconds >= @nowSeconds";
+  "r.read_at IS NULL AND m.created_at >= @oldestDue AND CAST(strftime('%s', m.created_at) AS INTEGER) + m.ttl_seconds >= @nowSeconds" +
+  // A message the broker has given up on is not still due: it will never be
+  // handed out again, and an agent that loops on `unread > 0` used to spin on
+  // it. By the reader's KEY, never by its name — a rename leaves every audit
+  // row as it was (migration 0011).
+  ` AND NOT ${DEAD_LETTERED}`;
 /** Never handed out, deadline or no deadline: STILL_DUE plus what ran out
- *  before it was read. The same `@oldestDue` bound, for the same reason. */
+ *  before it was read AND what the broker gave up on. The same `@oldestDue`
+ *  bound, for the same reason. Neither will ever arrive; both were never
+ *  handed out, which is what this one counts. */
 const NEVER_READ = "r.read_at IS NULL AND m.created_at >= @oldestDue";
 
 /** What was sent to an agent, newest first, and how much of it mesh_receive
@@ -111,6 +131,7 @@ export function listInbox(
     key: q.key,
     since,
     nowSeconds: Math.floor(now / 1000),
+    deadLetter: MESSAGE_DEAD_LETTER,
     oldestDue: new Date(now - MAX_TTL_MS).toISOString(),
   };
   const unreadOnly = q.unreadOnly ? " AND r.read_at IS NULL" : "";
