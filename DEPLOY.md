@@ -79,8 +79,12 @@ out for good. Plain http cannot close this class.
 
 **The first deploy with the prefix signs every operator out once.** The names
 change, so the cookie a browser holds is not the one the server now reads.
-Signing in again is all it takes; the old cookie is ignored from that moment
-and expires by itself within seven days.
+Signing in again is all it takes, and that sign-in also clears the old cookie:
+it is otherwise a valid session credential sitting in the browser for seven
+days under a name nothing reads, which signing out could not end and which
+would come back if the prefix were reverted or `MESH_COOKIE_SECURE=0` set.
+Signing out clears it too. The clearing can go a release later, when no such
+cookie can still be alive.
 
 ### Sessions and what ends them
 
