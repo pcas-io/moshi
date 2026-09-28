@@ -13,6 +13,8 @@ import {
   CSRF_SESSION_MAX_AGE_MS,
   loginCookie,
   sessionCookie,
+  LOGIN_COOKIE,
+  SESSION_COOKIE,
   SESSION_MAX_AGE_SECONDS,
   csrfBindingOf,
   generateCsrfToken,
@@ -85,6 +87,24 @@ export function createSessionRoutes({ agents, secureCookie, guard }: SessionDeps
   const sessionJar = sessionCookie(secureCookie);
   const loginJar = loginCookie(secureCookie);
 
+  /**
+   * The cookies of the release before the `__Host-` prefix. A browser that
+   * signed in then still holds a cryptographically valid `mesh_session` for up
+   * to seven days, under a name this code no longer reads — so signing out
+   * cannot end it, and it comes back the moment somebody reverts the prefix or
+   * sets MESH_COOKIE_SECURE=0, which is what an operator does on a bad day.
+   *
+   * Cleared wherever this code hands out or takes away a session. The
+   * attributes are the ones that release used, or the browser keeps the cookie.
+   * Remove this a release after the prefix landed: by then no such cookie can
+   * still be alive.
+   */
+  const clearUnprefixed = (c: Context<HonoEnv>) => {
+    if (!secureCookie) return; // there the plain name IS the current one
+    deleteCookie(c, SESSION_COOKIE, { httpOnly: true, sameSite: "Lax", path: "/", secure: true });
+    deleteCookie(c, LOGIN_COOKIE, { httpOnly: true, sameSite: "Lax", path: "/login", secure: true });
+  };
+
   session.post("/login", async (c) => {
     const cookieSecret = secretOf(c);
     const body = await formOf(c);
@@ -138,6 +158,7 @@ export function createSessionRoutes({ agents, secureCookie, guard }: SessionDeps
     });
     // Spent. The next sign-in page brings its own.
     deleteCookie(c, loginJar.name, loginJar.attrs);
+    clearUnprefixed(c);
     return c.redirect(next);
   });
 
@@ -164,6 +185,7 @@ export function createSessionRoutes({ agents, secureCookie, guard }: SessionDeps
 
     // Same NAME and attributes as when it was set, or browsers keep it.
     deleteCookie(c, sessionJar.name, sessionJar.attrs);
+    clearUnprefixed(c);
     return c.redirect("/login");
   });
 

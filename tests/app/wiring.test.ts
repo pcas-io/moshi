@@ -248,7 +248,11 @@ describe("public routes and headers", () => {
     expect(plain).not.toMatch(/;\s*Secure/i);
 
     const secure = createTestApp({ cookieSecure: true });
-    expect(await lineOf(secure.app, SESSION_COOKIE)).toBe("");
+    // The plain name appears only as a DELETION of the cookie the release
+    // before the prefix left in the browser, never carrying a session.
+    const plainLine = await lineOf(secure.app, SESSION_COOKIE);
+    expect(plainLine).toMatch(new RegExp(`^${SESSION_COOKIE}=;`));
+    expect(plainLine).toMatch(/Max-Age=0/);
     const prefixed = await lineOf(secure.app, `${HOST_PREFIX}${SESSION_COOKIE}`);
     expect(prefixed).toMatch(/;\s*Secure/i);
     expect(prefixed).toMatch(/;\s*Path=\/(;|$)/);
