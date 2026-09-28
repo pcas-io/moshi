@@ -417,7 +417,7 @@ peer set). Until that is fixed: `npx npm@latest update <packages>`, then
 The version is `package.json`'s. After the merge that bumps it:
 
 ```bash
-git fetch origin && git tag -s v1.1.0 origin/main -m "moshi 1.1.0" && git push origin v1.1.0
+git fetch origin && git tag -s v1.2.0 origin/main -m "moshi 1.2.0" && git push origin v1.2.0
 ```
 
 `CHANGELOG.md` links compare views between tags, so a version without its
