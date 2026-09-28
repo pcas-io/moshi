@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import Database from "better-sqlite3";
 import { readFileSync, readdirSync } from "fs";
 import type { AppVariables, Env } from "../../src/types";
-import { generateCsrfToken, generateSessionCookie, loginCsrfBinding, csrfBindingOf, readSessionCookie, LOGIN_COOKIE, SESSION_COOKIE } from "../../src/auth";
+import { generateCsrfToken, generateSessionCookie, loginCsrfBinding, csrfBindingOf, readSessionCookie, LOGIN_COOKIE, SESSION_COOKIE, HOST_PREFIX, loginCookie, sessionCookie } from "../../src/auth";
 import { AgentService } from "../../src/services/agent";
 import { ActivityService } from "../../src/services/activity";
 import { createSessionRoutes } from "../../src/routes/session";
@@ -36,7 +36,10 @@ const form = (fields: Record<string, string>, cookie?: string): RequestInit => (
 
 // The sign-in page's pre-session cookie and a form token that fits it.
 const NONCE = "n".repeat(24);
-const PRE = `${LOGIN_COOKIE}=${NONCE}`;
+/** The pre-session cookie a browser holds, under the name the app set it
+ *  with: `__Host-` prefixed when the cookie is Secure. */
+const pre = (secure: boolean) => `${loginCookie(secure).name}=${NONCE}`;
+const PRE = pre(true);
 const loginCsrf = () => generateCsrfToken(SECRET, loginCsrfBinding(NONCE));
 
 describe("POST /login", () => {
@@ -60,19 +63,23 @@ describe("POST /login", () => {
     expect(res.headers.get("location")).toBe("/login?error=expired");
   });
 
-  it("signs in and sets a Secure, HttpOnly, SameSite=Lax cookie when told to", async () => {
+  it("signs in and sets a Secure, HttpOnly, SameSite=Lax, __Host- cookie when told to", async () => {
     const res = await build(agents, true).request("/login", form({ csrf: loginCsrf(), token, next: "/log?tab=audit" }, PRE));
     expect(res.headers.get("location")).toBe("/log?tab=audit");
-    const cookie = res.headers.getSetCookie().find((l) => l.startsWith("mesh_session=")) ?? "";
-    expect(cookie).toContain("mesh_session=");
+    const name = `${HOST_PREFIX}${SESSION_COOKIE}`;
+    const cookie = res.headers.getSetCookie().find((l) => l.startsWith(`${name}=`)) ?? "";
+    expect(cookie).toContain(`${name}=`);
     expect(cookie).toMatch(/HttpOnly/i);
     expect(cookie).toMatch(/SameSite=Lax/i);
     expect(cookie).toMatch(/;\s*Secure/i);
+    expect(cookie).toMatch(/;\s*Path=\/(;|$)/);
+    expect(cookie).not.toMatch(/Domain=/i);
   });
 
   it("names the agent by id in the session, never by name or token", async () => {
     const res = await build(agents, true).request("/login", form({ csrf: loginCsrf(), token }, PRE));
-    const value = decodeURIComponent((res.headers.getSetCookie().find((l) => l.startsWith("mesh_session=")) ?? "").split(";")[0].slice("mesh_session=".length));
+    const name = sessionCookie(true).name;
+    const value = decodeURIComponent((res.headers.getSetCookie().find((l) => l.startsWith(`${name}=`)) ?? "").split(";")[0].slice(name.length + 1));
     const claims = readSessionCookie(value, SECRET);
     expect(claims).toMatchObject({ kind: "agent", id: agents.getByName("scout")!.id });
     expect(value).not.toContain("scout");
@@ -94,7 +101,7 @@ describe("POST /login", () => {
   });
 
   it("leaves Secure off when told to, or sign-in over plain http would break", async () => {
-    const res = await build(agents, false).request("/login", form({ csrf: loginCsrf(), token }, PRE));
+    const res = await build(agents, false).request("/login", form({ csrf: loginCsrf(), token }, pre(false)));
     const line = res.headers.getSetCookie().find((l) => l.startsWith("mesh_session=")) ?? "";
     expect(line).toContain("mesh_session=");
     expect(line).not.toMatch(/;\s*Secure/i);
@@ -110,7 +117,7 @@ describe("POST /login", () => {
   it("logs out by clearing the cookie with the same attributes", async () => {
     const session = generateSessionCookie({ kind: "admin", id: "", tokenHash: "h".repeat(64) }, SECRET);
     const csrf = generateCsrfToken(SECRET, csrfBindingOf(readSessionCookie(session, SECRET)!));
-    const res = await build(agents, true).request("/logout", form({ csrf }, `${SESSION_COOKIE}=${encodeURIComponent(session)}`));
+    const res = await build(agents, true).request("/logout", form({ csrf }, `${sessionCookie(true).name}=${encodeURIComponent(session)}`));
     expect(res.headers.get("location")).toBe("/login");
     const cookie = res.headers.get("set-cookie") ?? "";
     expect(cookie).toMatch(/mesh_session=;/);
