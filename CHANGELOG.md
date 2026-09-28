@@ -146,6 +146,20 @@ version and commit are on `GET /health`.
   opposite three lines further on.
 
 ### Security
+- The session and pre-session cookies carry the `__Host-` prefix wherever they
+  are `Secure`: `__Host-mesh_session` and `__Host-mesh_login`. A browser takes
+  such a cookie only from this exact origin, with `Path=/` and no `Domain`,
+  and lets no other host overwrite it. Without it a sibling host under the
+  same registrable domain could set `mesh_session=…; Domain=enki.run` and the
+  browser sent it here — a class the same-origin check on form posts does not
+  cover, because it asks who POSTED the form, not who WROTE the cookie. The
+  pre-session cookie's `Path` widens from `/login` to `/`, which the prefix
+  requires and which is worth it: planting THAT cookie is how a sibling host
+  would fix a form token onto somebody else's sign-in page. With
+  `MESH_COOKIE_SECURE=0` the plain names stay, because a browser drops a
+  `__Host-` cookie that is not `Secure`. **The first deploy signs every
+  operator out once**: the name changes, so the cookie a browser holds is not
+  the one the server reads.
 - `--` now ends the global `--url` and `--token` flags too. The scan for
   those two ran over every argument and knew nothing about the marker, so a
   message that contained `--url http://elsewhere` sent the real bearer token
