@@ -9,7 +9,7 @@ import type { AppNats } from "../../src/app";
 import type { Config } from "../../src/config";
 import { createHarness } from "../mcp/harness";
 import type { Harness } from "../mcp/harness";
-import { generateCsrfToken, readSessionCookie, csrfBindingOf, SESSION_COOKIE, LOGIN_COOKIE } from "../../src/auth";
+import { generateCsrfToken, readSessionCookie, csrfBindingOf, SESSION_COOKIE, LOGIN_COOKIE, HOST_PREFIX } from "../../src/auth";
 
 export const ADMIN_TOKEN = "a".repeat(40);
 
@@ -93,6 +93,12 @@ export function cookieFrom(res: Response, name: string): string | null {
   return null;
 }
 
+/** Whichever name the app used. A Secure cookie carries the `__Host-` prefix,
+ *  and a test that pins the bare name would silently stop finding it. */
+export function anyCookieFrom(res: Response, base: string): string | null {
+  return cookieFrom(res, HOST_PREFIX + base) ?? cookieFrom(res, base);
+}
+
 export const csrfInPage = (html: string): string => /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? "";
 
 export const formPost = (fields: Record<string, string>, headers: Record<string, string> = {}): RequestInit => ({
@@ -106,9 +112,9 @@ export async function signIn(
   app: App, token: string, fields: Record<string, string> = {}, headers: Record<string, string> = {},
 ): Promise<{ res: Response; cookie: string }> {
   const page = await app.request("/login", { headers });
-  const pre = cookieFrom(page, LOGIN_COOKIE) ?? "";
+  const pre = anyCookieFrom(page, LOGIN_COOKIE) ?? "";
   const res = await app.request("/login", formPost({ csrf: csrfInPage(await page.text()), token, ...fields }, { Cookie: pre, ...headers }));
-  return { res, cookie: cookieFrom(res, SESSION_COOKIE) ?? "" };
+  return { res, cookie: anyCookieFrom(res, SESSION_COOKIE) ?? "" };
 }
 
 /** A form token for the session in `cookie` (`mesh_session=…`), as a page of that session would carry it. */

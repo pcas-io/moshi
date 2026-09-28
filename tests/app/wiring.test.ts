@@ -7,6 +7,7 @@ import { readFileSync } from "fs";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestApp, signIn, csrfFor, ADMIN_TOKEN, MCP_HEADERS, rpc } from "./harness";
 import type { TestApp } from "./harness";
+import { SESSION_COOKIE, HOST_PREFIX } from "../../src/auth";
 
 let t: TestApp;
 let agentToken: string;
@@ -236,13 +237,22 @@ describe("public routes and headers", () => {
     expect(cookie).toContain("mesh_session=");
   });
 
-  it("sets Secure on the session cookie exactly when the config says so", async () => {
-    const sessionLine = async (app: TestApp["app"]) =>
-      (await signIn(app, ADMIN_TOKEN)).res.headers.getSetCookie().find((l) => l.startsWith("mesh_session=")) ?? "";
-    expect(await sessionLine(t.app)).toContain("mesh_session=");
-    expect(await sessionLine(t.app)).not.toMatch(/;\s*Secure/i);
+  // Secure and __Host- travel together: the prefix is only honoured with it,
+  // and without it the plain name has to stay or the cookie is dropped.
+  it("sets Secure and the __Host- prefix exactly when the config says so", async () => {
+    const lineOf = async (app: TestApp["app"], name: string) =>
+      (await signIn(app, ADMIN_TOKEN)).res.headers.getSetCookie().find((l) => l.startsWith(`${name}=`)) ?? "";
+
+    const plain = await lineOf(t.app, SESSION_COOKIE);
+    expect(plain).toContain(`${SESSION_COOKIE}=`);
+    expect(plain).not.toMatch(/;\s*Secure/i);
+
     const secure = createTestApp({ cookieSecure: true });
-    expect(await sessionLine(secure.app)).toMatch(/;\s*Secure/i);
+    expect(await lineOf(secure.app, SESSION_COOKIE)).toBe("");
+    const prefixed = await lineOf(secure.app, `${HOST_PREFIX}${SESSION_COOKIE}`);
+    expect(prefixed).toMatch(/;\s*Secure/i);
+    expect(prefixed).toMatch(/;\s*Path=\/(;|$)/);
+    expect(prefixed).not.toMatch(/Domain=/i);
   });
 
   it("logs out without a session instead of bouncing through auth", async () => {

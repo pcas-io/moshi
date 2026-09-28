@@ -11,8 +11,8 @@ import { hashToken } from "../services/agent.js";
 import {
   CSRF_LOGIN_MAX_AGE_MS,
   CSRF_SESSION_MAX_AGE_MS,
-  LOGIN_COOKIE,
-  SESSION_COOKIE,
+  loginCookie,
+  sessionCookie,
   SESSION_MAX_AGE_SECONDS,
   csrfBindingOf,
   generateCsrfToken,
@@ -22,7 +22,6 @@ import {
   loginCsrfBinding,
   readSessionCookie,
   safeNextPath,
-  sessionCookieAttributes,
   timingSafeEqual,
   validateCsrfToken,
 } from "../auth.js";
@@ -45,8 +44,6 @@ type HonoEnv = { Bindings: Env; Variables: AppVariables };
 // was posted from.
 const LOGIN_NONCE = /^[A-Za-z0-9_-]{24}$/;
 
-const loginCookieAttributes = (secure: boolean) =>
-  ({ httpOnly: true, sameSite: "Lax", path: "/login", secure } as const);
 
 /** The form fields, or none. A body that cannot be parsed is a form without
  *  fields, not an HTTP 500 with a stack trace in the log. */
@@ -66,9 +63,10 @@ const secretOf = (c: Context<HonoEnv>): string =>
  * one the browser already has: a second tab must not break the first.
  */
 export function issueLoginCsrf(c: Context<HonoEnv>, secureCookie: boolean): string {
-  const held = getCookie(c, LOGIN_COOKIE);
+  const login = loginCookie(secureCookie);
+  const held = getCookie(c, login.name);
   const nonce = held && LOGIN_NONCE.test(held) ? held : crypto.randomBytes(18).toString("base64url");
-  setCookie(c, LOGIN_COOKIE, nonce, { ...loginCookieAttributes(secureCookie), maxAge: CSRF_LOGIN_MAX_AGE_MS / 1000 });
+  setCookie(c, login.name, nonce, { ...login.attrs, maxAge: CSRF_LOGIN_MAX_AGE_MS / 1000 });
   return generateCsrfToken(secretOf(c), loginCsrfBinding(nonce));
 }
 
@@ -83,7 +81,9 @@ export interface SessionDeps {
 
 export function createSessionRoutes({ agents, secureCookie, guard }: SessionDeps): Hono<HonoEnv> {
   const session = new Hono<HonoEnv>();
-  const cookieAttributes = sessionCookieAttributes(secureCookie);
+  // Name and attributes as one, for both the set and the delete.
+  const sessionJar = sessionCookie(secureCookie);
+  const loginJar = loginCookie(secureCookie);
 
   session.post("/login", async (c) => {
     const cookieSecret = secretOf(c);
@@ -94,7 +94,7 @@ export function createSessionRoutes({ agents, secureCookie, guard }: SessionDeps
     const loginError = `/login?error=1${backTo}`;
 
     // The pre-session value comes from the cookie and from nowhere else.
-    const held = getCookie(c, LOGIN_COOKIE);
+    const held = getCookie(c, loginJar.name);
     const nonce = held && LOGIN_NONCE.test(held) ? held : undefined;
     const formIsOurs =
       isSameOriginPost(c.req) &&
@@ -103,7 +103,7 @@ export function createSessionRoutes({ agents, secureCookie, guard }: SessionDeps
       // Not "invalid token": the token was never looked at. The usual cause
       // is a second tab. Another tab signed in, which spent the pre-session
       // cookie; this browser is signed in already, so it goes where it wanted.
-      const session = getCookie(c, SESSION_COOKIE);
+      const session = getCookie(c, sessionJar.name);
       if (session && isSameOriginPost(c.req) && readSessionCookie(session, cookieSecret)) return c.redirect(next);
       return c.redirect(`/login?error=expired${backTo}`);
     }
@@ -132,19 +132,19 @@ export function createSessionRoutes({ agents, secureCookie, guard }: SessionDeps
     // The session is made from THIS token: it names the agent by id and
     // carries a fingerprint of the token's hash. Reset or rotate the token
     // and the session is over.
-    setCookie(c, SESSION_COOKIE, generateSessionCookie({ ...who, tokenHash: hash }, cookieSecret), {
-      ...cookieAttributes,
+    setCookie(c, sessionJar.name, generateSessionCookie({ ...who, tokenHash: hash }, cookieSecret), {
+      ...sessionJar.attrs,
       maxAge: SESSION_MAX_AGE_SECONDS,
     });
     // Spent. The next sign-in page brings its own.
-    deleteCookie(c, LOGIN_COOKIE, loginCookieAttributes(secureCookie));
+    deleteCookie(c, loginJar.name, loginJar.attrs);
     return c.redirect(next);
   });
 
   // POST only. As a GET, any page could sign the operator out with an <img>.
   session.post("/logout", async (c) => {
     const cookieSecret = secretOf(c);
-    const held = getCookie(c, SESSION_COOKIE);
+    const held = getCookie(c, sessionJar.name);
     // No cookie came along: there is nothing to end, and nothing is cleared.
     // SameSite=Lax keeps the cookie off a cross-site POST, so "no cookie" is
     // exactly what a hostile form looks like. Clearing it anyway signed the
@@ -162,8 +162,8 @@ export function createSessionRoutes({ agents, secureCookie, guard }: SessionDeps
       }
     }
 
-    // Same attributes as when it was set, or browsers keep the cookie.
-    deleteCookie(c, SESSION_COOKIE, cookieAttributes);
+    // Same NAME and attributes as when it was set, or browsers keep it.
+    deleteCookie(c, sessionJar.name, sessionJar.attrs);
     return c.redirect("/login");
   });
 

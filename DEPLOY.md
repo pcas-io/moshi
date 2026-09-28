@@ -65,6 +65,23 @@ in the environment variables of the resource: Coolify stores the variable
 (empty) on the first deploy, and a stored value wins over a default written
 into `docker-compose.yml` later.
 
+Where the cookie is `Secure` it also carries the `__Host-` prefix:
+`__Host-mesh_session` and `__Host-mesh_login`. A browser accepts such a cookie
+only from this exact origin, with `Path=/` and no `Domain`, and lets no other
+host overwrite it. Without it a sibling host under the same registrable domain
+(anything under `enki.run`) can set `mesh_session=…; Domain=enki.run` and the
+browser sends it here — a class the same-origin check on form posts does not
+cover, because it asks who POSTED, not who WROTE the cookie.
+
+With `MESH_COOKIE_SECURE=0` the plain names stay: a browser drops a `__Host-`
+cookie that is not `Secure`, so prefixing it there would only sign everybody
+out for good. Plain http cannot close this class.
+
+**The first deploy with the prefix signs every operator out once.** The names
+change, so the cookie a browser holds is not the one the server now reads.
+Signing in again is all it takes; the old cookie is ignored from that moment
+and expires by itself within seven days.
+
 ### Sessions and what ends them
 
 A dashboard session is made from the token it was signed in with. It names
@@ -324,7 +341,7 @@ Then:
 
   ```bash
   curl -N --compressed -H 'Accept-Encoding: gzip, br' -H 'Accept: text/event-stream' \
-    -b 'mesh_session=<your session cookie>' https://moshi.enki.run/sse/messages
+    -b '__Host-mesh_session=<your session cookie>' https://moshi.enki.run/sse/messages
   ```
 
   `: open` arrives at once, `: ping` every 25 s. Let it run for five minutes and note whether and when it ends: 100 s would be Cloudflare's idle timeout (the ping is there to prevent it). After Ctrl-C, `sse_connections` in `/health` is back where it was. The server itself ends every stream after 30 minutes; the browser reconnects.

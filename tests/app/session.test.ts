@@ -12,7 +12,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import crypto from "node:crypto";
 import { createTestApp, signIn, csrfFor, csrfInPage, cookieFrom, formPost, ADMIN_TOKEN, TEST_CONFIG, MCP_HEADERS, rpc } from "./harness";
-import { SESSION_COOKIE, LOGIN_COOKIE } from "../../src/auth";
+import { SESSION_COOKIE, LOGIN_COOKIE, HOST_PREFIX, sessionCookie } from "../../src/auth";
 
 const DAY = 24 * 60 * 60 * 1000;
 const HTML = { Accept: "text/html" };
@@ -102,19 +102,27 @@ describe("seven days, sliding", () => {
     clock(T0);
     const t = createTestApp({ cookieSecure: true });
     const { cookie } = await signIn(t.app, ADMIN_TOKEN);
+    // Secure, so `__Host-`: the renewal has to use the same name, or the
+    // browser keeps the old cookie and gets a second one beside it.
+    const secureName = sessionCookie(true).name;
+    expect(secureName).toBe(`${HOST_PREFIX}${SESSION_COOKIE}`);
+    expect(cookie.startsWith(`${secureName}=`)).toBe(true);
 
     clock(T0 + DAY - 60_000);
-    expect(cookieFrom(await t.app.request("/", { headers: { Cookie: cookie, ...HTML } }), SESSION_COOKIE)).toBeNull();
+    expect(cookieFrom(await t.app.request("/", { headers: { Cookie: cookie, ...HTML } }), secureName)).toBeNull();
 
     clock(T0 + 6 * DAY);
     const viewed = await t.app.request("/", { headers: { Cookie: cookie, ...HTML } });
     expect(viewed.status).toBe(200);
-    const line = viewed.headers.getSetCookie().find((l) => l.startsWith(`${SESSION_COOKIE}=`)) ?? "";
+    const line = viewed.headers.getSetCookie().find((l) => l.startsWith(`${secureName}=`)) ?? "";
     expect(line).toMatch(/Max-Age=604800/);
     expect(line).toMatch(/HttpOnly/i);
     expect(line).toMatch(/SameSite=Lax/i);
     expect(line).toMatch(/;\s*Secure/i);
-    const renewed = cookieFrom(viewed, SESSION_COOKIE)!;
+    // `__Host-` is only honoured with Path=/ and no Domain.
+    expect(line).toMatch(/;\s*Path=\/(;|$)/i);
+    expect(line).not.toMatch(/Domain=/i);
+    const renewed = cookieFrom(viewed, secureName)!;
 
     // Day 12: the first cookie is over, the renewed one is not.
     clock(T0 + 12 * DAY);
@@ -289,19 +297,65 @@ describe("the sign-in form", () => {
     expect(res.headers.get("location")).toBe("/");
   });
 
-  it("sets the pre-session cookie HttpOnly, SameSite=Lax, for /login only, and Secure when told to", async () => {
-    const line = (await createTestApp({ cookieSecure: true }).app.request("/login")).headers.getSetCookie().find((l) => l.startsWith("mesh_login=")) ?? "";
+  // Secure: `__Host-`, which a browser honours only with Path=/ and no
+  // Domain. Planting THIS cookie is how a sibling host would fix a form token
+  // onto somebody else's sign-in page, so the prefix is worth the wider path.
+  it("prefixes the pre-session cookie with __Host- and widens its path when it is Secure", async () => {
+    const line = (await createTestApp({ cookieSecure: true }).app.request("/login")).headers.getSetCookie()
+      .find((l) => l.startsWith(`${HOST_PREFIX}${LOGIN_COOKIE}=`)) ?? "";
     expect(line).toMatch(/HttpOnly/i);
     expect(line).toMatch(/SameSite=Lax/i);
-    expect(line).toMatch(/Path=\/login/);
+    expect(line).toMatch(/;\s*Path=\/(;|$)/);
+    expect(line).not.toMatch(/Domain=/i);
     expect(line).toMatch(/;\s*Secure/i);
     expect(line).toMatch(/Max-Age=600/);
+  });
+
+  // Plain http: a browser ignores a __Host- cookie outright, so the old name
+  // and the narrow path stay. The class stays open there, as it must.
+  it("keeps the plain name and Path=/login without Secure", async () => {
+    const line = (await createTestApp({ cookieSecure: false }).app.request("/login")).headers.getSetCookie()
+      .find((l) => l.startsWith(`${LOGIN_COOKIE}=`)) ?? "";
+    expect(line).not.toContain(HOST_PREFIX);
+    expect(line).toMatch(/Path=\/login/);
+    expect(line).not.toMatch(/;\s*Secure/i);
+  });
+
+  // The class this closes. A sibling host under the same registrable domain
+  // (anything.enki.run) can set `mesh_session=…; Domain=enki.run`, and the
+  // victim's browser sends it here. isSameOriginPost() does not cover it: it
+  // asks who POSTED the form, not who WROTE the cookie. `__Host-` does —
+  // a browser accepts one only from this exact origin and lets nobody
+  // overwrite it, so a planted cookie now arrives under a name nothing reads.
+  it("ignores a session cookie planted under the unprefixed name", async () => {
+    const t = createTestApp({ cookieSecure: true });
+    const { cookie } = await signIn(t.app, ADMIN_TOKEN);
+    const value = cookie.slice(cookie.indexOf("=") + 1);
+
+    // The very same, valid session value — under the name a sibling host can
+    // reach. It must not sign anybody in.
+    const planted = await t.app.request("/", { headers: { Cookie: `${SESSION_COOKIE}=${value}`, ...HTML } });
+    expect(planted.status).toBe(302);
+    expect(planted.headers.get("location")).toMatch(/^\/login/);
+
+    // Under its own name it does, so the value itself was never the problem.
+    expect((await t.app.request("/", { headers: { Cookie: cookie, ...HTML } })).status).toBe(200);
+  });
+
+  // Plain http: a browser drops a __Host- cookie, so the plain name has to
+  // stay. The class stays open there, and cannot be closed without TLS.
+  it("keeps the plain session name where the cookie cannot be Secure", async () => {
+    const t = createTestApp({ cookieSecure: false });
+    const { cookie } = await signIn(t.app, ADMIN_TOKEN);
+    expect(cookie.startsWith(`${SESSION_COOKIE}=`)).toBe(true);
+    expect(cookie).not.toContain(HOST_PREFIX);
+    expect((await t.app.request("/", { headers: { Cookie: cookie, ...HTML } })).status).toBe(200);
   });
 
   it("spends the pre-session cookie with the sign-in", async () => {
     const t = createTestApp();
     const { res } = await signIn(t.app, ADMIN_TOKEN);
-    expect(res.headers.getSetCookie().join("\n")).toMatch(/mesh_login=;/);
+    expect(res.headers.getSetCookie().join("\n")).toMatch(new RegExp(`${LOGIN_COOKIE}=;`));
   });
 });
 
@@ -415,11 +469,11 @@ describe("the sign-in form, second tab", () => {
     expect(res.headers.get("location")).toBe("/login?error=expired");
   });
 
-  it("deletes the pre-session cookie where it was set, or the browser keeps it", async () => {
+  it("deletes the pre-session cookie under the name and path it was set with", async () => {
     const { res } = await signIn(createTestApp({ cookieSecure: true }).app, ADMIN_TOKEN);
-    const line = res.headers.getSetCookie().find((l) => l.startsWith("mesh_login=;")) ?? "";
+    const line = res.headers.getSetCookie().find((l) => l.startsWith(`${HOST_PREFIX}${LOGIN_COOKIE}=;`)) ?? "";
     expect(line).toMatch(/Max-Age=0/);
-    expect(line).toMatch(/;\s*Path=\/login(;|$)/);
+    expect(line).toMatch(/;\s*Path=\/(;|$)/);
     expect(line).toMatch(/;\s*Secure/i);
   });
 });

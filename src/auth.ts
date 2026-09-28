@@ -152,6 +152,42 @@ export function getCookieSecret(
 // Every request compares that with the token the record holds today.
 export const SESSION_COOKIE = "mesh_session";
 export const LOGIN_COOKIE = "mesh_login";
+
+/**
+ * `__Host-` binds a cookie to exactly this origin. A browser accepts one only
+ * with `Secure`, `Path=/` and NO `Domain`, and it refuses to overwrite it from
+ * anywhere else — which is the whole point: a sibling host under the same
+ * registrable domain (anything.enki.run) can otherwise set
+ * `mesh_session=…; Domain=enki.run` and the victim's browser sends it here.
+ * `isSameOriginPost()` does not cover that: it asks who POSTED the form, not
+ * who WROTE the cookie.
+ *
+ * Only where the cookie is `Secure`. On a plain-http host
+ * (`MESH_COOKIE_SECURE=0`) a browser ignores a `__Host-` cookie outright, so
+ * there the plain name stays and the class stays open — as it must, because
+ * plain http has no way to close it.
+ *
+ * Name and attributes come from one function each, never separately: a cookie
+ * set under one path and deleted under another is not deleted.
+ */
+export const HOST_PREFIX = "__Host-";
+
+export function sessionCookie(secure: boolean) {
+  return {
+    name: secure ? HOST_PREFIX + SESSION_COOKIE : SESSION_COOKIE,
+    attrs: { httpOnly: true, sameSite: "Lax", path: "/", secure } as const,
+  };
+}
+
+/** The pre-session nonce the sign-in form's token is bound to. `Path=/login`
+ *  keeps it off every other request; `__Host-` requires `Path=/` and is worth
+ *  more, because planting THIS cookie is how a sibling host would fix a token
+ *  onto somebody else's sign-in form. */
+export function loginCookie(secure: boolean) {
+  return secure
+    ? { name: HOST_PREFIX + LOGIN_COOKIE, attrs: { httpOnly: true, sameSite: "Lax", path: "/", secure: true } as const }
+    : { name: LOGIN_COOKIE, attrs: { httpOnly: true, sameSite: "Lax", path: "/login", secure: false } as const };
+}
 /** Without use: seven days. */
 export const SESSION_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
 /** With use: thirty days after the sign-in, which is what it always was. */
@@ -176,8 +212,9 @@ export function sessionFingerprint(tokenHash: string, secret: string): string {
   return hmacHex(`session-fingerprint:${tokenHash}`, secret).slice(0, 32);
 }
 
+/** @deprecated Use `sessionCookie(secure)`: the name belongs with them. */
 export function sessionCookieAttributes(secure: boolean) {
-  return { httpOnly: true, sameSite: "Lax", path: "/", secure } as const;
+  return sessionCookie(secure).attrs;
 }
 
 export function generateSessionCookie(
@@ -315,6 +352,9 @@ export function authMiddleware(
 ) {
   return createMiddleware<HonoEnv>(async (c, next) => {
     const path = c.req.path;
+    // Name and attributes together: a cookie set under one name or path and
+    // deleted under another is not deleted.
+    const session = sessionCookie(secureCookie);
 
     // Public paths — pass through without auth
     if (isPublicPath(path)) {
@@ -365,7 +405,7 @@ export function authMiddleware(
     // endpoint is for clients that present a token on purpose. No client
     // depends on the cookie there, so it is not an identity there.
     if (!who && path !== "/mcp") {
-      const cookie = getCookie(c, SESSION_COOKIE);
+      const cookie = getCookie(c, session.name);
       const claims = cookie ? readSessionCookie(cookie, cookieSecret) : null;
       if (claims) {
         // The session stands as long as the token it was made from does.
@@ -409,8 +449,8 @@ export function authMiddleware(
         // Never longer than the session has left: thirty days after the
         // sign-in it ends, whatever the browser was told.
         const left = Math.floor((renew.createdAt + SESSION_ABSOLUTE_MS - Date.now()) / 1000);
-        setCookie(c, SESSION_COOKIE, generateSessionCookie(renew, cookieSecret), {
-          ...sessionCookieAttributes(secureCookie),
+        setCookie(c, session.name, generateSessionCookie(renew, cookieSecret), {
+          ...session.attrs,
           maxAge: Math.max(1, Math.min(SESSION_MAX_AGE_SECONDS, left)),
         });
       }
