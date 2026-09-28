@@ -11,9 +11,12 @@ backups/
 # Local dev overrides (publishes mesh port to host, etc.)
 docker-compose.override.yml
 
-# CLI binaries
+# CLI binaries. `cli/cli` is what `go build ./...` writes inside cli/: the
+# package directory's own name, 8.6 MB, and `git add -A` would commit it into
+# a public repository.
 cli/moshi
 cli/moshi-*
+cli/cli
 
 # Design docs (kept in plexus)
 docs/
