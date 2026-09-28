@@ -73,6 +73,28 @@ version and commit are on `GET /health`.
   delivers it again.
 
 ### Fixed
+- Migration 0011 resolved an audit row's actor by the name that agent holds
+  TODAY. A name is a label and can pass on: rename A away, let B take the
+  freed name, and a `message_dead_letter` row about A lands on B. Reproduced
+  with the real `AgentService` — a row naming `bob` came out of the backfill
+  carrying B's key. What it costs, both ways: B is told `dead_lettered: true`
+  about somebody else's delivery and stops counting a message the broker would
+  still hand it ("one too few hides mail"), while A, the agent the row is
+  about, goes on counting it — so the fix did not reach the one case it was
+  written for. Migration 0012 clears every key that does not pass the rule
+  `rename()` already uses (`name_since` no later than the row), and 0011 was
+  corrected so a database migrating from scratch never writes one. `agent_key`
+  is now set for `message_dead_letter` alone: `message_expired` records the
+  SENDER in `agent_name`, so a key there would name the wrong person.
+- The schema holds "once per message and reader" by key as well, so two
+  processes on one volume cannot write two rows where the check now asks by
+  key and the old unique index asked by name.
+- The session and pre-session cookies of the release before the `__Host-`
+  prefix are cleared on the next sign-in and on sign-out. A browser that
+  signed in before it still held a valid `mesh_session` for up to seven days
+  under a name the code no longer reads: signing out could not end it, and it
+  would have come back the moment the prefix was reverted or
+  `MESH_COOKIE_SECURE=0` was set. The clearing can go a release later.
 - `unread` in `mesh_inbox` stops counting a message the broker has given up
   on. A durable hands a message out five times; when none is acknowledged it
   stops for good, so that message will never arrive — but `unread` went on
@@ -189,6 +211,9 @@ version and commit are on `GET /health`.
   working directory decided which server received the bearer token.
 
 ### Database
+- Migration `0012_agent_key_repair.sql`: clears the keys 0011's backfill wrote
+  where they cannot be verified, and a partial unique index on
+  `(entity_id, action, agent_key)` for dead letters.
 - Migration `0010_message_reads.sql`: `messages.to_key`, tables
   `message_reads` and `send_attempts`, indexes on `activity_log` and
   `messages(to_agent, created_at)`. A release from before it keeps working on

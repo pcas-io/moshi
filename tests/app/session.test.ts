@@ -15,6 +15,11 @@ import { createTestApp, signIn, csrfFor, csrfInPage, cookieFrom, formPost, ADMIN
 import { SESSION_COOKIE, LOGIN_COOKIE, HOST_PREFIX, sessionCookie } from "../../src/auth";
 
 const DAY = 24 * 60 * 60 * 1000;
+/** A Set-Cookie line that CLEARS exactly this cookie. Anchored at the start
+ *  of a line, so `__Host-mesh_session=;` does not satisfy an assertion about
+ *  `mesh_session=;` — the two are different cookies. */
+const clearedLine = (name: string) => new RegExp(`(^|\\n)${name}=;`);
+
 const HTML = { Accept: "text/html" };
 const T0 = Date.UTC(2026, 8, 20, 12, 0, 0);
 
@@ -197,7 +202,7 @@ describe("signing out", () => {
       const res = await t.app.request("/logout", formPost({ csrf: csrfInPage(form) }, { Cookie: cookie }));
       expect(res.status, path).toBe(302);
       expect(res.headers.get("location"), path).toBe("/login");
-      expect(res.headers.getSetCookie().join("\n"), path).toMatch(/mesh_session=;/);
+      expect(res.headers.getSetCookie().join("\n"), path).toMatch(clearedLine(SESSION_COOKIE));
     }
   });
 
@@ -216,7 +221,7 @@ describe("signing out", () => {
       // The answer is a page with a button that does work.
       const again = await t.app.request("/logout", formPost({ csrf: csrfInPage(await res.text()) }, { Cookie: mine }));
       expect(again.status).toBe(302);
-      expect(again.headers.getSetCookie().join("\n")).toMatch(/mesh_session=;/);
+      expect(again.headers.getSetCookie().join("\n")).toMatch(clearedLine(SESSION_COOKIE));
     }
   });
 
@@ -344,6 +349,34 @@ describe("the sign-in form", () => {
 
   // Plain http: a browser drops a __Host- cookie, so the plain name has to
   // stay. The class stays open there, and cannot be closed without TLS.
+  // A browser that signed in before the prefix still holds a valid plain-name
+  // cookie for up to seven days, under a name this code no longer reads — so
+  // signing out could not end it, and it came back the moment somebody
+  // reverted the prefix or set MESH_COOKIE_SECURE=0.
+  it("clears the cookie of the release before the prefix, on sign-in and on sign-out", async () => {
+    const t = createTestApp({ cookieSecure: true });
+    const { res, cookie } = await signIn(t.app, ADMIN_TOKEN);
+    const afterSignIn = res.headers.getSetCookie().join("\n");
+    expect(afterSignIn).toMatch(clearedLine(SESSION_COOKIE));
+    expect(afterSignIn).toMatch(clearedLine(LOGIN_COOKIE));
+
+    const out = await t.app.request("/logout", formPost({ csrf: csrfFor(cookie) }, { Cookie: cookie }));
+    expect(out.status).toBe(302);
+    const afterSignOut = out.headers.getSetCookie().join("\n");
+    expect(afterSignOut).toMatch(clearedLine(SESSION_COOKIE));
+    expect(afterSignOut).toMatch(clearedLine(`${HOST_PREFIX}${SESSION_COOKIE}`));
+  });
+
+  // Not where the plain name is the CURRENT one: clearing it there would sign
+  // the operator out on the way in.
+  it("clears nothing extra where the cookie cannot be Secure", async () => {
+    const t = createTestApp({ cookieSecure: false });
+    const { res } = await signIn(t.app, ADMIN_TOKEN);
+    const lines = res.headers.getSetCookie().join("\n");
+    expect(lines).not.toMatch(clearedLine(SESSION_COOKIE));
+    expect(lines).toMatch(new RegExp(`(^|\\n)${SESSION_COOKIE}=v2`));
+  });
+
   it("keeps the plain session name where the cookie cannot be Secure", async () => {
     const t = createTestApp({ cookieSecure: false });
     const { cookie } = await signIn(t.app, ADMIN_TOKEN);
@@ -404,7 +437,7 @@ describe("signing out cannot be forced from outside", () => {
       const { cookie: fresh } = await signIn(t.app, ADMIN_TOKEN);
       const res = await t.app.request("/logout", formPost({ csrf: csrfFor(fresh) }, { Cookie: fresh, ...headers }));
       expect(res.status, JSON.stringify(headers)).toBe(302);
-      expect(sessionLine(res), JSON.stringify(headers)).toMatch(/mesh_session=;/);
+      expect(sessionLine(res), JSON.stringify(headers)).toMatch(clearedLine(SESSION_COOKIE));
     }
   });
 
