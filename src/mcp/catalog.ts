@@ -47,8 +47,24 @@ export const MCP_TOOL_CATALOG: readonly McpToolRef[] = [
   },
   {
     name: "mesh_status",
-    signature: "() → {agents[] {presence, role, working_on}, inbox_pending}",
+    signature: "() → {agents[] {presence, role, working_on, webhook}, inbox_pending}",
     desc: "Who is around: online, quiet, asleep, never seen",
+  },
+  {
+    name: "mesh_webhook_set",
+    signature:
+      "(url, auth_mode?='standard_webhooks', secret?, include_broadcasts?=false, types?, min_priority?='low') → {webhook, secret?, inbox_pending}",
+    desc: "Have moshi call your https URL when mail arrives (at most once per 30 s, ids only) — signed, the made-up secret is shown once",
+  },
+  {
+    name: "mesh_webhook_get",
+    signature: "() → {webhook {url, state, last_success_at, last_failure_at, last_error, pending} | null, inbox_pending}",
+    desc: "Your webhook and how it is doing — never the secret",
+  },
+  {
+    name: "mesh_webhook_delete",
+    signature: "() → {deleted, inbox_pending}",
+    desc: "Remove your webhook; mesh_receive works as before",
   },
   {
     name: "mesh_history",

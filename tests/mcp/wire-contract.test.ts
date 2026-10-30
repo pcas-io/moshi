@@ -16,7 +16,7 @@ async function bareToolsCall(tool: string, args: Record<string, unknown>) {
   h.agents.create("cli-user");
   const server = createMcpServer({
     nats: h.nats, agents: h.agents, activity: h.activity, rateLimiter: h.rateLimiter,
-    presence: h.presence, db: h.db, agentName: "cli-user", isAdmin: false,
+    presence: h.presence, webhooks: h.webhooks, db: h.db, agentName: "cli-user", isAdmin: false,
   });
   // The route's own transport, not a copy of its options.
   const transport = createStatelessTransport();

@@ -372,6 +372,19 @@ describe("audit sentences", () => {
       "triage-1 never acknowledged a message; the broker gave up on it"],
     [{ action: "read_not_recorded", agent_name: "triage-1", summary: "triage-1 was handed msg_01J; the read could not be stored" },
       "triage-1 was handed a message; the read could not be stored"],
+    // What the webhooks write (src/services/webhooks.ts, webhook-dispatcher.ts).
+    [{ action: "webhook_set", agent_name: "admin", summary: 'Webhook of "kate" set (standard_webhooks)' },
+      "You set kate's webhook"],
+    [{ action: "webhook_set", agent_name: "kate", summary: 'Webhook of "kate" set (bearer)' },
+      "kate set its webhook"],
+    [{ action: "webhook_deleted", agent_name: "admin", summary: 'Webhook of "kate" removed' },
+      "You removed kate's webhook"],
+    [{ action: "webhook_deleted", agent_name: "kate", summary: 'Webhook of "kate" removed' },
+      "kate removed its webhook"],
+    [{ action: "webhook_failed", agent_name: "kate", summary: 'Webhook of "kate" could not be delivered (HTTP 404)' },
+      "A call of kate's webhook failed for good"],
+    [{ action: "webhook_disabled", agent_name: "kate", summary: 'Webhook of "kate" switched off after repeated failures (HTTP 404)' },
+      "kate's webhook was switched off after five failed calls in a row"],
   ];
 
   for (const [over, expected] of cases) {

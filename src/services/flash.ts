@@ -12,6 +12,8 @@
 
 interface FlashEntry {
   newToken?: string;
+  /** A webhook signing secret moshi generated: shown once, like a token. */
+  webhookSecret?: string;
   error?: string;
   expiresAt: number;
 }

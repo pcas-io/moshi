@@ -14,6 +14,8 @@ import type { PresenceService } from "../services/presence.js";
 import type { NatsPingable } from "../services/health.js";
 import { issueCsrf } from "../auth.js";
 import { createAgentAdminRoutes } from "./agent-admin.js";
+import { createAgentWebhookRoutes } from "./agent-webhook.js";
+import type { WebhookService } from "../services/webhooks.js";
 import { createAgentConnectRoutes } from "./agent-connect.js";
 import { loadConversationList, loadLogMessages, loadOpenThread, readConversationsQuery } from "../services/section-loaders.js";
 import { getFlash } from "../services/flash.js";
@@ -40,11 +42,12 @@ export interface DashboardDeps {
   agents: AgentService;
   activity: ActivityService;
   presence: PresenceService;
+  webhooks: WebhookService;
   /** Render clock. Injected by tests so page and fragment agree exactly. */
   now?: () => number;
 }
 
-export function createDashboardRoutes({ db, nats, agents, activity, presence, now = Date.now }: DashboardDeps): Hono<HonoEnv> {
+export function createDashboardRoutes({ db, nats, agents, activity, presence, webhooks, now = Date.now }: DashboardDeps): Hono<HonoEnv> {
   const dash = new Hono<HonoEnv>();
 
   // --- Dashboard: Home (v2) ---
@@ -74,13 +77,14 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
 
     const csrfToken = issueCsrf(c);
     const flash = getFlash(c.req.query("flash"));
-    const agentsData = await loadV2AgentsData(db, presence);
+    const agentsData = await loadV2AgentsData(db, presence, webhooks);
 
     return page(c, 
       <V2AgentsPage
         agents={agentsData}
         csrfToken={csrfToken}
         newToken={flash?.newToken}
+        webhookSecret={flash?.webhookSecret}
         error={flash?.error}
         inspectId={c.req.query("inspect")}
         presenceFilter={c.req.query("presence")}
@@ -96,6 +100,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, no
 
   // --- Agent admin actions (create/revoke/reactivate/rename/reset-token/delete) ---
   dash.route("/agents", createAgentAdminRoutes({ agents }));
+  dash.route("/agents", createAgentWebhookRoutes({ agents, webhooks }));
 
   // --- Dashboard: Log (Messages + Audit trail) ---
   // One route, two tabs. Both tabs filter in SQL, so the counts on screen and

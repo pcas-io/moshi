@@ -62,7 +62,7 @@ export function createTestApp(config: Partial<Config> = {}, extra: { now?: () =>
   const touch = vi.spyOn(h.presence, "touch");
   const app = createApp({
     config: { ...TEST_CONFIG, ...config },
-    db: h.db, nats, agents: h.agents, activity: h.activity, presence: h.presence, rateLimiter: h.rateLimiter,
+    db: h.db, nats, agents: h.agents, activity: h.activity, presence: h.presence, rateLimiter: h.rateLimiter, webhooks: h.webhooks,
     now: extra.now,
   });
   return { app, h, ensured, ensuredSince, ensuredReplace, natsUp, touch };

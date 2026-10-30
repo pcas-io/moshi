@@ -19,6 +19,7 @@ import { NatsService } from "../../src/services/nats";
 import { AgentService, inboxKeyOf } from "../../src/services/agent";
 import { ActivityService } from "../../src/services/activity";
 import { PresenceService } from "../../src/services/presence";
+import { WebhookService } from "../../src/services/webhooks";
 import { RateLimiter } from "../../src/services/ratelimit";
 import { createMcpServer } from "../../src/mcp/server";
 
@@ -247,7 +248,7 @@ describe.skipIf(!URL)("against a real JetStream broker", () => {
       async function as(name: string) {
         const row = agents.getByName(name)!;
         await nats.ensureConsumer(inboxKeyOf(row)); // what the /mcp route does per request
-        const server = createMcpServer({ nats, agents, activity, rateLimiter, presence, db, agentName: name, inboxKey: inboxKeyOf(row), isAdmin: false });
+        const server = createMcpServer({ nats, agents, activity, rateLimiter, presence, webhooks: new WebhookService(db, "integration-webhook-key-material-0123456789", activity), db, agentName: name, inboxKey: inboxKeyOf(row), isAdmin: false });
         const [a, b] = InMemoryTransport.createLinkedPair();
         await server.connect(b);
         const client = new Client({ name: "integration", version: "0" });

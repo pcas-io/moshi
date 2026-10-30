@@ -18,6 +18,7 @@ import type { AgentService } from "./services/agent.js";
 import type { ActivityService } from "./services/activity.js";
 import type { RateLimiter } from "./services/ratelimit.js";
 import type { PresenceService } from "./services/presence.js";
+import type { WebhookService } from "./services/webhooks.js";
 import type { NatsPingable } from "./services/health.js";
 import { checkHealth } from "./services/health.js";
 import { log } from "./services/logger.js";
@@ -54,13 +55,14 @@ export interface AppDeps {
   activity: ActivityService;
   presence: PresenceService;
   rateLimiter: RateLimiter;
+  webhooks: WebhookService;
   /** Render clock for pages and fragments. Tests pin it. */
   now?: () => number;
 }
 
 type NodeBindings = { incoming?: { socket?: { remoteAddress?: string } } };
 
-export function createApp({ config, db, nats, agents, activity, presence, rateLimiter, now }: AppDeps): Hono<HonoEnv> {
+export function createApp({ config, db, nats, agents, activity, presence, rateLimiter, webhooks, now }: AppDeps): Hono<HonoEnv> {
   const app = new Hono<HonoEnv>();
 
   // From SIGTERM on, every answer ends its connection (src/services/shutdown.ts).
@@ -207,10 +209,10 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   app.use("/agents/*", smallFormLimit);
 
   // --- MCP endpoint ---
-  app.route("/", createMcpRoute({ nats, agents, activity, rateLimiter, presence, db }));
+  app.route("/", createMcpRoute({ nats, agents, activity, rateLimiter, presence, webhooks, db }));
 
   // --- Dashboard pages, the connect flow and the agent admin actions ---
-  app.route("/", createDashboardRoutes({ db, nats, agents, activity, presence, now }));
+  app.route("/", createDashboardRoutes({ db, nats, agents, activity, presence, webhooks, now }));
 
   // --- The live sections' fragments (behind auth, like the pages) ---
   app.route("/", createFragmentRoutes({ db, agents, presence, now }));

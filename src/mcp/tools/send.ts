@@ -19,6 +19,7 @@ import type { SendResult } from "../../services/message.js";
 import { existingThread } from "../../services/message-queries.js";
 import { recordAttempt, ownAttempt, forgetAttempt, envelopeOf, payloadHash } from "../../services/attempts.js";
 import { inboxKeyOf } from "../../services/agent.js";
+import { enqueue as enqueueWebhooks } from "../../services/webhook-queue.js";
 import { ok, error, adminError, pendingCount } from "../shared.js";
 import type { ToolContext, ToolResult } from "../shared.js";
 
@@ -231,6 +232,9 @@ export function registerSendTools(server: McpServer, ctx: ToolContext): void {
       return error(undeliveredText(kind, msg.id, result.error));
     }
     if (result.persisted) forgetAttempt(db, msg.id);
+    // The recipients' webhooks. Not for a repeat the broker deduplicated: that
+    // message was announced when it first went out. Never throws.
+    if (!result.duplicate) enqueueWebhooks(db, msg, inboxKey, draft.toKey);
 
     // A repeat the broker deduplicated sent nothing: it only wrote the row
     // that was missing. Logged as what it is, or the audit trail says a

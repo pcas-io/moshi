@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ok, error, adminError, pendingCount } from "../shared.js";
 import type { ToolContext } from "../shared.js";
 import { FIELD_LIMITS } from "../../types.js";
+import { inboxKeyOf } from "../../services/agent.js";
 
 /** `agents.capabilities` is a JSON array in a TEXT column; tolerate the
  *  free-form values older rows may carry. */
@@ -32,6 +33,8 @@ export function registerRegistryTools(server: McpServer, ctx: ToolContext): void
       // and runs the 4-state calculation. C4 graceful degradation on
       // NATS failure is handled inside the service.
       const entries = await presence.list();
+      // The state of each hook, never its URL: a trigger URL is half a secret.
+      const hooks = ctx.webhooks.statuses();
       const agentList = entries.map((e) => ({
         name: e.agent.name,
         avatar: e.agent.avatar ?? null,
@@ -43,6 +46,7 @@ export function registerRegistryTools(server: McpServer, ctx: ToolContext): void
         presence: e.presence,
         working_on: e.agent.working_on ?? null,
         last_seen_at: e.effectiveLastSeen,
+        webhook: hooks.get(inboxKeyOf(e.agent)) ?? null,
       }));
 
       return ok({

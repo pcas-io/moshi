@@ -13,6 +13,8 @@ import { AgentService } from "./services/agent.js";
 import { ActivityService } from "./services/activity.js";
 import { RateLimiter } from "./services/ratelimit.js";
 import { PresenceService } from "./services/presence.js";
+import { WebhookService } from "./services/webhooks.js";
+import { WebhookDispatcher } from "./services/webhook-dispatcher.js";
 import { recordDeadLetter } from "./services/dead-letter.js";
 import { startMaintenance } from "./services/maintenance.js";
 import { RATE_LIMIT_PER_MINUTE, VERSION } from "./types.js";
@@ -55,7 +57,12 @@ const presence = new PresenceService(db, nats);
 // was listening when the broker said so.
 nats.onDeadLetter((letter, streamCreated) => recordDeadLetter(db, activity, letter, streamCreated));
 
-const app = createApp({ config, db, nats, agents, activity, presence, rateLimiter });
+// Webhook secrets are sealed under a key from OAUTH_SECRET (production
+// requires it; development falls back to the admin token, like OAuth does).
+const webhooks = new WebhookService(db, config.oauthSecret || config.meshAdminToken, activity);
+const webhookDispatcher = new WebhookDispatcher({ db, webhooks, nats, activity });
+
+const app = createApp({ config, db, nats, agents, activity, presence, rateLimiter, webhooks });
 
 // --- Process-level error handlers (C5) ---
 // Prevent a single unhandled async rejection from crashing the process.
@@ -99,6 +106,9 @@ async function start() {
       onError: (name, err) => log("error", "maintenance task failed", { table: name, err: String(err) }),
     },
   );
+
+  // Webhooks: what is due, once a second, beside the requests.
+  webhookDispatcher.start();
 
   // Serve first. The dashboard runs on SQLite and must be reachable while
   // NATS is still coming up, or gone; MCP tools answer `nats_unavailable`
@@ -145,7 +155,7 @@ async function start() {
     log: (level, msg, extra) => log(level, msg, extra),
     exit: (code) => process.exit(code),
     steps: [
-      { name: "maintenance", timeoutMs: SHUTDOWN_STEP_TIMEOUTS_MS.maintenance, run: () => { stopping = true; stopMaintenance(); } },
+      { name: "maintenance", timeoutMs: SHUTDOWN_STEP_TIMEOUTS_MS.maintenance, run: () => { stopping = true; stopMaintenance(); webhookDispatcher.stop(); } },
       // Open tabs first, or each of them holds the server's close() for the full grace period.
       { name: "event-streams", timeoutMs: SHUTDOWN_STEP_TIMEOUTS_MS.eventStreams, run: () => { beginDraining(); endAllStreams(); } },
       // No new requests; the ones being answered get their answer.

@@ -14,6 +14,8 @@ import type { NatsPresenceBackend } from "../../src/services/presence";
 import type { MeshNats } from "../../src/mcp/shared";
 import type { PulledMessage } from "../../src/services/inbox";
 import { createMcpServer } from "../../src/mcp/server";
+import { WebhookService } from "../../src/services/webhooks";
+import type { Resolved } from "../../src/services/webhook-target";
 
 export interface FakeMeshNats extends MeshNats, NatsPresenceBackend {
   published: { subject: string; msgId: string; json: Record<string, unknown> }[];
@@ -153,6 +155,9 @@ export interface Harness {
   presence: PresenceService;
   nats: FakeMeshNats;
   rateLimiter: RateLimiter;
+  webhooks: WebhookService;
+  /** What the webhooks' DNS answers, by host; anything else does not resolve. */
+  dns: Map<string, string[]>;
   /** Connect an MCP client acting as `agentName`. */
   connect(agentName: string, opts?: { isAdmin?: boolean }): Promise<Client>;
 }
@@ -164,12 +169,21 @@ export function createHarness(opts: { rateLimiter?: RateLimiter } = {}): Harness
   const nats = createFakeMeshNats();
   const presence = new PresenceService(db, nats);
   const rateLimiter = opts.rateLimiter ?? new RateLimiter(60);
+  const dns = new Map<string, string[]>([["hooks.example.com", ["93.184.215.14"]]]);
+  const resolve = async (host: string): Promise<Resolved> => {
+    const found = dns.get(host);
+    if (!found) return { ok: false, retryable: true, reason: "dns: ENOTFOUND" };
+    return found.every((a) => !/^(10|127)\./.test(a))
+      ? { ok: true, address: found[0], family: 4 }
+      : { ok: false, retryable: false, reason: "target_not_public" };
+  };
+  const webhooks = new WebhookService(db, "harness-webhook-key-material-0123456789", activity, resolve);
 
   return {
-    db, agents, activity, presence, nats, rateLimiter,
+    db, agents, activity, presence, nats, rateLimiter, webhooks, dns,
     async connect(agentName, opts = {}) {
       const server = createMcpServer({
-        nats, agents, activity, rateLimiter, presence, db,
+        nats, agents, activity, rateLimiter, presence, webhooks, db,
         agentName,
         isAdmin: opts.isAdmin ?? false,
       });

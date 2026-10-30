@@ -14,6 +14,7 @@ import { MESSAGE_RETENTION_DAYS } from "../../types.js";
 import { AGENT_NAME_PATTERN, AGENT_NAME_RULE } from "../../services/agent.js";
 import { V2Avatar, V2Dot } from "./components.js";
 import { V2_FONT_FAMILY_MONO, V2_TOKENS } from "./tokens.js";
+import type { WebhookView } from "../../services/webhooks.js";
 
 const T = V2_TOKENS;
 
@@ -31,6 +32,8 @@ export interface V2AgentsAgent {
   working_on: string | null;
   last_seen_at: string | null;
   created_at: string;
+  /** Its outgoing webhook, or null; absent where nobody loaded it. */
+  webhook?: WebhookView | null;
 }
 
 // ── Style atoms shared with the table half ──────────────────────
@@ -134,11 +137,11 @@ const ACTION_PRIMARY =
 
 // The outlined pair state no background: `.d-outline` carries both the resting
 // `card` fill and the `subtle` hover fill.
-const ACTION_SECONDARY =
+export const ACTION_SECONDARY =
   `${ACTION_BASE};border:1px solid ${T.lineStrong};` +
   `color:${T.ink};text-align:left;width:100%`;
 
-const ACTION_DANGER =
+export const ACTION_DANGER =
   `${ACTION_BASE};border:1px solid ${T.redLine};` +
   `color:${T.red};text-align:left;width:100%`;
 
@@ -147,7 +150,7 @@ const ACTION_DANGER =
  * point of the pattern — a disruptive action says what it costs where you
  * click it.
  */
-const subline = (color: string): string =>
+export const subline = (color: string): string =>
   `display:block;font-size:12.5px;font-weight:400;color:${color}`;
 
 const ActionForm: FC<{
@@ -168,7 +171,7 @@ const ActionForm: FC<{
 // fear — "will it lose its messages?" — is exactly what used to happen. It
 // sits inside the button like every other action here, so it is part of
 // what a screen reader announces for the control.
-const RENAME_INPUT =
+export const RENAME_INPUT =
   `width:100%;background:${T.paper};border:1px solid ${T.lineStrong};` +
   `border-radius:${T.radiusControl}px;font-family:${V2_FONT_FAMILY_MONO};font-size:14px;` +
   `padding:10px 12px;outline:none;color:${T.ink}`;
@@ -215,7 +218,7 @@ const FACT_VALUE = `font-size:13.5px;color:${T.body}`;
  * A flex row with a fixed-width label, not a 96px/1fr grid: the long mono
  * `Inbox` value wraps correctly in the flex form and overflows in the grid one.
  */
-const Fact: FC<{ label: string; valueStyle?: string; children?: unknown }> = ({
+export const Fact: FC<{ label: string; valueStyle?: string; children?: unknown }> = ({
   label, valueStyle, children,
 }) => (
   <div style="display:flex;gap:12px;padding:7px 0;align-items:baseline">
@@ -338,8 +341,10 @@ const ActionStack: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({ agent, c
 
 // ── Aside ───────────────────────────────────────────────────────
 
-export const DetailAside: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({
-  agent, csrfToken,
+/** `children` go between the facts and the actions: the webhook panel, which
+ *  agents.tsx puts in so that this file imports nothing of the page's. */
+export const DetailAside: FC<{ agent: V2AgentsAgent; csrfToken: string; children?: unknown }> = ({
+  agent, csrfToken, children,
 }) => (
   <aside style={`flex:1 1 330px;max-width:420px;min-width:300px;${CARD_PANEL}`}>
     <div style={`padding:22px 22px 18px;border-bottom:1px solid ${T.lineSoft}`}>
@@ -401,6 +406,7 @@ export const DetailAside: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({
       </div>
     </div>
 
+    {children}
     <ActionStack agent={agent} csrfToken={csrfToken} />
   </aside>
 );

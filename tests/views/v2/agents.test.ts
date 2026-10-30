@@ -259,7 +259,7 @@ describe("V2AgentsPage — states a class rule has to win", () => {
     expect(html).toContain(".d-delete:hover { background: var(--subtle); color: var(--ink); }");
     // The inactive pills and every outlined button wear the classes.
     expect(html.match(/class="d-pill"/g)).toHaveLength(3);
-    expect(html.match(/class="d-outline"/g)).toHaveLength(4); // rename, reset, deactivate, cancel
+    expect(html.match(/class="d-outline"/g)).toHaveLength(5); // rename, set webhook, reset, deactivate, cancel
     expect(html).toContain('class="d-delete"');
     // Solid fills keep the shared brightness hook — `filter` is never inline.
     expect(html).toContain('class="d-solid"');

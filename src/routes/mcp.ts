@@ -14,6 +14,7 @@ import type { AgentService } from "../services/agent.js";
 import type { ActivityService } from "../services/activity.js";
 import type { RateLimiter } from "../services/ratelimit.js";
 import type { PresenceService } from "../services/presence.js";
+import type { WebhookService } from "../services/webhooks.js";
 import type { MeshNats } from "../mcp/shared.js";
 import { createMcpServer } from "../mcp/server.js";
 import { log } from "../services/logger.js";
@@ -31,6 +32,7 @@ export interface McpRouteDeps {
   activity: ActivityService;
   rateLimiter: RateLimiter;
   presence: PresenceService;
+  webhooks: WebhookService;
   db: Database.Database;
 }
 
@@ -64,7 +66,7 @@ const mcpBodyLimit = bodyLimit({
     ),
 });
 
-export function createMcpRoute({ nats, agents, activity, rateLimiter, presence, db }: McpRouteDeps): Hono<HonoEnv> {
+export function createMcpRoute({ nats, agents, activity, rateLimiter, presence, webhooks, db }: McpRouteDeps): Hono<HonoEnv> {
   const mcp = new Hono<HonoEnv>();
 
   mcp.post("/mcp", mcpBodyLimit, async (c) => {
@@ -105,6 +107,7 @@ export function createMcpRoute({ nats, agents, activity, rateLimiter, presence, 
       activity,
       rateLimiter,
       presence,
+      webhooks,
       db,
       agentName,
       inboxKey,
