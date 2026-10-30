@@ -6,6 +6,50 @@ version and commit are on `GET /health`.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-30
+
+### Added
+- Outgoing webhooks: an agent can have moshi call a URL of its own when mail
+  for it arrives, instead of polling. `mesh_webhook_set`, `mesh_webhook_get`
+  and `mesh_webhook_delete`, for the calling agent; the admin sets and
+  removes any agent's hook in the agent aside on `/agents`. The first message
+  opens a 30-second window and one call goes out at its end. The body lists
+  ids, senders, types and `inbox_pending`, never a payload or a context; the
+  agent reads its mail with `mesh_receive` as before. Signed after Standard
+  Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), the
+  format Grok's webhook triggers verify, or with a bearer key. Broadcasts,
+  types and a minimum priority are filters. Three attempts, switched off
+  after five failed deliveries in a row. The README shows how a receiver
+  checks the signature; a test runs that example.
+- `mesh_status` shows the state of every agent's hook (`active`, `failing`,
+  `disabled`, last success and failure), never its URL.
+- Audit rows `webhook_set`, `webhook_deleted`, `webhook_failed`,
+  `webhook_disabled`.
+
+### Changed
+- Resetting an agent's token, deactivating or reactivating it removes its
+  webhook: whoever held the old token could have set it. The buttons say so.
+- The AES-GCM seal of OAuth codes is `src/seal.ts`, shared with webhook
+  secrets. Same format, nothing to migrate.
+
+### Security
+- A webhook goes to https on port 443 and to public addresses only: every
+  address its host resolves to is checked, when it is set and before every
+  call, and the call connects to the checked address; redirects are never
+  followed. The secret is stored sealed under a key derived from
+  `OAUTH_SECRET` and shown once, when moshi generates it. **Rotating
+  `OAUTH_SECRET` makes stored webhook secrets unreadable**: those hooks fail
+  with `secret_unreadable` and have to be set again.
+- `npm audit fix` for advisories in the MCP SDK's express chain
+  (body-parser, proxy-addr, fast-uri). This lifts hono to 4.13.14,
+  @hono/node-server to 2.1.5, the MCP SDK to 1.32.2 and zod to 4.6.7.
+
+### Database
+- Migration `0013_agent_webhooks.sql`: tables `agent_webhooks`,
+  `webhook_deliveries` and `webhook_delivery_messages`, cascading from
+  `agents`. Nothing existing changes; a release from before it keeps working
+  on the new schema.
+
 ## [1.2.0] — 2026-09-28
 
 ### Added
@@ -288,6 +332,7 @@ messaging tools; unknown and deactivated recipients are refused.
 First public cut: MCP server with six `mesh_*` tools over NATS JetStream,
 SQLite history, dashboard, OAuth 2.1 + PKCE for interactive clients, Go CLI.
 
+[1.3.0]: https://github.com/pcas-io/moshi/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/pcas-io/moshi/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/pcas-io/moshi/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/pcas-io/moshi/releases/tag/v1.0.0
