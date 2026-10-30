@@ -12,13 +12,13 @@
 
 import crypto from "node:crypto";
 import type Database from "better-sqlite3";
+import { seal, open } from "./seal.js";
 
 export const CODE_EXPIRY_MS = 300_000; // 5 minutes
 
 /** An S256 challenge: 32 bytes as base64url without padding. */
 export const CODE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
-const SEAL_VERSION = "v1";
 const KEY_INFO = "moshi/oauth-code/v1";
 
 export type Redeemed =
@@ -31,41 +31,10 @@ function sealKey(code: string, secret: string): Buffer {
   return Buffer.from(crypto.hkdfSync("sha256", code, secret, KEY_INFO, 32));
 }
 
-const NONCE_BYTES = 12;
-const TAG_BYTES = 16;
-// Said out loud on both sides. Without it Node accepts a tag cut down to four
-// bytes (DEP0182), which would make the binding below a 32-bit one for
-// anybody who can write the table.
-const GCM = { authTagLength: TAG_BYTES } as const;
-
 /** What the seal vouches for besides the token: which code, which challenge,
  *  and until when. Every column of the row is either the key to it or in here. */
 const sealContext = (codeHash: string, codeChallenge: string, expiresAt: number): Buffer =>
   Buffer.from(`${codeHash}:${codeChallenge}:${expiresAt}`);
-
-function seal(token: string, key: Buffer, context: Buffer): string {
-  const iv = crypto.randomBytes(NONCE_BYTES);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv, GCM);
-  cipher.setAAD(context);
-  const sealed = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
-  return [SEAL_VERSION, iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), sealed.toString("base64url")].join(".");
-}
-
-function open(sealed: string, key: Buffer, context: Buffer): string | null {
-  const parts = sealed.split(".");
-  if (parts.length !== 4 || parts[0] !== SEAL_VERSION) return null;
-  try {
-    const iv = Buffer.from(parts[1], "base64url");
-    const tag = Buffer.from(parts[2], "base64url");
-    if (iv.length !== NONCE_BYTES || tag.length !== TAG_BYTES) return null;
-    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv, GCM);
-    decipher.setAAD(context);
-    decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(Buffer.from(parts[3], "base64url")), decipher.final()]).toString("utf8");
-  } catch {
-    return null;
-  }
-}
 
 /** Stores `token` for one exchange and returns the code that redeems it. */
 export function issueCode(
