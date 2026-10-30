@@ -2,7 +2,7 @@
 // retries, switching off, and two processes on one volume. Real SQLite, a fake
 // clock, a recording poster.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import type Database from "better-sqlite3";
 import { initDatabase } from "../../src/services/db";
 import { AgentService } from "../../src/services/agent";
@@ -275,6 +275,30 @@ describe("when the target does not answer", () => {
       await dispatcher.tick();
     }
     expect(webhooks.get("kate")).toMatchObject({ consecutive_failures: 1, state: "failing" });
+  });
+
+  it("counts an attempt that threw as a failed delivery instead of taking it again for ever", async () => {
+    webhooks.set("kate", settings(), undefined, "kate");
+    const throwing: Poster = async () => { throw new Error("bug"); };
+    dispatcher = new WebhookDispatcher({ db, webhooks, activity, nats: { inboxPending: () => pending() }, post: throwing, now: () => clock });
+    send("worky", "kate");
+    clock += BUNDLE_WINDOW_MS;
+    await dispatcher.tick();
+    expect(webhooks.get("kate")).toMatchObject({ consecutive_failures: 1, last_error: "internal_error", pending: null });
+  });
+
+  it("does not call a hook that was replaced between the claim and the call", async () => {
+    webhooks.set("kate", settings(), undefined, "kate");
+    send("worky", "kate");
+    clock += BUNDLE_WINDOW_MS;
+    // The admin replaces the hook while the dispatcher holds the claim.
+    const material = webhooks.material.bind(webhooks);
+    vi.spyOn(webhooks, "material").mockImplementationOnce((key) => {
+      webhooks.set("kate", settings({ url: "https://other.example.com/t" }), undefined, "admin");
+      return material(key);
+    });
+    await dispatcher.tick();
+    expect(calls).toHaveLength(0); // not an empty body to the new target
   });
 
   it("fails a hook whose secret no longer opens (OAUTH_SECRET rotated)", async () => {

@@ -71,6 +71,11 @@ describe("isPublicAddress", () => {
     }
   });
 
+  it("calls an address with a zone id not public, and does not throw on it", () => {
+    expect(isPublicAddress("fe80::1%eth0")).toBe(false);
+    expect(isPublicAddress("2606:4700::1111%eth0")).toBe(false);
+  });
+
   it("refuses what is not an address", () => {
     expect(isPublicAddress("example.com")).toBe(false);
     expect(isPublicAddress("")).toBe(false);
@@ -84,9 +89,19 @@ describe("resolveTarget", () => {
     return found.map((address) => ({ address, family: address.includes(":") ? 6 : 4 }));
   };
 
-  it("pins the first address when every address is public", async () => {
-    const r = await resolveTarget("hooks.example.com", lookup({ "hooks.example.com": ["93.184.215.14", "2606:4700::1111"] }));
-    expect(r).toEqual({ ok: true, address: "93.184.215.14", family: 4 });
+  it("hands over every checked address, IPv4 first, for a dual-stack host listed IPv6 first", async () => {
+    const r = await resolveTarget("hooks.example.com", lookup({ "hooks.example.com": ["2606:4700::1111", "93.184.215.14"] }));
+    expect(r).toEqual({
+      ok: true, address: "93.184.215.14", family: 4,
+      addresses: [{ address: "93.184.215.14", family: 4 }, { address: "2606:4700::1111", family: 6 }],
+    });
+  });
+
+  it("gives up on a lookup that does not answer, as something that may pass", async () => {
+    const silent = () => new Promise<never>(() => { /* a black-holed name server */ });
+    const started = Date.now();
+    expect(await resolveTarget("slow.example.com", silent, 50)).toEqual({ ok: false, retryable: true, reason: "dns: ETIMEOUT" });
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it("refuses a name with ANY private address: rebinding hides one among public ones", async () => {

@@ -85,6 +85,20 @@ describe("postWebhook", () => {
     expect(Date.now() - started).toBeLessThan(1_500);
   });
 
+  it("falls back to the next checked address when the first one cannot be reached", async () => {
+    seen.length = 0;
+    // The server listens on 127.0.0.1 only; ::1 is listed first and refuses.
+    const r = await postWebhook(`https://${HOST}/accepted`, {}, "{}", 2_000, {
+      resolve: async () => ({
+        ok: true, address: "::1", family: 6,
+        addresses: [{ address: "::1", family: 6 }, { address: "127.0.0.1", family: 4 }],
+      }),
+      port, ca: cert,
+    });
+    expect(r).toEqual({ ok: true, status: 202 });
+    expect(seen).toHaveLength(1);
+  });
+
   it("refuses before connecting when the address is not public", async () => {
     seen.length = 0;
     const r = await postWebhook(`https://${HOST}/accepted`, {}, "{}", 2_000, {

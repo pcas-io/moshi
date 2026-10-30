@@ -276,7 +276,7 @@ console.log(verifyMoshiWebhook(secret, headers, '{"test": 2432232315}', now));  
 console.log(verifyMoshiWebhook(secret, headers, body, now + 301));                             // false: replayed too late
 ```
 
-**When the target fails.** A call takes at most 5 seconds. Timeouts, network
+**When the target fails.** A call takes at most 5 seconds, plus up to 3 for the DNS lookup; a host with IPv4 and IPv6 addresses is tried on both. Timeouts, network
 errors, `408`, `429` and `5xx` are tried again after 10 and after 60 seconds;
 any other answer (a `401`, a `404`, a redirect) is not. Sending the message is
 never affected: it went out before the hook is called. After five calls in a

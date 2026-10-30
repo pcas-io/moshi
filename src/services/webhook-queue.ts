@@ -126,7 +126,9 @@ export function enqueue(db: Database.Database, msg: Message, fromKey: string, to
 export function claimDue(db: Database.Database, limit: number, now: number = Date.now()): Claim[] {
   // Asked once a second by every process on the volume: a plain read first,
   // so that an idle mesh never takes the write lock for it.
-  if (!db.prepare("SELECT 1 FROM webhook_deliveries WHERE due_at <= ? LIMIT 1").get(now)) return [];
+  if (!db.prepare("SELECT 1 FROM webhook_deliveries WHERE due_at <= ? AND (lease_until IS NULL OR lease_until <= ?) LIMIT 1").get(now, now)) {
+    return [];
+  }
   const take = db.transaction(() => {
     const due = db
       .prepare(

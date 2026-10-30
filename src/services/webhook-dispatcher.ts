@@ -97,6 +97,9 @@ export class WebhookDispatcher {
         return;
       }
       const { count, messages } = announced(this.deps.db, claim.id);
+      // The hook was replaced or removed after the claim: its delivery went
+      // with it, and an empty call to the new target would announce nothing.
+      if (count === 0) return;
       const now = this.now();
       const body = JSON.stringify({
         type: "message.created",
@@ -121,9 +124,14 @@ export class WebhookDispatcher {
       }
       this.outcome(claim, material.agentName, result);
     } catch (err) {
-      // A bug here must not take the dispatcher down; the lease runs out and
-      // the delivery is taken again.
+      // A bug here must not take the dispatcher down, and must not come back
+      // every 30 s for ever: it counts as a failed delivery, like any other.
       log("error", "webhook attempt failed", { delivery: claim.id, err: String(err) });
+      try {
+        this.outcome(claim, claim.agentKey, { retryable: false, error: "internal_error" });
+      } catch {
+        // The database is gone (shutdown): the lease runs out, the next process takes it.
+      }
     }
   }
 

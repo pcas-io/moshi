@@ -16,6 +16,9 @@ import { VERSION } from "../types.js";
 
 export const MAX_URL_LENGTH = 2048;
 export const DELIVERY_TIMEOUT_MS = 5_000;
+/** DNS has its own bound: getaddrinfo runs on the small libuv pool, and an
+ *  agent can name a host whose servers never answer. */
+export const DNS_TIMEOUT_MS = 3_000;
 
 const V4_BLOCKED: [string, number][] = [
   ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16],
@@ -37,6 +40,8 @@ const INTERNAL_NAME = /(^|\.)(localhost|local|internal|lan|home\.arpa)$/;
 
 /** `::ffff:7f00:1` and `::ffff:127.0.0.1` as the IPv4 address they carry. */
 function mappedIpv4(ipv6: string): string | null {
+  // URL refuses a zone id (`fe80::1%eth0`), which net.isIP accepts; the
+  // caller has judged such an address already.
   const canonical = new URL(`http://[${ipv6}]/`).hostname.slice(1, -1);
   const m = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(canonical);
   if (!m) return null;
@@ -49,6 +54,8 @@ export function isPublicAddress(address: string): boolean {
   const family = net.isIP(address);
   if (family === 4) return !blocked.check(address, "ipv4");
   if (family !== 6) return false;
+  // A zone id only exists for link-local and other scoped addresses.
+  if (address.includes("%")) return false;
   const v4 = mappedIpv4(address);
   if (v4 !== null) return !blocked.check(v4, "ipv4");
   return !blocked.check(address, "ipv6");
@@ -80,16 +87,28 @@ export function checkUrl(raw: string): UrlCheck {
   return { ok: true, url: u.toString(), host };
 }
 
+export type Address = { address: string; family: 4 | 6 };
+
+/** `address` is the first to try (IPv4 first); `addresses` all that were
+ *  checked, for a client that falls back from one family to the other. */
 export type Resolved =
-  | { ok: true; address: string; family: 4 | 6 }
+  | ({ ok: true; addresses?: Address[] } & Address)
   | { ok: false; retryable: boolean; reason: string };
 
 export type Lookup = (host: string) => Promise<{ address: string; family: number }[]>;
 
 const systemLookup: Lookup = (host) => dns.promises.lookup(host, { all: true, verbatim: true });
 
-/** The address to connect to: every address of the name has to be public. */
-export async function resolveTarget(host: string, lookup: Lookup = systemLookup): Promise<Resolved> {
+function bounded(lookup: Lookup, host: string, timeoutMs: number): Promise<{ address: string; family: number }[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error("dns timeout"), { code: "ETIMEOUT" })), timeoutMs);
+  });
+  return Promise.race([lookup(host), late]).finally(() => clearTimeout(timer));
+}
+
+/** The addresses to connect to: every address of the name has to be public. */
+export async function resolveTarget(host: string, lookup: Lookup = systemLookup, timeoutMs: number = DNS_TIMEOUT_MS): Promise<Resolved> {
   const literal = net.isIP(host);
   if (literal) {
     return isPublicAddress(host)
@@ -98,7 +117,7 @@ export async function resolveTarget(host: string, lookup: Lookup = systemLookup)
   }
   let answers: { address: string; family: number }[];
   try {
-    answers = await lookup(host);
+    answers = await bounded(lookup, host, timeoutMs);
   } catch (err) {
     return { ok: false, retryable: true, reason: `dns: ${(err as { code?: string }).code ?? "lookup failed"}` };
   }
@@ -106,7 +125,13 @@ export async function resolveTarget(host: string, lookup: Lookup = systemLookup)
   if (!answers.every((a) => isPublicAddress(a.address))) {
     return { ok: false, retryable: false, reason: "target_not_public" };
   }
-  return { ok: true, address: answers[0].address, family: answers[0].family === 6 ? 6 : 4 };
+  // Every answer, IPv4 first: a container without an IPv6 route would fail
+  // on every call to a dual-stack host whose resolver lists IPv6 first, and
+  // five such calls switch the hook off.
+  const addresses: Address[] = answers
+    .map((a): Address => ({ address: a.address, family: a.family === 6 ? 6 : 4 }))
+    .sort((a, b) => a.family - b.family);
+  return { ok: true, ...addresses[0], addresses };
 }
 
 export type PostResult =
@@ -128,8 +153,9 @@ function classify(status: number): PostResult {
 }
 
 /**
- * One POST. Never throws and never takes longer than `timeoutMs`. What it
- * reports as `error` contains no header value: the secret travels in one.
+ * One POST. Never throws, and never takes longer than `DNS_TIMEOUT_MS` for the
+ * lookup plus `timeoutMs` for the request. What it reports as `error`
+ * contains no header value: the secret travels in one.
  */
 export async function postWebhook(
   url: string,
@@ -161,10 +187,10 @@ export async function postWebhook(
       agent: false,
       ca: seams.ca,
       servername: net.isIP(checked.host) ? undefined : checked.host,
-      // The address that was checked, and no other: no second lookup.
+      // The addresses that were checked, and no other: no second lookup.
       lookup: (_host, options, callback) => {
         if ((options as { all?: boolean }).all) {
-          (callback as (err: null, addresses: { address: string; family: number }[]) => void)(null, [{ address: target.address, family: target.family }]);
+          (callback as (err: null, addresses: Address[]) => void)(null, target.addresses ?? [{ address: target.address, family: target.family }]);
         } else {
           callback(null, target.address, target.family);
         }
