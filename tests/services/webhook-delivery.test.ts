@@ -326,6 +326,27 @@ describe("two processes on one volume", () => {
 });
 
 describe("lifecycle", () => {
+  it("ends the hook with a token reset, a deactivation and a reactivation: a leaked token's hook does not outlive it", () => {
+    const agents = new AgentService(db, activity);
+    const kate = agents.getByName("kate")!.id;
+    webhooks.set("kate", settings({ url: "https://attacker.example.com/t" }), undefined, "kate");
+    send("worky", "kate");
+    agents.resetToken(kate, "admin");
+    expect(webhooks.get("kate")).toBeNull();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM webhook_deliveries").get()).toEqual({ n: 0 });
+    expect(activity.list({ limit: 5, offset: 0 }).data.find((a) => a.action === "webhook_deleted")?.summary)
+      .toBe('Webhook of "kate" removed (token reset)');
+
+    webhooks.set("kate", settings(), undefined, "kate");
+    agents.revokeById(kate, "admin");
+    expect(webhooks.get("kate")).toBeNull();
+
+    // A hook that survived a revoke (written before this rule) goes with the reactivation.
+    webhooks.set("kate", settings(), undefined, "kate");
+    agents.reactivate(kate, "admin");
+    expect(webhooks.get("kate")).toBeNull();
+  });
+
   it("does not call the hook of an agent deactivated after the message, and drops the delivery", async () => {
     webhooks.set("kate", settings(), undefined, "kate");
     send("worky", "kate");

@@ -95,11 +95,11 @@ describe("V2AgentsPage — action consequences", () => {
     const html = await render({ ...BASE, agents: [agent()] });
     expect(html).toContain("Reset token");
     expect(html).toContain(
-      "Issues a new bearer token. The agent goes offline until you paste the new one.",
+      "Issues a new bearer token and removes its webhook. The agent goes offline until you paste the new one.",
     );
     expect(html).toContain("Deactivate");
     expect(html).toContain(
-      "Stops delivery and hides it from mesh_status. Reversible, history is kept.",
+      "Stops delivery, removes its webhook and hides it from mesh_status. Reversible, history is kept.",
     );
     expect(html).toContain("Read its conversations");
     expect(html).toContain("Delete agent");
@@ -113,7 +113,7 @@ describe("V2AgentsPage — action consequences", () => {
     expect(html).toContain("Issues a new token and starts delivering again.");
     expect(html).toContain("Deactivated");
     expect(html).not.toContain("Reset token");
-    expect(html).not.toContain("Stops delivery and hides it from mesh_status");
+    expect(html).not.toContain("Stops delivery, removes its webhook");
   });
 
   it("carries the CSRF token on every mutating form", async () => {

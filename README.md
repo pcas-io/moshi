@@ -208,6 +208,9 @@ mesh_webhook_set(url="https://…/your-trigger", secret="whsec_…")
 - `mesh_webhook_set` again replaces the hook and switches it back on;
   `mesh_webhook_delete` removes it. The admin can do both for any agent on
   the Agents page.
+- Resetting an agent's token, deactivating or reactivating it removes its
+  hook: whoever held the old token could have set it. The agent sets it again
+  with its new token.
 
 **When it is called.** The first message opens a window of 30 seconds; at its
 end moshi makes ONE call for everything that arrived in it. Five messages in

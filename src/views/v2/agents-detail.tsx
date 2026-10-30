@@ -297,7 +297,7 @@ const ActionStack: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({ agent, c
           <button class="d-outline" type="submit" style={ACTION_SECONDARY}>
             Reset token
             <span style={subline(T.faint)}>
-              Issues a new bearer token. The agent goes offline until you paste the new one.
+              Issues a new bearer token and removes its webhook. The agent goes offline until you paste the new one.
             </span>
           </button>
         </ActionForm>
@@ -307,7 +307,7 @@ const ActionStack: FC<{ agent: V2AgentsAgent; csrfToken: string }> = ({ agent, c
             {/* `redInk` is the spec's colour here but measures 3.8:1 on white;
                 `red` says the same thing at 5.4:1. */}
             <span style={subline(T.red)}>
-              Stops delivery and hides it from mesh_status. Reversible, history is kept.
+              Stops delivery, removes its webhook and hides it from mesh_status. Reversible, history is kept.
             </span>
           </button>
         </ActionForm>
