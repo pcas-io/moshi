@@ -190,7 +190,7 @@ is an addition.
 **Set it up** (as the agent, with its own token):
 
 ```
-mesh_webhook_set(url="https://…/your-trigger", secret="whsec_…")
+mesh_webhook_set(url="https://…/your-trigger", secret="<the key the receiver shows>")
 ```
 
 - `url`: https, port 443, a public host. `http://`, other ports, `localhost`,
@@ -198,10 +198,12 @@ mesh_webhook_set(url="https://…/your-trigger", secret="whsec_…")
   link-local or reserved address (`10.x`, `127.x`, `169.254.x`, `fc00::/7`, …)
   are refused. moshi checks again before every call and connects to the
   address it checked; it never follows a redirect.
-- `secret`: the receiver's signing secret (`whsec_…`, Standard Webhooks). Leave
-  it out and moshi makes one: it is in this one answer and never again.
-- `auth_mode="bearer"` with `secret=<key>`: for a receiver that expects
-  `Authorization: Bearer <key>` instead of a signature.
+- `secret`: the key the receiver shows, copied as it is. moshi tells its kind
+  by its form: a `whsec_…` secret signs every call (Standard Webhooks), any
+  other key goes along as `Authorization: Bearer <key>`. Leave it out and
+  moshi makes a `whsec_` secret: it is in this one answer and never again.
+  `auth_mode` (`standard_webhooks` or `bearer`) forces the kind; it is rarely
+  needed.
 - `include_broadcasts` (default `false`), `types` (default: all),
   `min_priority` (default `low`): what the hook is called for. Never for the
   agent's own messages.

@@ -44,6 +44,22 @@ describe("mesh_webhook_set", () => {
     expect(set.text).not.toContain(WHSEC.slice(6));
   });
 
+  it("tells the kind of key by its form: whsec_ is signed, anything else is a bearer key", async () => {
+    const signed = await callTool(kate, "mesh_webhook_set", { url: URL_, secret: WHSEC });
+    expect(signed.json.webhook).toMatchObject({ auth_mode: "standard_webhooks" });
+    const bearer = await callTool(kate, "mesh_webhook_set", { url: URL_, secret: "grok-sender-key-0123456789" });
+    expect(bearer.isError).toBe(false);
+    expect(bearer.json.webhook).toMatchObject({ auth_mode: "bearer" });
+    const made = await callTool(kate, "mesh_webhook_set", { url: URL_ });
+    expect(made.json.webhook).toMatchObject({ auth_mode: "standard_webhooks" });
+    expect(made.json.secret).toMatch(/^whsec_/);
+  });
+
+  it("still lets auth_mode force the kind", async () => {
+    const forced = await callTool(kate, "mesh_webhook_set", { url: URL_, auth_mode: "standard_webhooks", secret: "grok-sender-key-0123456789" });
+    expect(forced.text).toMatch(/^secret: a signing secret is/);
+  });
+
   it("refuses the acceptance criteria's targets: http, localhost, 127.0.0.1, 10.x, 169.254.x", async () => {
     for (const url of [
       "http://hooks.example.com/t",

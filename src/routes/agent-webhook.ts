@@ -47,7 +47,8 @@ export function createAgentWebhookRoutes({ agents, webhooks }: AgentWebhookDeps)
         inboxKeyOf(agent),
         {
           url,
-          authMode: (formString(body, "auth_mode") ?? "standard_webhooks") as AuthMode,
+          // Empty: automatic, told by the key.
+          authMode: (formString(body, "auth_mode") || undefined) as AuthMode | undefined,
           includeBroadcasts: formString(body, "include_broadcasts") === "1",
           types: (formString(body, "types") ?? "").split(","),
           minPriority: (formString(body, "min_priority") ?? "low") as MessagePriority,

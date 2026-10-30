@@ -83,6 +83,11 @@ describe("POST /agents/webhook", () => {
     });
   });
 
+  it("takes the kind of key from the key when the form leaves it on automatic", async () => {
+    await post(ADMIN, "/agents/webhook", { csrf: csrf(), id: kateId, url: URL_, auth_mode: "", secret: "grok-sender-key-0123456789" });
+    expect(webhooks.get("kate")).toMatchObject({ auth_mode: "bearer" });
+  });
+
   it("names the reason when the target or the secret is refused", async () => {
     const privateTarget = await post(ADMIN, "/agents/webhook", { csrf: csrf(), id: kateId, url: "https://inner.example.com/t" });
     expect(flashOf(privateTarget)?.error).toMatch(/^Webhook not set: .*not public/);
