@@ -10,6 +10,7 @@ import type { AgentService } from "../services/agent.js";
 import type { ActivityService } from "../services/activity.js";
 import type { RateLimiter } from "../services/ratelimit.js";
 import type { PresenceService } from "../services/presence.js";
+import type { WebhookService } from "../services/webhooks.js";
 import { log } from "../services/logger.js";
 
 /** The slice of `NatsService` the tools depend on — narrow so tests can
@@ -26,6 +27,8 @@ export interface ToolContext {
   activity: ActivityService;
   rateLimiter: RateLimiter;
   presence: PresenceService;
+  /** Each agent's outgoing webhook; `deliver` queues a call after every send. */
+  webhooks: WebhookService;
   db: Database.Database;
   /** Authenticated identity of this request. */
   agentName: string;
@@ -77,7 +80,7 @@ export function adminError(): ToolResult {
  * you", and the agents' loops trigger on this number.
  */
 export function waitingFor(
-  ctx: ToolContext,
+  ctx: Pick<ToolContext, "db" | "inboxKey">,
   counts: Pick<InboxPending, "total" | "broadcast" | "broadcastDeliveredSeq" | "stream">,
 ): number {
   // Without the stream's bounds nothing is subtracted: counting one too many
