@@ -21,16 +21,20 @@ export function registerWebhookTools(server: McpServer, ctx: ToolContext): void 
     "Have moshi call a URL of yours when mail for you arrives, so you can wake on it instead of polling. " +
       "One call per 30 seconds at most, listing message ids, senders and types, never a payload or a context: fetch those with mesh_receive. " +
       "https on port 443 to a public host only. Signed with Standard Webhooks (webhook-id, webhook-timestamp, webhook-signature); " +
-      "give the receiver's whsec_ secret, or leave it out and moshi makes one and shows it ONCE in this answer. " +
-      "auth_mode 'bearer' sends the receiver's key as 'Authorization: Bearer <key>' instead. Replaces a webhook you had and switches it on.",
+      "secret: paste the key the receiver shows. A whsec_… secret is used to sign the call (Standard Webhooks); any other key is sent as " +
+      "'Authorization: Bearer <key>'. Leave it out and moshi makes a whsec_ secret and shows it ONCE in this answer. " +
+      "Replaces a webhook you had and switches it on.",
     {
       url: z.string().max(MAX_URL_LENGTH).describe("https:// URL on port 443, e.g. the URL of a webhook trigger"),
-      auth_mode: z.enum(AUTH_MODES).optional().describe("standard_webhooks (default): signed; bearer: the key in an Authorization header"),
+      auth_mode: z
+        .enum(AUTH_MODES)
+        .optional()
+        .describe("Rarely needed: moshi tells the kind by the secret (whsec_… is signed, any other key is a bearer key). Set it only to force one."),
       secret: z
         .string()
         .max(SECRET_MAX)
         .optional()
-        .describe("standard_webhooks: the receiver's whsec_… secret, or leave out to have one made; bearer: the receiver's key (required)"),
+        .describe("The key from the receiver (e.g. a Grok routine's trigger), as shown; leave out to have a whsec_ secret made"),
       include_broadcasts: z.boolean().optional().describe("Also for broadcasts (default false: direct messages only)"),
       types: z
         .array(z.string().max(WEBHOOK_LIMITS.TYPE))
@@ -53,7 +57,7 @@ export function registerWebhookTools(server: McpServer, ctx: ToolContext): void 
           inboxKey,
           {
             url: params.url,
-            authMode: params.auth_mode ?? "standard_webhooks",
+            authMode: params.auth_mode,
             includeBroadcasts: params.include_broadcasts ?? false,
             types: params.types ?? null,
             minPriority: params.min_priority ?? "low",

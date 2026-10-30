@@ -94,18 +94,18 @@ export const WebhookPanel: FC<{ agent: V2AgentsAgent; csrfToken: string; newSecr
           />
         </div>
         <div style={FIELD}>
-          <label for={id("auth")} style={LABEL}>Signed with</label>
-          <select id={id("auth")} name="auth_mode" style={RENAME_INPUT}>
-            {AUTH_MODES.map((m) => (
-              <option value={m} selected={(hook?.auth_mode ?? "standard_webhooks") === m}>
-                {m === "bearer" ? "Bearer key" : "Standard Webhooks (whsec_)"}
-              </option>
-            ))}
-          </select>
+          <label for={id("secret")} style={LABEL}>Key from the receiver, as shown (empty: moshi makes one)</label>
+          <input id={id("secret")} class="d-input" name="secret" type="password" maxlength={600} autocomplete="off" style={RENAME_INPUT} />
         </div>
         <div style={FIELD}>
-          <label for={id("secret")} style={LABEL}>Secret or key (empty: moshi makes a whsec_ secret)</label>
-          <input id={id("secret")} class="d-input" name="secret" type="password" maxlength={600} autocomplete="off" style={RENAME_INPUT} />
+          <label for={id("auth")} style={LABEL}>Kind of key</label>
+          <select id={id("auth")} name="auth_mode" style={RENAME_INPUT}>
+            {/* Automatic is right for every receiver that shows one key: a whsec_ secret signs, anything else is a bearer key. */}
+            <option value="" selected>Automatic, by the key</option>
+            {AUTH_MODES.map((m) => (
+              <option value={m}>{m === "bearer" ? "Bearer key" : "Signing secret (whsec_)"}</option>
+            ))}
+          </select>
         </div>
         <div style={FIELD}>
           <label for={id("types")} style={LABEL}>Only these types (comma separated, empty: all)</label>

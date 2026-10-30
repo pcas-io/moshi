@@ -6,6 +6,12 @@ version and commit are on `GET /health`.
 
 ## [Unreleased]
 
+### Changed
+- `mesh_webhook_set` tells the kind of key by its form: a `whsec_…` secret
+  signs the call, any other key is sent as a bearer key. Whoever sets a hook
+  copies URL and key from the receiver and needs to know nothing else;
+  `auth_mode` still forces one. The admin form says "Kind of key: Automatic".
+
 ## [1.3.0] — 2026-10-30
 
 ### Added

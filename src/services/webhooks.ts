@@ -18,7 +18,7 @@ import type { MessagePriority } from "../types.js";
 import { seal, open } from "../seal.js";
 import { checkUrl, resolveTarget } from "./webhook-target.js";
 import type { Resolved } from "./webhook-target.js";
-import { checkSigningSecret, checkBearerKey, generateSigningSecret } from "./webhook-sign.js";
+import { checkSigningSecret, checkBearerKey, generateSigningSecret, SIGNING_SECRET_PREFIX } from "./webhook-sign.js";
 import type { ActivityService } from "./activity.js";
 
 export const AUTH_MODES = ["standard_webhooks", "bearer"] as const;
@@ -35,7 +35,8 @@ const KEY_INFO = "moshi/webhook-secret/v1";
 
 export interface WebhookSettings {
   url: string;
-  authMode: AuthMode;
+  /** Absent: told by the secret (see `authModeFor`). */
+  authMode?: AuthMode;
   includeBroadcasts: boolean;
   /** Only these message types; null for all. */
   types: string[] | null;
@@ -104,6 +105,15 @@ function statusOf(row: Pick<Row, "state" | "last_success_at" | "last_failure_at"
   };
 }
 
+/**
+ * The kind of key, by its form: a `whsec_` secret (or none, then moshi makes
+ * one) is signed, any other key is sent as a bearer key. Nobody has to know
+ * which kind a receiver handed out; it is what they copy.
+ */
+export function authModeFor(secret: string | undefined): AuthMode {
+  return secret === undefined || secret === "" || secret.startsWith(SIGNING_SECRET_PREFIX) ? "standard_webhooks" : "bearer";
+}
+
 /** Trimmed, without empties and repeats; null when nothing is left. */
 export function normaliseTypes(types: readonly string[] | null | undefined): string[] | null {
   if (!types) return null;
@@ -158,7 +168,8 @@ export class WebhookService {
   ): { view: WebhookView; generatedSecret?: string } {
     const url = checkUrl(settings.url);
     if (!url.ok) throw new WebhookError(`url: ${url.reason}`);
-    if (!(AUTH_MODES as readonly string[]).includes(settings.authMode)) throw new WebhookError(`auth_mode: one of ${AUTH_MODES.join(", ")}`);
+    const authMode = settings.authMode ?? authModeFor(secret);
+    if (!(AUTH_MODES as readonly string[]).includes(authMode)) throw new WebhookError(`auth_mode: one of ${AUTH_MODES.join(", ")}`);
     if (!(MESSAGE_PRIORITIES as readonly string[]).includes(settings.minPriority)) {
       throw new WebhookError(`min_priority: one of ${MESSAGE_PRIORITIES.join(", ")}`);
     }
@@ -169,7 +180,7 @@ export class WebhookService {
 
     let generatedSecret: string | undefined;
     let plain: string;
-    if (settings.authMode === "bearer") {
+    if (authMode === "bearer") {
       if (secret === undefined || secret === "") throw new WebhookError("secret: the bearer key the receiver gave out is required for auth_mode bearer");
       const why = checkBearerKey(secret);
       if (why) throw new WebhookError(`secret: ${why}`);
@@ -203,7 +214,7 @@ export class WebhookService {
           agent_key: agentKey,
           hook_id: hookId,
           url: url.url,
-          auth_mode: settings.authMode,
+          auth_mode: authMode,
           secret_sealed: seal(plain, this.key, this.context(agentKey, hookId)),
           include_broadcasts: settings.includeBroadcasts ? 1 : 0,
           types: types ? JSON.stringify(types) : null,
@@ -219,7 +230,7 @@ export class WebhookService {
       entity_id: agentKey,
       // Never the URL: a trigger URL is often half a secret, and the log is
       // shown to everyone who signs in to the dashboard.
-      summary: `Webhook of "${this.nameOf(agentKey) ?? agentKey}" set (${settings.authMode})`,
+      summary: `Webhook of "${this.nameOf(agentKey) ?? agentKey}" set (${authMode})`,
       agent_name: actor,
     });
     return { view: this.get(agentKey)!, ...(generatedSecret ? { generatedSecret } : {}) };
