@@ -19,6 +19,7 @@ import { NatsService } from "../../src/services/nats";
 import { AgentService } from "../../src/services/agent";
 import { ActivityService } from "../../src/services/activity";
 import { PresenceService } from "../../src/services/presence";
+import { WebhookService } from "../../src/services/webhooks";
 import { RateLimiter } from "../../src/services/ratelimit";
 import { createApp } from "../../src/app";
 import { TEST_CONFIG, MCP_HEADERS, rpc } from "../app/harness";
@@ -63,6 +64,7 @@ describe.skipIf(!URL || !CONTAINER)("a broker that goes away and comes back", ()
     app = createApp({
       config: TEST_CONFIG, db, nats, agents, activity,
       presence: new PresenceService(db, nats), rateLimiter: new RateLimiter(60),
+      webhooks: new WebhookService(db, "integration-webhook-key-material-0123456789", activity),
     });
   });
 

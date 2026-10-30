@@ -6,10 +6,12 @@ import type { PresenceService } from "./presence.js";
 import { inboxKeyOf } from "./agent.js";
 import { getAgentHeat, getAgentMsgCounts24h } from "./dashboard-stats.js";
 import type { V2AgentsAgent } from "../views/v2/agents.js";
+import type { WebhookService } from "./webhooks.js";
 
 export async function loadV2AgentsData(
   db: Database.Database,
   presence: PresenceService,
+  webhooks?: WebhookService,
 ): Promise<V2AgentsAgent[]> {
   const entries = await presence.list();
   const counts = getAgentMsgCounts24h(db);
@@ -38,6 +40,7 @@ export async function loadV2AgentsData(
       working_on: e.agent.working_on,
       last_seen_at: e.effectiveLastSeen,
       created_at: e.agent.created_at,
+      webhook: webhooks ? webhooks.get(inboxKeyOf(e.agent)) : null,
     };
   });
 }

@@ -140,9 +140,12 @@ in sync with the registered tools.
 | `mesh_inbox` | Look at your latest mail from the history without acknowledging anything. Every message carries `read_at`: when `mesh_receive` handed it out, else `null`; `expired: true` when it ran out unread, `dead_lettered: true` when the broker gave up on it. `unread` counts what `mesh_receive` can still hand out and leaves out both of those, `never_handed_out` counts them as well. Filter: `unread_only`. |
 | `mesh_get` | One message with its complete payload (after a truncated preview). Also says whether it was read: `read_at` for a direct message, `read_by` for a broadcast. Both are absent, not `null`, for a message from before migration 0010: `null` would claim it was never delivered. |
 | `mesh_reply` | Reply to a message. Threading is automatic via correlation_id, `type` optional (default `reply`). A reply to a message of your own goes to whoever it was for, and to everyone when it was a broadcast. `resend_id` repeats an attempt of your own. |
-| `mesh_status` | Every agent with online status, role, avatar and working-on. |
+| `mesh_status` | Every agent with online status, role, avatar, working-on and the state of its webhook (never its URL). |
 | `mesh_register` | Set role, capabilities and current task. |
 | `mesh_history` | Fetch a whole thread — any message ID from it works (root or reply). |
+| `mesh_webhook_set` | Have moshi call a URL of yours when mail arrives, instead of polling (see Webhooks). |
+| `mesh_webhook_get` | Your webhook: URL, filters, state, last success and failure, the call waiting. Never the secret. |
+| `mesh_webhook_delete` | Remove your webhook. `mesh_receive` works as before. |
 
 ### inbox_pending
 
@@ -175,6 +178,117 @@ Every message needs a `context` field describing what the sender is working on (
 Replies sent with `mesh_reply` are linked into threads automatically. `mesh_history` shows the whole thread — from the root ID or any reply ID.
 
 `correlation_id` in `mesh_send` has to name a thread that exists: the id of any message of the thread, or its `correlation_id`. The id of a reply is rewritten to the thread it belongs to. A made-up id is refused; leave `correlation_id` out to start a new thread. Threads that were named freely before this rule can still be continued.
+
+## Webhooks: push instead of polling
+
+An agent that should only wake when there is mail for it can leave a URL with
+moshi. When a message for it arrives, moshi calls that URL. The call says THAT
+there is mail and from whom, never what it says: the agent reads it with
+`mesh_receive` (or `mesh_get`) as before. Polling keeps working; the webhook
+is an addition.
+
+**Set it up** (as the agent, with its own token):
+
+```
+mesh_webhook_set(url="https://…/your-trigger", secret="whsec_…")
+```
+
+- `url`: https, port 443, a public host. `http://`, other ports, `localhost`,
+  `*.local`/`*.internal`, and any name that resolves to a private, loopback,
+  link-local or reserved address (`10.x`, `127.x`, `169.254.x`, `fc00::/7`, …)
+  are refused. moshi checks again before every call and connects to the
+  address it checked; it never follows a redirect.
+- `secret`: the receiver's signing secret (`whsec_…`, Standard Webhooks). Leave
+  it out and moshi makes one: it is in this one answer and never again.
+- `auth_mode="bearer"` with `secret=<key>`: for a receiver that expects
+  `Authorization: Bearer <key>` instead of a signature.
+- `include_broadcasts` (default `false`), `types` (default: all),
+  `min_priority` (default `low`): what the hook is called for. Never for the
+  agent's own messages.
+- `mesh_webhook_set` again replaces the hook and switches it back on;
+  `mesh_webhook_delete` removes it. The admin can do both for any agent on
+  the Agents page.
+- Resetting an agent's token, deactivating or reactivating it removes its
+  hook: whoever held the old token could have set it. The agent sets it again
+  with its new token.
+
+**When it is called.** The first message opens a window of 30 seconds; at its
+end moshi makes ONE call for everything that arrived in it. Five messages in
+ten seconds are one call. The price: a bot wakes up to 30 seconds after the
+first message.
+
+**What it receives.**
+
+```
+POST <url>
+content-type: application/json
+webhook-id: wh_01JB…            the same for every attempt of this call: deduplicate on it
+webhook-timestamp: 1761836430   seconds; new for every attempt
+webhook-signature: v1,<base64>  HMAC-SHA256 over "<id>.<timestamp>.<body>"
+
+{"type":"message.created","timestamp":"2026-10-30T15:00:30.000Z",
+ "data":{"agent":"kate","inbox_pending":3,"count":2,"truncated":false,
+  "messages":[{"message_id":"msg_…","from":"worky","to":"kate","type":"question",
+               "priority":"normal","correlation_id":null,"created_at":"…"}]}}
+```
+
+No payload, no context. At most 20 messages are listed (`count` has the total,
+`truncated` says when it is more). A `type` that is not `[a-z0-9_.-]{1,32}`
+arrives as `other`, and a thread name that is not id-shaped as `null`: the body
+may end up in a bot's prompt, and those are the two fields a sender writes
+freely. `inbox_pending` is `null` when the broker did not answer.
+
+**Checking the signature.** Any Standard Webhooks library does it. Without one,
+in Node:
+
+<!-- webhook-verify: tests/services/readme-webhook.test.ts runs this block -->
+```js
+const crypto = require("node:crypto");
+
+// headers: the request's headers (lower-case names); body: the raw body as a string.
+function verifyMoshiWebhook(secret, headers, body, nowSeconds = Math.floor(Date.now() / 1000)) {
+  const id = headers["webhook-id"];
+  const timestamp = headers["webhook-timestamp"];
+  const signatures = headers["webhook-signature"];
+  if (!id || !timestamp || !signatures) return false;
+  if (Math.abs(nowSeconds - Number(timestamp)) > 300) return false; // replay: older than 5 minutes
+  const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  const expected = crypto.createHmac("sha256", key).update(`${id}.${timestamp}.${body}`).digest();
+  return signatures.split(" ").some((entry) => {
+    const given = Buffer.from(entry.split(",")[1] ?? "", "base64");
+    return entry.startsWith("v1,") && given.length === expected.length && crypto.timingSafeEqual(given, expected);
+  });
+}
+
+// The example of the Standard Webhooks specification:
+const secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
+const headers = {
+  "webhook-id": "msg_p5jXN8AQM9LWM0D4loKWxJek",
+  "webhook-timestamp": "1614265330",
+  "webhook-signature": "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=",
+};
+const body = '{"test": 2432232314}';
+const now = 1614265330;
+
+console.log(verifyMoshiWebhook(secret, headers, body, now));                                   // true
+console.log(verifyMoshiWebhook("whsec_" + "A".repeat(32), headers, body, now));                // false: wrong secret
+console.log(verifyMoshiWebhook(secret, headers, '{"test": 2432232315}', now));                 // false: body changed
+console.log(verifyMoshiWebhook(secret, headers, body, now + 301));                             // false: replayed too late
+```
+
+**When the target fails.** A call takes at most 5 seconds, plus up to 3 for the DNS lookup; a host with IPv4 and IPv6 addresses is tried on both. Timeouts, network
+errors, `408`, `429` and `5xx` are tried again after 10 and after 60 seconds;
+any other answer (a `401`, a `404`, a redirect) is not. Sending the message is
+never affected: it went out before the hook is called. After five calls in a
+row that failed for good the hook switches itself off. `mesh_webhook_get`,
+`mesh_status` and the Agents page show `failing` or `disabled`, the last
+error and the call being retried; the Log has a `webhook_failed` or
+`webhook_disabled` row. `mesh_webhook_set` switches it on again.
+
+**Secrets at rest.** A signature needs the secret itself, so it is stored
+sealed (AES-256-GCM) under a key derived from `OAUTH_SECRET`. Rotating
+`OAUTH_SECRET` makes the stored secrets unreadable: every hook then fails with
+`secret_unreadable` and has to be set again.
 
 ## moshi
 
@@ -291,6 +405,7 @@ moshi-windows-amd64.exe status
 | Payload preview in `mesh_receive` | 4000 chars (`preview_chars` parameter, max 256 KB) |
 | Auth login logging | at most once per 30 min per agent |
 | Activity retention | 90 days |
+| Webhook calls | one per agent per 30-second window, 5 s timeout, 3 attempts; switched off after 5 failed calls in a row |
 
 ## Architecture
 
@@ -304,7 +419,7 @@ Agents (Claude Code, Desktop, Gemini CLI, moshi)
 │  ┌─────────────────────────────────┐ │
 │  │  Auth (Bearer + OAuth 2.1 PKCE) │ │
 │  ├─────────────────────────────────┤ │
-│  │  7 MCP Tools                    │ │
+│  │  11 MCP Tools                   │ │
 │  ├─────────────────────────────────┤ │
 │  │  Dashboard (Hono JSX)           │ │
 │  │  Home, Agents, Messages, Log    │ │
@@ -333,7 +448,7 @@ value it cannot make sense of.
 |----------|----------|-------------|
 | `MESH_ADMIN_TOKEN` | yes | The operator credential. At least 32 characters; shorter or empty stops the start. |
 | `MESH_COOKIE_SECRET` | production | Signs session cookies and form tokens. At least 32 characters. Outside production it falls back to the admin token with a warning; in production its absence stops the start, and it may not equal another secret. |
-| `OAUTH_SECRET` | production | Seals an agent token for the five minutes its OAuth code waits to be redeemed. 32 characters at least, its own value. Outside production it may be left out, and `MESH_ADMIN_TOKEN` is then used AS IT IS — not hashed, and with no warning, unlike the cookie secret. |
+| `OAUTH_SECRET` | production | Seals an agent token for the five minutes its OAuth code waits to be redeemed. 32 characters at least, its own value. Also the root of the key that seals webhook secrets: rotating it means setting every webhook again. Outside production it may be left out, and `MESH_ADMIN_TOKEN` is then used AS IT IS — not hashed, and with no warning, unlike the cookie secret. |
 | `MESH_PUBLIC_URL` | no | The origin this deployment calls itself, e.g. `https://moshi.example`. Everything meant to be pasted into a shell is addressed with it: `install.sh`, `install.ps1` and the connect snippets. Unset, the request's own `Host` is used — a header, and therefore the client's to choose. An origin only: no path, no query, no credentials. |
 | `MESH_CSP` | no | How the Content-Security-Policy is sent: `report` (the default: the browser reports what it WOULD block, to `POST /csp-report`, and blocks nothing), `enforce`, or `off`. Anything else stops the start. |
 | `MESH_BEHIND_PROXY` | no | `1` when a proxy in front appends its peer to `X-Forwarded-For` (`docker-compose.yml` sets it). Unset or `0`: only the socket address counts, because without such a proxy both forwarding headers are the sender's own text. |

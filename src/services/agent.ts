@@ -250,6 +250,7 @@ export class AgentService {
     clearTokenCache();
 
     if (result.changes > 0) {
+      this.dropWebhook(id, agent.name, "agent deactivated", adminName);
       this.activity.log({
         action: "agent_revoked",
         entity_type: "agent",
@@ -289,6 +290,26 @@ export class AgentService {
     return this.inboxCutover !== null && inboxSince >= this.inboxCutover;
   }
 
+  /**
+   * A new token, a deactivation or a reactivation ends the agent's webhook.
+   * Whoever held the old token could have pointed it anywhere, and it would
+   * go on reporting who writes to the agent long after the token was taken
+   * away. Setting it again is one call for the agent with its new token.
+   */
+  private dropWebhook(id: string, name: string, reason: string, adminName?: string): void {
+    const removed = this.db
+      .prepare("DELETE FROM agent_webhooks WHERE agent_key = (SELECT inbox_key FROM agents WHERE id = ?)")
+      .run(id).changes;
+    if (removed === 0) return;
+    this.activity.log({
+      action: "webhook_deleted",
+      entity_type: "agent",
+      entity_id: id,
+      summary: `Webhook of "${name}" removed (${reason})`,
+      agent_name: adminName,
+    });
+  }
+
   reactivate(
     id: string,
     adminName?: string,
@@ -312,6 +333,8 @@ export class AgentService {
       .run(token_hash, now, now, id);
 
     clearTokenCache();
+    // One left over from before revoking dropped it.
+    this.dropWebhook(id, agent.name, "agent reactivated", adminName);
 
     this.activity.log({
       action: "agent_reactivated",
@@ -457,6 +480,7 @@ export class AgentService {
       .run(token_hash, now, id);
 
     clearTokenCache();
+    this.dropWebhook(id, agent.name, "token reset", adminName);
 
     this.activity.log({
       action: "agent_token_reset",

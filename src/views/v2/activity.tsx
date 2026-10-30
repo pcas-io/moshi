@@ -105,6 +105,16 @@ export function auditSentence(ev: Activity): string {
       return names[0] ? `You reset ${names[0]}'s token` : fallback;
     case "agent_deleted":
       return names[0] ? `You deleted ${names[0]}` : fallback;
+    case "webhook_set":
+      if (!names[0]) return fallback;
+      return isOperatorActor(ev.agent_name) ? `You set ${names[0]}'s webhook` : `${names[0]} set its webhook`;
+    case "webhook_deleted":
+      if (!names[0]) return fallback;
+      return isOperatorActor(ev.agent_name) ? `You removed ${names[0]}'s webhook` : `${names[0]} removed its webhook`;
+    case "webhook_failed":
+      return names[0] ? `A call of ${names[0]}'s webhook failed for good` : fallback;
+    case "webhook_disabled":
+      return names[0] ? `${names[0]}'s webhook was switched off after five failed calls in a row` : fallback;
     default:
       return fallback;
   }

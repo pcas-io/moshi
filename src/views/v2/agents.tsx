@@ -25,6 +25,7 @@ import { V2TokenBand } from "./token-band.js";
 import { PRESENCE_WORD, V2Avatar, V2Dot } from "./components.js";
 import { V2_TOKENS } from "./tokens.js";
 import type { V2AgentsAgent } from "./agents-detail.js";
+import { WebhookPanel } from "./agents-webhook.js";
 import {
   AGENTS_CSS, AGENTS_JS, CARD_PANEL, DeleteModal, DetailAside, ON_SOLID, fmtRel,
 } from "./agents-detail.js";
@@ -50,6 +51,8 @@ export interface V2AgentsProps {
    * lock the agent out silently.
    */
   newToken?: string;
+  /** A webhook signing secret moshi just generated: shown once, in the aside. */
+  webhookSecret?: string;
   userRole?: string;
   userName?: string;
 }
@@ -278,7 +281,7 @@ const ErrorBand: FC<{ error: string }> = ({ error }) => (
 // ── Page ────────────────────────────────────────────────────────
 
 export const V2AgentsPage: FC<V2AgentsProps> = ({
-  agents, csrfToken, error, inspectId, presenceFilter, newToken, userRole, userName,
+  agents, csrfToken, error, inspectId, presenceFilter, newToken, webhookSecret, userRole, userName,
 }) => {
   const total = agents.length;
   const live = agents.filter((a) => a.presence === "live").length;
@@ -323,7 +326,11 @@ export const V2AgentsPage: FC<V2AgentsProps> = ({
       {/* The one m-rise on this screen: the split row, never the table rows. */}
       <div class="m-rise" style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
         <AgentsTable visible={visible} selectedId={inspected?.id ?? null} filter={filter} />
-        {inspected && <DetailAside agent={inspected} csrfToken={csrfToken} />}
+        {inspected && (
+          <DetailAside agent={inspected} csrfToken={csrfToken}>
+            <WebhookPanel agent={inspected} csrfToken={csrfToken} newSecret={webhookSecret} />
+          </DetailAside>
+        )}
       </div>
 
       {inspected && <DeleteModal agent={inspected} csrfToken={csrfToken} />}
