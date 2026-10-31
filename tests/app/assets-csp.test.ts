@@ -21,7 +21,7 @@ async function pages() {
   const t = createTestApp();
   const { agent } = t.h.agents.create("scout");
   const { cookie } = await signIn(t.app, ADMIN_TOKEN);
-  const paths = ["/login", "/login?error=1", "/login?error=expired", CONSENT, "/", "/agents", `/agents?inspect=${agent.id}`, "/agents/connect", "/conversations", "/log", "/log?tab=audit"];
+  const paths = ["/login", "/login?error=1", "/login?error=expired", CONSENT, "/", "/board", "/agents", `/agents?inspect=${agent.id}`, "/agents/connect", "/conversations", "/log", "/log?tab=audit"];
   const out: { path: string; res: Response; html: string }[] = [];
   for (const path of paths) {
     const res = await t.app.request(path, { headers: { Cookie: cookie, ...HTML } });
@@ -162,7 +162,7 @@ describe("Content-Security-Policy", () => {
     const t = createTestApp();
     const { agent } = t.h.agents.create("scout");
     const { cookie } = await signIn(t.app, ADMIN_TOKEN);
-    const paths = ["/", "/agents", `/agents?inspect=${agent.id}`, "/agents/connect", "/conversations", "/log", "/log?tab=audit", "/login"];
+    const paths = ["/", "/board", "/agents", `/agents?inspect=${agent.id}`, "/agents/connect", "/conversations", "/log", "/log?tab=audit", "/login"];
     const answers = await Promise.all(Array.from({ length: 160 }, (_, i) => t.app.request(paths[i % paths.length], { headers: { Cookie: cookie, ...HTML } })));
     const seen = new Set<string>();
     for (const res of answers) {

@@ -30,6 +30,9 @@ export const ACTIVITY_RETENTION_DAYS = 90;
 export const RECOMMENDED_MESSAGE_TYPES = [
   "info", "question", "incident", "task_update",
   "deploy_request", "deploy_status", "review_request", "review_result", "script",
+  // The board reads these two: `done` ends a conversation, `input_required`
+  // hands its ball to a human (src/services/board.ts).
+  "done", "input_required",
 ] as const;
 export const DEFAULT_MESSAGE_TYPE = "info";
 export const REPLY_MESSAGE_TYPE = "reply";

@@ -68,7 +68,14 @@ export function registerRegistryTools(server: McpServer, ctx: ToolContext): void
         .max(FIELD_LIMITS.CAPABILITIES)
         .optional()
         .describe("List of capabilities (e.g. ['deploy', 'rollback', 'monitor'])"),
-      working_on: z.string().max(FIELD_LIMITS.WORKING_ON).optional().describe("What you are currently working on (max 512 chars)"),
+      working_on: z
+        .string()
+        .max(FIELD_LIMITS.WORKING_ON)
+        .optional()
+        .describe(
+          "Your NEXT DELIVERY and who gets it, e.g. 'delivering: R3c fix to kate' (max 512 chars). The board shows it as what " +
+            "you deliver next while you hold a ball; keep it current. 'idle' only when nobody waits for you.",
+        ),
     },
     async (params) => {
       if (ctx.isAdmin) return adminError();

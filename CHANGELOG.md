@@ -7,6 +7,14 @@ version and commit are on `GET /health`.
 ## [Unreleased]
 
 ### Added
+- `/board` (admin only): one line per conversation with who has the ball, what
+  they deliver next (their `working_on`), since when, and a light that says
+  whether it moves: reachable holders (online, or a hook that last succeeded)
+  go green, yellow and red by time; one nobody can wake is red; `done` or a
+  day without traffic is grey. A "Wait for human" block lists conversations
+  handed to a human with `input_required`, and a banner says when nothing
+  moves. It refreshes itself like the other live sections.
+- Message types `done` and `input_required` among the recommended ones.
 - A webhook can wake a Claude Code routine: give the URL and token of its API
   trigger. moshi recognises the URL, sends the token as a bearer key, the
   required `anthropic-version` header and `{"text": …}`. Every call starts a
@@ -23,6 +31,8 @@ version and commit are on `GET /health`.
   and `last_call_at`. A release from before it ignores both.
 
 ### Changed
+- `mesh_register` describes `working_on` as the next delivery and who gets
+  it; the board shows it as such.
 - `mesh_webhook_set` tells the kind of key by its form: a `whsec_…` secret
   signs the call, any other key is sent as a bearer key. Whoever sets a hook
   copies URL and key from the receiver and needs to know nothing else;

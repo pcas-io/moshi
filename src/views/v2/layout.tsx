@@ -17,7 +17,7 @@ import { MCP_TOOL_CATALOG } from "../../mcp/catalog.js";
 
 const T = V2_TOKENS;
 
-export type V2NavKey = "HOME" | "AGENTS" | "CONVOS" | "LOG";
+export type V2NavKey = "HOME" | "BOARD" | "AGENTS" | "CONVOS" | "LOG";
 
 interface V2LayoutProps {
   title?: string;
@@ -35,6 +35,7 @@ interface V2LayoutProps {
 
 const V2_NAV: ReadonlyArray<readonly [V2NavKey, string, string, boolean]> = [
   ["HOME",     "Home",          "/",              false],
+  ["BOARD",    "Board",         "/board",         true ],
   ["AGENTS",   "Agents",        "/agents",        true ],
   ["CONVOS",   "Conversations", "/conversations", false],
   ["LOG",      "Log",           "/log",           false],

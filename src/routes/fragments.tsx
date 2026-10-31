@@ -42,6 +42,9 @@ import {
 } from "../views/v2/conversations.js";
 import { LogMessagesSection, messageRoutingOf, parseLogRouting } from "../views/v2/log.js";
 import { LatestConversationSection } from "../views/v2/home.js";
+import { BoardSection } from "../views/v2/board.js";
+import { loadBoard } from "../services/board.js";
+import type { WebhookService } from "../services/webhooks.js";
 import { parseActivityRange } from "../services/activity.js";
 
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
@@ -53,6 +56,7 @@ export interface FragmentDeps {
   db: Database.Database;
   agents: AgentService;
   presence: PresenceService;
+  webhooks: WebhookService;
   /** Render clock. Injected by tests so page and fragment agree exactly. */
   now?: () => number;
 }
@@ -92,7 +96,7 @@ async function respond(c: Context<HonoEnv>, node: unknown, outOfBand: Record<str
   return c.body(html, 200, { ...headers, "Content-Type": "text/html; charset=UTF-8" });
 }
 
-export function createFragmentRoutes({ db, agents, presence, now = Date.now }: FragmentDeps): Hono<HonoEnv> {
+export function createFragmentRoutes({ db, agents, presence, webhooks, now = Date.now }: FragmentDeps): Hono<HonoEnv> {
   const frag = new Hono<HonoEnv>();
 
   frag.use("/fragments/*", async (c, next) => {
@@ -155,6 +159,13 @@ export function createFragmentRoutes({ db, agents, presence, now = Date.now }: F
         now={now()}
       />,
     );
+  });
+
+  // --- Board: the whole section; admin only, like the page ---
+  frag.get("/fragments/board", async (c) => {
+    if (c.get("agent")?.role !== "admin") return c.json({ error: "forbidden" }, 403);
+    const clock = now();
+    return respond(c, <BoardSection board={await loadBoard({ db, presence, webhooks, now: clock })} now={clock} />);
   });
 
   // --- Home: the latest conversation card ---
