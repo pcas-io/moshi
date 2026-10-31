@@ -215,7 +215,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   app.route("/", createDashboardRoutes({ db, nats, agents, activity, presence, webhooks, now }));
 
   // --- The live sections' fragments (behind auth, like the pages) ---
-  app.route("/", createFragmentRoutes({ db, agents, presence, now }));
+  app.route("/", createFragmentRoutes({ db, agents, presence, webhooks, now }));
 
   // The signal that makes those refreshes immediate: GET /sse/messages.
   app.route("/", createSseRoutes());

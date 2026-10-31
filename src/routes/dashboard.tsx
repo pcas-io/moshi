@@ -24,6 +24,8 @@ import { loadV2AgentsData } from "../services/v2-agents-data.js";
 import { parseActivityRange, startOfDayIso } from "../services/activity.js";
 import { V2HomePage } from "../views/v2/home.js";
 import { V2AgentsPage } from "../views/v2/agents.js";
+import { V2BoardPage } from "../views/v2/board.js";
+import { loadBoard } from "../services/board.js";
 import {
   V2LogPage,
   messageRoutingOf,
@@ -63,6 +65,17 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, we
         userName={agent?.name ?? undefined}
         csrfToken={csrfToken}
       />,
+    );
+  });
+
+  // --- Board: who has the ball (admin only, like the Agents page) ---
+  dash.get("/board", async (c) => {
+    const agent = c.get("agent");
+    if (agent?.role !== "admin") return c.redirect("/");
+    const clock = now();
+    const board = await loadBoard({ db, presence, webhooks, now: clock });
+    return page(c,
+      <V2BoardPage board={board} now={clock} userRole={agent.role} userName={agent.name} csrfToken={issueCsrf(c)} />,
     );
   });
 
