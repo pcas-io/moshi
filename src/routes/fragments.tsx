@@ -44,6 +44,7 @@ import { LogMessagesSection, messageRoutingOf, parseLogRouting } from "../views/
 import { LatestConversationSection } from "../views/v2/home.js";
 import { BoardSection } from "../views/v2/board.js";
 import { loadBoard } from "../services/board.js";
+import type { BoardLinks } from "../services/board.js";
 import type { WebhookService } from "../services/webhooks.js";
 import { parseActivityRange } from "../services/activity.js";
 
@@ -57,6 +58,8 @@ export interface FragmentDeps {
   agents: AgentService;
   presence: PresenceService;
   webhooks: WebhookService;
+  /** Result links on the board (MESH_RESULT_LINK_HOSTS); absent: none. */
+  boardLinks?: BoardLinks;
   /** Render clock. Injected by tests so page and fragment agree exactly. */
   now?: () => number;
 }
@@ -96,7 +99,7 @@ async function respond(c: Context<HonoEnv>, node: unknown, outOfBand: Record<str
   return c.body(html, 200, { ...headers, "Content-Type": "text/html; charset=UTF-8" });
 }
 
-export function createFragmentRoutes({ db, agents, presence, webhooks, now = Date.now }: FragmentDeps): Hono<HonoEnv> {
+export function createFragmentRoutes({ db, agents, presence, webhooks, boardLinks, now = Date.now }: FragmentDeps): Hono<HonoEnv> {
   const frag = new Hono<HonoEnv>();
 
   frag.use("/fragments/*", async (c, next) => {
@@ -165,7 +168,7 @@ export function createFragmentRoutes({ db, agents, presence, webhooks, now = Dat
   frag.get("/fragments/board", async (c) => {
     if (c.get("agent")?.role !== "admin") return c.json({ error: "forbidden" }, 403);
     const clock = now();
-    return respond(c, <BoardSection board={await loadBoard({ db, presence, webhooks, now: clock })} now={clock} />);
+    return respond(c, <BoardSection board={await loadBoard({ db, presence, webhooks, now: clock, links: boardLinks })} now={clock} />);
   });
 
   // --- Home: the latest conversation card ---

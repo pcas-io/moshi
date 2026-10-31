@@ -18,8 +18,12 @@
 // call succeeded. A reachable holder is green for a while, then yellow. A
 // strand with nothing for a day, or done, is grey; a human's ball is neutral.
 //
-// Nothing of a message's text is used: only who, to whom, which type and
-// when. "Delivers next" is the holder's own `working_on`.
+// Nothing of a message's text is shown: only who, to whom, which type and
+// when. "Delivers next" is the holder's own `working_on`. The one thing read
+// from a text is a RESULT LINK: a URL on a host the operator listed
+// (MESH_RESULT_LINK_HOSTS), and only the link is shown, never the words
+// around it; its label is the linked entity's title when moshi may ask for
+// it (src/services/result-titles.ts), else the end of its id.
 
 import type Database from "better-sqlite3";
 import type { Presence, AgentWithPresence } from "./presence.js";
@@ -28,6 +32,13 @@ import { inboxKeyOf } from "./agent.js";
 
 export const DONE_TYPE = "done";
 export const INPUT_REQUIRED_TYPE = "input_required";
+/** Types that hand over a result: the recipient is to pick it up. A message
+ *  with a result link counts as well. */
+export const DELIVERY_TYPES: readonly string[] = ["delivered", "review_result", "deploy_status"];
+/** Actions listed per pair when a row is opened. */
+export const HISTORY_LISTED = 10;
+/** How much of a payload or context is searched for a result link. */
+const LINK_SEARCH_CHARS = 65_536;
 
 /** Start values. Minutes without movement, and hours until a strand is quiet. */
 export const BOARD_THRESHOLDS = {
@@ -45,10 +56,41 @@ const WAITS_FOR_HUMAN = /^\s*(wartet auf (einen |eine )?(mensch|menschen)|waitin
 
 export type Light = "green" | "yellow" | "red" | "grey" | "human";
 
+/** A link to a result, on a host the operator allowed. */
+export interface ResultLink {
+  url: string;
+  /** The entity id in its path (a UUID). */
+  id: string;
+  /** Its title, when known; else the view shows the end of the id. */
+  title: string | null;
+}
+
+export interface Action {
+  type: string;
+  from: string;
+  to: string;
+  at: string;
+  link: ResultLink | null;
+}
+
+/** Where result links may point, and what moshi knows of their titles. */
+export interface ResultLinks {
+  hosts: readonly string[];
+  titleOf(id: string): string | null;
+}
+
 /** How the holder can be woken: by being online, by its hook, or not at all. */
 export type Reach = "online" | "hook" | "stale" | "unreachable";
 
 export interface BoardRow {
+  /** The pair, independent of direction: what an opened row is kept by. */
+  pairKey: string;
+  /** The last message between the two delivered something: the holder is to pick it up. */
+  delivered: boolean;
+  /** The newest result link between the two, if any. */
+  result: ResultLink | null;
+  /** The last `HISTORY_LISTED` direct messages between the two, newest first. */
+  history: Action[];
   /** The two agents, ordered: who moved the ball last first. */
   from: string;
   to: string;
@@ -148,14 +190,26 @@ export function lightOf(reach: Reach, minutesSince: number): Light {
   return "green";
 }
 
-/** The board as the page and its fragment show it. */
+/** Result links with a way to ask for the titles still missing. */
+export type BoardLinks = ResultLinks & { want(ids: string[]): void };
+
+/** The board as the page and its fragment show it. Titles it does not know
+ *  yet are asked for afterwards, never waited for: the next refresh has them. */
 export async function loadBoard(deps: {
   db: Database.Database;
   presence: { list(now?: number): Promise<AgentWithPresence[]> };
   webhooks: { statuses(): Map<string, WebhookStatus> };
   now: number;
+  links?: BoardLinks;
 }): Promise<Board> {
-  return buildBoard({ db: deps.db, agents: await deps.presence.list(deps.now), hooks: deps.webhooks.statuses(), now: deps.now });
+  const board = buildBoard({ db: deps.db, agents: await deps.presence.list(deps.now), hooks: deps.webhooks.statuses(), now: deps.now, links: deps.links });
+  const unknown = [board.waitingForHuman, board.inPlay, board.quiet]
+    .flat()
+    .flatMap((r) => r.history.map((h) => h.link))
+    .filter((l): l is ResultLink => l !== null && l.title === null)
+    .map((l) => l.id);
+  if (unknown.length > 0) deps.links?.want([...new Set(unknown)]);
+  return board;
 }
 
 export interface BoardInputs {
@@ -163,9 +217,83 @@ export interface BoardInputs {
   agents: AgentWithPresence[];
   hooks: Map<string, WebhookStatus>;
   now: number;
+  /** Absent: no result links at all. */
+  links?: ResultLinks;
 }
 
-export function buildBoard({ db, agents, hooks, now }: BoardInputs): Board {
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/** Result links in `text`: https URLs on an allowed host with an entity id in
+ *  their path. The last one wins: a message names its result at the end. */
+export function resultLinksIn(text: string, hosts: readonly string[]): { url: string; id: string }[] {
+  if (hosts.length === 0) return [];
+  const found: { url: string; id: string }[] = [];
+  for (const raw of text.match(/https:\/\/[^\s"'<>()[\]{}`]+/g) ?? []) {
+    let u: URL;
+    try {
+      u = new URL(raw.replace(/[.,;:!?]+$/, ""));
+    } catch {
+      continue;
+    }
+    if (u.username || u.password || u.port !== "" || !hosts.includes(u.hostname.toLowerCase())) continue;
+    const ids = u.pathname.match(UUID);
+    if (ids) found.push({ url: u.toString(), id: ids[ids.length - 1]!.toLowerCase() });
+  }
+  return found;
+}
+
+interface Recent {
+  pair: string;
+  from_agent: string;
+  to_agent: string;
+  type: string;
+  created_at: string;
+  payload_head: string;
+  context_head: string;
+}
+
+/** The newest direct messages of every pair in the window, up to `HISTORY_LISTED` each. */
+function recentBetweenPairs(db: Database.Database, now: number): Map<string, Recent[]> {
+  const since = new Date(now - BOARD_THRESHOLDS.windowDays * 86_400_000).toISOString();
+  // A link search, not a preview: the head of a payload is enough to find a link.
+  const rows = db
+    .prepare(
+      `WITH direct AS (
+         SELECT from_agent, to_agent, type, created_at, rowid AS rid,
+                substr(payload, 1, ${LINK_SEARCH_CHARS}) AS payload_head, substr(context, 1, ${LINK_SEARCH_CHARS}) AS context_head,
+                lower(COALESCE(from_key, from_agent)) AS a, lower(COALESCE(NULLIF(to_key, ''), to_agent)) AS b
+           FROM messages WHERE created_at >= ? AND to_agent != 'broadcast'
+       ),
+       ranked AS (
+         SELECT direct.*, min(a, b) || char(31) || max(a, b) AS pair,
+                ROW_NUMBER() OVER (PARTITION BY min(a, b) || char(31) || max(a, b) ORDER BY created_at DESC, rid DESC) AS rn
+           FROM direct
+       )
+       SELECT pair, from_agent, to_agent, type, created_at, payload_head, context_head FROM ranked WHERE rn <= ${HISTORY_LISTED}
+        ORDER BY created_at DESC`,
+    )
+    .all(since) as Recent[];
+  const byPair = new Map<string, Recent[]>();
+  for (const r of rows) byPair.set(r.pair, [...(byPair.get(r.pair) ?? []), r]);
+  return byPair;
+}
+
+function historyOf(recent: Recent[], links: ResultLinks | undefined): Action[] {
+  return recent.map((r) => {
+    const found = links ? resultLinksIn(`${r.payload_head}\n${r.context_head}`, links.hosts) : [];
+    const last = found[found.length - 1];
+    return {
+      type: r.type,
+      from: r.from_agent,
+      to: r.to_agent,
+      at: r.created_at,
+      link: last ? { ...last, title: links!.titleOf(last.id) } : null,
+    };
+  });
+}
+
+export function buildBoard({ db, agents, hooks, now, links }: BoardInputs): Board {
+  const recent = recentBetweenPairs(db, now);
   const byKey = new Map(agents.map((a) => [inboxKeyOf(a.agent), a]));
   const byName = new Map(agents.map((a) => [a.agent.name.toLowerCase(), a]));
   const find = (key: string | null, name: string) => (key ? byKey.get(key) : undefined) ?? byName.get(name.toLowerCase());
@@ -184,7 +312,13 @@ export function buildBoard({ db, agents, hooks, now }: BoardInputs): Board {
     const reach = done || humanBall ? null : holderEntry && holderEntry.agent.is_active ? reachOf(holderEntry.presence, hook) : "unreachable";
     const light: Light = quiet ? "grey" : humanBall ? "human" : lightOf(reach!, (now - Date.parse(m.created_at)) / 60_000);
     const deliversNext = (holderEntry ?? waitingEntry)?.agent.working_on ?? null;
+    const history = historyOf(recent.get(m.pair) ?? [], links);
+    const newest = history[0];
     return {
+      pairKey: m.pair,
+      delivered: !quiet && !humanBall && Boolean(newest) && (DELIVERY_TYPES.includes(newest!.type) || newest!.link !== null),
+      result: history.find((h) => h.link)?.link ?? null,
+      history,
       from: m.from_agent,
       to: m.to_agent,
       threadId: m.thread_id,

@@ -197,6 +197,18 @@ which type and when, and the holder's own `working_on`.
   delivery and who gets it (`delivering: R3c fix to kate`); the board points
   out a holder whose `working_on` is empty or says only `idle`.
 - A banner says when nothing is moving: strands are open and none is green.
+- **Last action, delivery, result.** Each line names the last action
+  between the two (type, sender, recipient, when). When it handed something
+  over — type `delivered`, `review_result` or `deploy_status`, or a message
+  with a result link — the line says "Delivered, waiting for X to pick it up".
+  A result link is a URL on a host listed in `MESH_RESULT_LINK_HOSTS`, found in
+  the payload or context and shown as a link and nothing else. Its label is
+  the linked entity's title when moshi has a read-only token for that service
+  (`MESH_RESULT_TITLE_MCP_URL`, `MESH_RESULT_TITLE_TOKEN`; asked in the
+  background, cached for an hour), else the end of its id.
+- **History.** A line folds open to the last ten actions between the two
+  (when, type, who to whom, result link; never text). An opened history stays
+  open while the board refreshes itself.
 
 ### Threading
 
@@ -499,6 +511,9 @@ value it cannot make sense of.
 | `MESH_COOKIE_SECRET` | production | Signs session cookies and form tokens. At least 32 characters. Outside production it falls back to the admin token with a warning; in production its absence stops the start, and it may not equal another secret. |
 | `OAUTH_SECRET` | production | Seals an agent token for the five minutes its OAuth code waits to be redeemed. 32 characters at least, its own value. Also the root of the key that seals webhook secrets: rotating it means setting every webhook again. Outside production it may be left out, and `MESH_ADMIN_TOKEN` is then used AS IT IS — not hashed, and with no warning, unlike the cookie secret. |
 | `MESH_PUBLIC_URL` | no | The origin this deployment calls itself, e.g. `https://moshi.example`. Everything meant to be pasted into a shell is addressed with it: `install.sh`, `install.ps1` and the connect snippets. Unset, the request's own `Host` is used — a header, and therefore the client's to choose. An origin only: no path, no query, no credentials. |
+| `MESH_RESULT_LINK_HOSTS` | no | Host names, comma-separated, whose links in a message count as its result on `/board` (only the link is shown, never the text around it). Unset: no result links. |
+| `MESH_RESULT_TITLE_MCP_URL` | no | An https MCP endpoint that answers `get_entity(id)`; `/board` asks it once per linked id for the title and keeps nothing else. Only together with `MESH_RESULT_TITLE_TOKEN`. Unset: a link shows the end of its id. |
+| `MESH_RESULT_TITLE_TOKEN` | no | A READ-ONLY token for that endpoint, sent as a bearer token and never logged. Keep it a secret in the deployment. |
 | `MESH_CSP` | no | How the Content-Security-Policy is sent: `report` (the default: the browser reports what it WOULD block, to `POST /csp-report`, and blocks nothing), `enforce`, or `off`. Anything else stops the start. |
 | `MESH_BEHIND_PROXY` | no | `1` when a proxy in front appends its peer to `X-Forwarded-For` (`docker-compose.yml` sets it). Unset or `0`: only the socket address counts, because without such a proxy both forwarding headers are the sender's own text. |
 | `MESH_ADMIN_TOKEN_PREVIOUS` | no | The old admin token during a rotation. At least 32 characters when set; empty means none. |

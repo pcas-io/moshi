@@ -169,8 +169,8 @@ await dump("10-log-audit", V2LogPage({
   const agentService = new AgentService(db, new ActivityService(db));
   const names = ["triage-1", "ops-kai", "dex-eu", "sec-warden", "pm-mira", "scout", "qa-bot"];
   for (const name of names) agentService.create(name);
-  const say = (from: string, to: string, minutesAgo: number, type = "task_update") => {
-    const m = createMessage({ from, to, type, payload: "-", context: "-" });
+  const say = (from: string, to: string, minutesAgo: number, type = "task_update", payload = "-") => {
+    const m = createMessage({ from, to, type, payload, context: "-" });
     m.created_at = iso(minutesAgo);
     persistMessage(db, m, { fromKey: from, toKey: to });
   };
@@ -178,8 +178,11 @@ await dump("10-log-audit", V2LogPage({
   say("dex-eu", "sec-warden", 70, "review_request");
   say("pm-mira", "scout", 20);
   say("scout", "pm-mira", 12, "input_required");
+  say("ops-kai", "qa-bot", 95, "review_request");
+  say("qa-bot", "ops-kai", 60, "question");
   say("ops-kai", "qa-bot", 35, "review_request");
   say("qa-bot", "dex-eu", 6);
+  say("sec-warden", "triage-1", 9, "delivered", "audit done: https://results.example.com/entities/06ae5dd4-5f58-75c4-8000-4ae66878c3eb");
   say("triage-1", "pm-mira", 30 * 60, "done");
   const presence: Record<string, Presence> = { "sec-warden": "offline", "qa-bot": "stale" };
   const working: Record<string, string> = {
@@ -193,7 +196,11 @@ await dump("10-log-audit", V2LogPage({
     presence: presence[a.name] ?? "live",
     effectiveLastSeen: null,
   }));
-  const board = buildBoard({ db, agents: roster, hooks: new Map(), now: NOW.getTime() });
+  const links = {
+    hosts: ["results.example.com"],
+    titleOf: (id: string) => (id.endsWith("878c3eb") ? "Token audit api-gw — 3 findings, 0 critical" : null),
+  };
+  const board = buildBoard({ db, agents: roster, hooks: new Map(), now: NOW.getTime(), links });
   await dump("15-board", V2BoardPage({ board, now: NOW.getTime(), userRole: "admin", userName: "admin", csrfToken: "preview-csrf" }));
 }
 

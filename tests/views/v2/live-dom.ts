@@ -25,6 +25,11 @@ export class FakeScroller {
   constructor(public key: string, public follow: string | null = null) {}
   getAttribute(k: string) { return k === "data-live-scroll" ? this.key : k === "data-live-follow" ? this.follow : null; }
 }
+export class FakeDetails {
+  open = false; // the server never renders one open
+  constructor(public key: string) {}
+  getAttribute(k: string) { return k === "data-live-keep" ? this.key : null; }
+}
 export class FakePill {
   hidden = true; // the server renders it hidden
   setAttribute(k: string) { if (k === "hidden") this.hidden = true; }
@@ -35,6 +40,7 @@ export class FakeEl {
   rows: FakeRow[] = [];
   scrollers: FakeScroller[] = [];
   pills: FakePill[] = [];
+  details: FakeDetails[] = [];
   swaps = 0;
   focusVisible = false;
   textContent = "";
@@ -48,11 +54,13 @@ export class FakeEl {
     this.scrollers = [...v.matchAll(/data-live-scroll="([^"]+)"( data-live-follow="([^"]+)")?/g)]
       .map((m) => new FakeScroller(m[1]!, m[3] ?? null));
     this.pills = [...v.matchAll(/data-live-pill/g)].map(() => new FakePill());
+    this.details = [...v.matchAll(/data-live-keep="([^"]+)"/g)].map((m) => new FakeDetails(m[1]!));
   }
   querySelectorAll(sel: string) {
     if (sel === "[data-id]") return this.rows;
     if (sel === "[data-live-scroll]") return this.scrollers;
     if (sel === "[data-live-pill]") return this.pills;
+    if (sel === "[data-live-keep]") return this.details;
     throw new Error("unexpected selector " + sel);
   }
   querySelector(sel: string) {

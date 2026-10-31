@@ -15,6 +15,9 @@
 //                                 stay there, until the reader scrolls up
 //   data-live-noun="message"    — with data-live-mark: new rows are announced
 //                                 in #d-live-status ("2 new messages")
+//   data-live-keep="key"        — on a <details> inside: open stays open
+//                                 across a swap (keys come from agent names,
+//                                 so they live in a prototype-free object)
 //
 // Rules, each of them pinned in tests/views/v2/live-refresh.test.ts:
 // - `Accept: text/x-moshi-fragment`, never text/html: with text/html the auth
@@ -180,10 +183,26 @@ export const LIVE_REFRESH_JS = `
     }
   }
 
+  function openState(el) {
+    var open = Object.create(null), list = el.querySelectorAll('[data-live-keep]');
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].open) open[list[i].getAttribute('data-live-keep')] = true;
+    }
+    return open;
+  }
+
+  function restoreOpen(el, open) {
+    var list = el.querySelectorAll('[data-live-keep]');
+    for (var i = 0; i < list.length; i++) {
+      if (open[list[i].getAttribute('data-live-keep')] === true) list[i].open = true;
+    }
+  }
+
   function swap(section, html, oob) {
-    var el = section.el, before = rowIds(el), saved = scrollState(el);
+    var el = section.el, before = rowIds(el), saved = scrollState(el), open = openState(el);
     el.innerHTML = html;
     restoreScroll(el, saved);
+    restoreOpen(el, open);
     markNew(el, before);
     pills(el);
     outOfBand(oob);

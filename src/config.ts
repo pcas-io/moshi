@@ -47,6 +47,13 @@ export interface Config {
    *  MESH_BEHIND_PROXY, off unless set: without such a proxy the header is
    *  whatever the sender typed (src/services/client-ip.ts). */
   behindProxy: boolean;
+  /** Hosts whose links in a message count as its result on the board.
+   *  MESH_RESULT_LINK_HOSTS, comma-separated; empty: no result links. */
+  resultLinkHosts: string[];
+  /** Where the board asks for a result's title (an MCP endpoint answering
+   *  get_entity), with a read-only token. Both MESH_RESULT_TITLE_MCP_URL and
+   *  MESH_RESULT_TITLE_TOKEN, or neither: then links keep the end of their id. */
+  resultTitles: { mcpUrl: string; token: string } | null;
 }
 
 export interface ConfigError {
@@ -207,6 +214,37 @@ export function loadConfig(
   if (cspRaw === "enforce" || cspRaw === "report" || cspRaw === "off") cspMode = cspRaw;
   else if (cspRaw !== "") errors.push(`MESH_CSP must be enforce, report or off (got "${env.MESH_CSP}")`);
 
+  // Result links on the board: which hosts, and where their titles come from.
+  // Names only in the messages, never the token.
+  const resultLinkHosts: string[] = [];
+  for (const raw of (env.MESH_RESULT_LINK_HOSTS ?? "").split(",")) {
+    const host = raw.trim().toLowerCase();
+    if (host === "") continue;
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
+      errors.push(`MESH_RESULT_LINK_HOSTS lists host names, comma-separated, e.g. results.example.com (got "${raw.trim()}")`);
+    } else {
+      resultLinkHosts.push(host);
+    }
+  }
+  const titleUrlRaw = (env.MESH_RESULT_TITLE_MCP_URL ?? "").trim();
+  const titleToken = (env.MESH_RESULT_TITLE_TOKEN ?? "").trim();
+  let resultTitles: Config["resultTitles"] = null;
+  if (titleUrlRaw !== "" || titleToken !== "") {
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(titleUrlRaw);
+    } catch {
+      parsed = null;
+    }
+    if (!parsed || parsed.protocol !== "https:" || parsed.username || parsed.password) {
+      errors.push(`MESH_RESULT_TITLE_MCP_URL must be an https URL when titles are wanted (got "${titleUrlRaw}")`);
+    } else if (titleToken === "") {
+      errors.push("MESH_RESULT_TITLE_TOKEN must be set together with MESH_RESULT_TITLE_MCP_URL");
+    } else {
+      resultTitles = { mcpUrl: parsed.toString(), token: titleToken };
+    }
+  }
+
   if (errors.length > 0) {
     return { errors };
   }
@@ -227,6 +265,8 @@ export function loadConfig(
     commit: resolveCommit(env),
     cspMode,
     publicUrl,
+    resultLinkHosts,
+    resultTitles,
   };
 }
 
