@@ -18,6 +18,13 @@ import { V2LogPage } from "../src/views/v2/log.js";
 import { renderConnectPage } from "../src/views/v2/connect.js";
 import type { ConversationThread, MessageView } from "../src/services/message-queries.js";
 import type { Activity, PaginatedResult } from "../src/types.js";
+import { V2BoardPage } from "../src/views/v2/board.js";
+import { buildBoard } from "../src/services/board.js";
+import { initDatabase } from "../src/services/db.js";
+import { AgentService } from "../src/services/agent.js";
+import { ActivityService } from "../src/services/activity.js";
+import { createMessage, persistMessage } from "../src/services/message.js";
+import type { Presence } from "../src/services/presence.js";
 
 const OUT = process.argv[2] ?? "/tmp/moshi-preview";
 mkdirSync(OUT, { recursive: true });
@@ -155,6 +162,40 @@ await dump("10-log-audit", V2LogPage({
   topActors: [{ agent_name: "triage-1", count: 34 }, { agent_name: "admin", count: 12 }, { agent_name: "dex-eu", count: 7 }],
   routing: "all", ...shared,
 }));
+
+// The board, built by the real logic from sample traffic.
+{
+  const db = initDatabase(":memory:");
+  const agentService = new AgentService(db, new ActivityService(db));
+  const names = ["triage-1", "ops-kai", "dex-eu", "sec-warden", "pm-mira", "scout", "qa-bot"];
+  for (const name of names) agentService.create(name);
+  const say = (from: string, to: string, minutesAgo: number, type = "task_update") => {
+    const m = createMessage({ from, to, type, payload: "-", context: "-" });
+    m.created_at = iso(minutesAgo);
+    persistMessage(db, m, { fromKey: from, toKey: to });
+  };
+  say("triage-1", "ops-kai", 4, "incident");
+  say("dex-eu", "sec-warden", 70, "review_request");
+  say("pm-mira", "scout", 20);
+  say("scout", "pm-mira", 12, "input_required");
+  say("ops-kai", "qa-bot", 35, "review_request");
+  say("qa-bot", "dex-eu", 6);
+  say("triage-1", "pm-mira", 30 * 60, "done");
+  const presence: Record<string, Presence> = { "sec-warden": "offline", "qa-bot": "stale" };
+  const working: Record<string, string> = {
+    "ops-kai": "delivering: rollback plan for api-gw to triage-1",
+    "sec-warden": "idle",
+    "dex-eu": "waiting for a human: sign-off on the schema change",
+    "qa-bot": "delivering: regression report to ops-kai",
+  };
+  const roster = agentService.list().map((a) => ({
+    agent: { ...agentService.getByName(a.name)!, working_on: working[a.name] ?? null },
+    presence: presence[a.name] ?? "live",
+    effectiveLastSeen: null,
+  }));
+  const board = buildBoard({ db, agents: roster, hooks: new Map(), now: NOW.getTime() });
+  await dump("15-board", V2BoardPage({ board, now: NOW.getTime(), userRole: "admin", userName: "admin", csrfToken: "preview-csrf" }));
+}
 
 const connectBase = {
   origin: "https://moshi.enki.run",

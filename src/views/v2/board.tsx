@@ -1,4 +1,4 @@
-// /board: who has the ball in each conversation, and whether it moves.
+// /board: who has the ball between two agents, and whether it moves.
 //
 // One live container (`data-live="board"`) around `BoardSection`, which the
 // fragment route renders too: page and refresh are the same component. The
@@ -22,12 +22,18 @@ const T = V2_TOKENS;
 
 export const BOARD_SRC = "/fragments/board";
 
-const LIGHT: Record<Light, { color: string; word: string }> = {
-  green: { color: T.live, word: "moving" },
-  yellow: { color: T.amber, word: "slow" },
-  red: { color: T.red, word: "stuck" },
-  grey: { color: T.presenceOffline, word: "quiet" },
+const LIGHT: Record<Light, { color: string; word: string; meaning: string }> = {
+  green: { color: T.live, word: "moving", meaning: `the holder can be woken and got the ball in the last ${BOARD_THRESHOLDS.greenMinutes} minutes` },
+  yellow: { color: T.amber, word: "slow", meaning: "the ball has lain longer, or the holder is only quiet" },
+  red: { color: T.red, word: "stuck", meaning: "nobody can wake the holder: not online, and no webhook that works" },
+  human: { color: T.blue, word: "human", meaning: "waits for a human" },
+  grey: { color: T.presenceOffline, word: "quiet", meaning: `done, or nothing for ${BOARD_THRESHOLDS.quietHours} hours` },
 };
+
+/** When, relatively, with the moment itself for the tooltip and machines. */
+const When: FC<{ iso: string; now: number }> = ({ iso, now }) => (
+  <time datetime={iso} title={`${iso.slice(0, 16).replace("T", " ")} UTC`}>{fmtRel(iso, now)}</time>
+);
 
 const REACH_WORDS: Record<Reach, string> = {
   online: "online",
@@ -53,14 +59,16 @@ const Dot: FC<{ light: Light }> = ({ light }) => (
   />
 );
 
-/** Where the ball came from, and the link to its thread. */
+/** Where the ball came from last, and the link to the newest thread. */
 const Origin: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
   <div style={META}>
     <span style={MONO}>{row.from}</span>
     {" → "}
     <span style={MONO}>{row.to}</span>
-    {` · ${row.type} · ${fmtRel(row.since, now)} · `}
-    <a href={threadHref(row.threadId)}>thread</a>
+    {` · ${row.type} · `}
+    <When iso={row.since} now={now} />
+    {" · "}
+    <a href={threadHref(row.threadId)}>latest thread</a>
   </div>
 );
 
@@ -79,7 +87,9 @@ const InPlayRow: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
       <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">
         <span style="font-size:15px;font-weight:600">{row.holder}</span>
         <span style={`font-size:13px;color:${T.dim}`}>
-          {`has the ball since ${fmtRel(row.since, now)} · ${row.reach ? REACH_WORDS[row.reach] : ""}`}
+          {"has the ball since "}
+          <When iso={row.since} now={now} />
+          {row.reach ? ` · ${REACH_WORDS[row.reach]}` : ""}
         </span>
       </div>
       {row.vagueNext ? (
@@ -98,9 +108,10 @@ const InPlayRow: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
 
 const HumanRow: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
   <div style={ROW} data-row={row.threadId}>
-    <Dot light="red" />
+    <Dot light="human" />
     <div style="flex:1;min-width:0">
-      <div style="font-size:15px;font-weight:600">{`${row.from} needs an answer from a human`}</div>
+      <div style="font-size:15px;font-weight:600">{`${row.waiting} waits for a human`}</div>
+      {row.deliversNext && <div style={`font-size:13.5px;color:${T.body};margin:3px 0`}>{row.deliversNext}</div>}
       <Origin row={row} now={now} />
     </div>
   </div>
@@ -111,7 +122,8 @@ const QuietRow: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
     <Dot light="grey" />
     <div style="flex:1;min-width:0">
       <div style={`font-size:13.5px;color:${T.body}`}>
-        {row.done ? `Done, said ${row.from}` : `Nothing since ${fmtRel(row.lastActivity, now)}`}
+        {row.done ? `Done, said ${row.from} · ` : "Nothing since "}
+        {row.done ? null : <When iso={row.lastActivity} now={now} />}
       </div>
       <Origin row={row} now={now} />
     </div>
@@ -137,7 +149,7 @@ export const BoardSection: FC<{ board: Board; now: number }> = ({ board, now }) 
         <section style={CARD}>
           <div style={CARD_HEAD}>
             <h2 style={H2}>Wait for human</h2>
-            <div style={SUB}>The fastest agents in the mesh, waiting on the slowest component.</div>
+            <div style={SUB}>The fastest agents in the mesh, waiting patiently for the slowest component in it.</div>
           </div>
           {board.waitingForHuman.map((row) => <HumanRow row={row} now={now} />)}
         </section>
@@ -146,10 +158,7 @@ export const BoardSection: FC<{ board: Board; now: number }> = ({ board, now }) 
       <section style={CARD}>
         <div style={CARD_HEAD}>
           <h2 style={H2}>In play</h2>
-          <div style={SUB}>
-            {`Moving: a move in the last ${BOARD_THRESHOLDS.greenMinutes} minutes. Slow: up to ${BOARD_THRESHOLDS.redMinutes}. ` +
-              "Stuck: longer, or nobody can wake the holder."}
-          </div>
+          <div style={SUB}>Stuck first, then slow, then moving; the newest first within each.</div>
         </div>
         {board.inPlay.length > 0 ? (
           board.inPlay.map((row) => <InPlayRow row={row} now={now} />)
@@ -173,6 +182,20 @@ export const BoardSection: FC<{ board: Board; now: number }> = ({ board, now }) 
   );
 };
 
+const Legend: FC = () => (
+  <div style={`display:flex;flex-wrap:wrap;gap:6px 16px;margin:0 0 18px;font-size:12.5px;color:${T.faint}`}>
+    {(["green", "yellow", "red", "human", "grey"] as const).map((light) => (
+      <span style="display:inline-flex;align-items:center;gap:6px">
+        <span style={`width:10px;height:10px;border-radius:999px;background:${LIGHT[light].color}`} />
+        <span>
+          <strong style={`color:${T.body};font-weight:600`}>{LIGHT[light].word}</strong>
+          {`: ${LIGHT[light].meaning}`}
+        </span>
+      </span>
+    ))}
+  </div>
+);
+
 export interface V2BoardProps {
   board: Board;
   now: number;
@@ -186,10 +209,11 @@ export const V2BoardPage: FC<V2BoardProps> = ({ board, now, userRole, userName, 
     <div style="margin:4px 0 18px">
       <h1 style="margin:0;font-size:24px;font-weight:650;letter-spacing:-0.01em">Who has the ball</h1>
       <div style={`font-size:14px;color:${T.dim};margin-top:4px`}>
-        One line per conversation. The ball lies with whoever was written to last; "done" ends a conversation,
+        One line per pair of agents. The ball lies with whoever was written to last, in whichever thread; "done" ends it,
         "input_required" hands it to a human.
       </div>
     </div>
+    <Legend />
     <div data-live="board" data-live-src={BOARD_SRC}>
       <BoardSection board={board} now={now} />
     </div>
