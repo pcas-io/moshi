@@ -61,6 +61,19 @@ export function isPublicAddress(address: string): boolean {
   return !blocked.check(address, "ipv6");
 }
 
+const CLAUDE_ROUTINE_HOST = "api.anthropic.com";
+const CLAUDE_ROUTINE_PATH = /^\/v1\/claude_code\/routines\/[A-Za-z0-9_-]+\/fire$/;
+
+/** A Claude Code routine's API trigger (`…/v1/claude_code/routines/<id>/fire`). */
+export function isClaudeRoutineUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && u.hostname === CLAUDE_ROUTINE_HOST && u.port === "" && CLAUDE_ROUTINE_PATH.test(u.pathname) && u.search === "";
+  } catch {
+    return false;
+  }
+}
+
 export type UrlCheck = { ok: true; url: string; host: string } | { ok: false; reason: string };
 
 /** What a hook URL has to be, before anybody asks DNS about it. */
@@ -134,9 +147,27 @@ export async function resolveTarget(host: string, lookup: Lookup = systemLookup,
   return { ok: true, ...addresses[0], addresses };
 }
 
+/**
+ * `reached`: whether the request can have arrived. False only when it
+ * certainly did not (no address, refused, unreachable, or no TLS session
+ * before the timeout): for a receiver where every call starts something
+ * (a Claude Code routine starts a session), only then is a repeat safe.
+ * `retryAfterSeconds`: the receiver's own word on when to come back.
+ */
 export type PostResult =
   | { ok: true; status: number }
-  | { ok: false; retryable: boolean; status?: number; error: string };
+  | { ok: false; retryable: boolean; reached: boolean; status?: number; retryAfterSeconds?: number; error: string };
+
+const MAX_RETRY_AFTER_SECONDS = 3600;
+
+/** `Retry-After` as seconds: a number of seconds or an HTTP date. */
+export function parseRetryAfter(value: string | string[] | undefined, now: number = Date.now()): number | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (!raw) return undefined;
+  const seconds = /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : Math.ceil((Date.parse(raw) - now) / 1000);
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.min(seconds, MAX_RETRY_AFTER_SECONDS);
+}
 
 /** Only for tests: a local server cannot be reached on a public address and 443. */
 export interface PostSeams {
@@ -145,11 +176,14 @@ export interface PostSeams {
   ca?: string | Buffer;
 }
 
-function classify(status: number): PostResult {
+function classify(status: number, retryAfter: string | string[] | undefined): PostResult {
   if (status >= 200 && status < 300) return { ok: true, status };
-  if (status >= 300 && status < 400) return { ok: false, retryable: false, status, error: `HTTP ${status}: redirects are not followed` };
+  if (status >= 300 && status < 400) {
+    return { ok: false, retryable: false, reached: true, status, error: `HTTP ${status}: redirects are not followed` };
+  }
   const retryable = status === 408 || status === 429 || status >= 500;
-  return { ok: false, retryable, status, error: `HTTP ${status}` };
+  const wait = status === 429 || status === 503 ? parseRetryAfter(retryAfter) : undefined;
+  return { ok: false, retryable, reached: true, status, ...(wait !== undefined ? { retryAfterSeconds: wait } : {}), error: `HTTP ${status}` };
 }
 
 /**
@@ -165,9 +199,9 @@ export async function postWebhook(
   seams: PostSeams = {},
 ): Promise<PostResult> {
   const checked = checkUrl(url);
-  if (!checked.ok) return { ok: false, retryable: false, error: checked.reason };
+  if (!checked.ok) return { ok: false, retryable: false, reached: false, error: checked.reason };
   const target = await (seams.resolve ?? resolveTarget)(checked.host);
-  if (!target.ok) return { ok: false, retryable: target.retryable, error: target.reason };
+  if (!target.ok) return { ok: false, retryable: target.retryable, reached: false, error: target.reason };
   const u = new URL(checked.url);
 
   return new Promise<PostResult>((resolve) => {
@@ -202,12 +236,20 @@ export async function postWebhook(
         "user-agent": `moshi-webhooks/${VERSION}`,
       },
     });
-    const timer = setTimeout(() => finish({ ok: false, retryable: true, error: `timeout after ${timeoutMs} ms` }), timeoutMs);
+    // Until the TLS session stands, not a byte of the request has left.
+    let connected = false;
+    req.on("socket", (socket) => socket.once("secureConnect", () => { connected = true; }));
+    const timer = setTimeout(
+      () => finish({ ok: false, retryable: true, reached: connected, error: `timeout after ${timeoutMs} ms` }),
+      timeoutMs,
+    );
     req.on("response", (res) => {
       res.resume();
-      finish(classify(res.statusCode ?? 0));
+      finish(classify(res.statusCode ?? 0, res.headers["retry-after"]));
     });
-    req.on("error", (err) => finish({ ok: false, retryable: true, error: String((err as NodeJS.ErrnoException).code ?? err.message).slice(0, 200) }));
+    req.on("error", (err) =>
+      finish({ ok: false, retryable: true, reached: connected, error: String((err as NodeJS.ErrnoException).code ?? err.message).slice(0, 200) }),
+    );
     req.end(body);
   });
 }

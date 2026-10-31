@@ -55,6 +55,16 @@ describe("mesh_webhook_set", () => {
     expect(made.json.secret).toMatch(/^whsec_/);
   });
 
+  it("recognises a Claude Code routine and takes an interval", async () => {
+    h.dns.set("api.anthropic.com", ["160.79.104.10"]);
+    const url = "https://api.anthropic.com/v1/claude_code/routines/trig_01ABCdef/fire";
+    const set = await callTool(kate, "mesh_webhook_set", { url, secret: "test-routine-token-0123456789", min_interval_seconds: 900 });
+    expect(set.isError).toBe(false);
+    expect(set.json.webhook).toMatchObject({ kind: "claude_routine", auth_mode: "bearer", min_interval_seconds: 900 });
+    const tooOften = await callTool(kate, "mesh_webhook_set", { url, secret: "test-routine-token-0123456789", min_interval_seconds: 60 });
+    expect(tooOften.text).toMatch(/^min_interval_seconds: .*120/);
+  });
+
   it("still lets auth_mode force the kind", async () => {
     const forced = await callTool(kate, "mesh_webhook_set", { url: URL_, auth_mode: "standard_webhooks", secret: "grok-sender-key-0123456789" });
     expect(forced.text).toMatch(/^secret: a signing secret is/);

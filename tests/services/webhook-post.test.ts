@@ -105,7 +105,7 @@ describe("postWebhook", () => {
       resolve: async () => ({ ok: false, retryable: false, reason: "target_not_public" }),
       port, ca: cert,
     });
-    expect(r).toEqual({ ok: false, retryable: false, error: "target_not_public" });
+    expect(r).toEqual({ ok: false, retryable: false, reached: false, error: "target_not_public" });
     expect(seen).toHaveLength(0);
   });
 

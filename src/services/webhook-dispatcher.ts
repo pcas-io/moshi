@@ -18,11 +18,11 @@ import type { MeshNats } from "../mcp/shared.js";
 import { waitingFor } from "../mcp/shared.js";
 import type { ActivityService } from "./activity.js";
 import type { WebhookService } from "./webhooks.js";
-import { claimDue, announced, recordSuccess, recordFailure, drop } from "./webhook-queue.js";
+import { claimDue, announced, recordSuccess, recordFailure, recordDeferred, drop } from "./webhook-queue.js";
 import type { Claim, FailureOutcome } from "./webhook-queue.js";
 import { postWebhook } from "./webhook-target.js";
 import type { PostResult } from "./webhook-target.js";
-import { signingHeaders } from "./webhook-sign.js";
+import { requestFor, verdictFor } from "./webhook-request.js";
 import { log } from "./logger.js";
 
 export const TICK_MS = 1_000;
@@ -100,29 +100,23 @@ export class WebhookDispatcher {
       // The hook was replaced or removed after the claim: its delivery went
       // with it, and an empty call to the new target would announce nothing.
       if (count === 0) return;
-      const now = this.now();
-      const body = JSON.stringify({
-        type: "message.created",
-        timestamp: new Date(now).toISOString(),
-        data: {
-          agent: material.agentName,
-          inbox_pending: await this.pendingFor(claim.agentKey),
-          count,
-          messages,
-          truncated: count > messages.length,
-        },
-      });
-      const seconds = Math.floor(this.now() / 1000);
-      const headers: Record<string, string> =
-        material.authMode === "bearer"
-          ? { "webhook-id": claim.id, "webhook-timestamp": String(seconds), authorization: `Bearer ${material.secret}` }
-          : signingHeaders(material.secret, claim.id, seconds, body);
-      const result = await this.post(material.url, headers, body);
-      if (result.ok) {
+      const data = {
+        agent: material.agentName,
+        inbox_pending: await this.pendingFor(claim.agentKey),
+        count,
+        messages,
+        truncated: count > messages.length,
+      };
+      const { headers, body } = requestFor({ ...material, secret: material.secret }, claim.id, data, this.now());
+      const verdict = verdictFor(material.kind, await this.post(material.url, headers, body));
+      if (verdict.kind === "ok") {
         recordSuccess(this.deps.db, claim, this.now());
-        return;
+      } else if (verdict.kind === "defer") {
+        recordDeferred(this.deps.db, claim, verdict.waitSeconds, verdict.error, this.now());
+        log("warn", "webhook receiver busy, waiting", { agent: material.agentName, delivery: claim.id, wait_s: verdict.waitSeconds });
+      } else {
+        this.outcome(claim, material.agentName, verdict);
       }
-      this.outcome(claim, material.agentName, result);
     } catch (err) {
       // A bug here must not take the dispatcher down, and must not come back
       // every 30 s for ever: it counts as a failed delivery, like any other.

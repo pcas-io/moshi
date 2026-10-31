@@ -21,6 +21,13 @@ export interface AgentWebhookDeps {
   webhooks: WebhookService;
 }
 
+/** Empty: the default of the hook's kind. Anything else must be a whole
+ *  number; `set` checks the bounds and names them. */
+function intervalField(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  return /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+}
+
 export function createAgentWebhookRoutes({ agents, webhooks }: AgentWebhookDeps): Hono<HonoEnv> {
   const routes = new Hono<HonoEnv>();
 
@@ -52,6 +59,7 @@ export function createAgentWebhookRoutes({ agents, webhooks }: AgentWebhookDeps)
           includeBroadcasts: formString(body, "include_broadcasts") === "1",
           types: (formString(body, "types") ?? "").split(","),
           minPriority: (formString(body, "min_priority") ?? "low") as MessagePriority,
+          minIntervalSeconds: intervalField(formString(body, "min_interval_seconds")),
         },
         formString(body, "secret"),
         actor.name,

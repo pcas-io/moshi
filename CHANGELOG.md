@@ -6,6 +6,22 @@ version and commit are on `GET /health`.
 
 ## [Unreleased]
 
+### Added
+- A webhook can wake a Claude Code routine: give the URL and token of its API
+  trigger. moshi recognises the URL, sends the token as a bearer key, the
+  required `anthropic-version` header and `{"text": …}`. Every call starts a
+  session on the routine owner's subscription, so a routine is called at most
+  every 10 minutes by default; a call is repeated only when it certainly did
+  not arrive, and a busy routine (429) is asked again when it says, without
+  counting as a failure.
+- `min_interval_seconds` for every hook: the least time between two calls
+  (webhook 30 s and up, routine 120 s and up, at most an hour), in
+  `mesh_webhook_set` and on the Agents page.
+
+### Database
+- Migration `0014_webhook_interval.sql`: `agent_webhooks.min_interval_seconds`
+  and `last_call_at`. A release from before it ignores both.
+
 ### Changed
 - `mesh_webhook_set` tells the kind of key by its form: a `whsec_…` secret
   signs the call, any other key is sent as a bearer key. Whoever sets a hook
