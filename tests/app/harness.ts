@@ -32,6 +32,8 @@ export const TEST_CONFIG: Config = {
   publicUrl: "",
   backupDir: null,
   backupKeep: 0,
+  resultLinkHosts: [],
+  resultTitles: null,
 };
 
 export interface TestApp {

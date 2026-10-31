@@ -10,7 +10,7 @@
 // name.
 
 import type { FC } from "hono/jsx";
-import type { Board, BoardRow, Light, Reach } from "../../services/board.js";
+import type { Board, BoardRow, Light, Reach, ResultLink } from "../../services/board.js";
 import { BOARD_THRESHOLDS } from "../../services/board.js";
 import { threadHref } from "../../services/thread-link.js";
 import { V2Layout } from "./layout.js";
@@ -38,7 +38,7 @@ const When: FC<{ iso: string; now: number }> = ({ iso, now }) => (
 const REACH_WORDS: Record<Reach, string> = {
   online: "online",
   hook: "asleep, wakes by webhook",
-  stale: "quiet, no webhook",
+  stale: "quiet",
   unreachable: "cannot be reached",
 };
 
@@ -59,39 +59,88 @@ const Dot: FC<{ light: Light }> = ({ light }) => (
   />
 );
 
-/** Where the ball came from last, and the link to the newest thread. */
+/** A key the DOM can carry: the pair's two inbox keys, joined visibly. */
+const domKey = (row: BoardRow): string => row.pairKey.replace("\u001f", "~");
+
+/** A result: its title when known, else the end of its id. Never other text. */
+const Result: FC<{ link: ResultLink }> = ({ link }) => (
+  <a href={link.url} target="_blank" rel="noopener noreferrer" title={link.url}>
+    {link.title ?? `…${link.id.slice(-8)}`}
+  </a>
+);
+
+/** The last action between the two, and the link to the newest thread. */
 const Origin: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
   <div style={META}>
+    {"Last: "}
+    <span style={MONO}>{row.type}</span>
+    {" from "}
     <span style={MONO}>{row.from}</span>
-    {" → "}
+    {" to "}
     <span style={MONO}>{row.to}</span>
-    {` · ${row.type} · `}
+    {" · "}
     <When iso={row.since} now={now} />
     {" · "}
     <a href={threadHref(row.threadId)}>latest thread</a>
   </div>
 );
 
+const ResultLine: FC<{ row: BoardRow }> = ({ row }) =>
+  row.result ? (
+    <div style={`font-size:13.5px;color:${T.body};margin:3px 0`}>
+      {"Result: "}
+      <Result link={row.result} />
+    </div>
+  ) : null;
+
+/** The pair's last actions, folded; kept open across a live refresh. */
+const History: FC<{ row: BoardRow; now: number }> = ({ row, now }) =>
+  row.history.length > 1 ? (
+    <details data-live-keep={domKey(row)} style="margin-top:4px">
+      <summary style={`${META};cursor:pointer`}>{`History (last ${row.history.length})`}</summary>
+      <ol style={`margin:6px 0 0;padding-left:18px;${META}`}>
+        {row.history.map((h) => (
+          <li style="margin:2px 0">
+            <When iso={h.at} now={now} />
+            {" · "}
+            <span style={MONO}>{h.type}</span>
+            {" · "}
+            <span style={MONO}>{h.from}</span>
+            {" → "}
+            <span style={MONO}>{h.to}</span>
+            {h.link ? " · " : ""}
+            {h.link ? <Result link={h.link} /> : null}
+          </li>
+        ))}
+      </ol>
+    </details>
+  ) : null;
+
 const HookNote: FC<{ row: BoardRow }> = ({ row }) => {
   if (row.reach === "hook" || row.reach === "online") return null;
-  if (row.hook?.state === "disabled") return <div style={META}>Its webhook is switched off after failed calls.</div>;
-  if (row.hook?.state === "failing") return <div style={META}>Its webhook failed on the last call.</div>;
   if (!row.hook) return <div style={META}>No webhook: nothing wakes it, it has to look by itself.</div>;
-  return null;
+  if (row.hook.state === "disabled") return <div style={META}>Its webhook is switched off after failed calls.</div>;
+  if (row.hook.state === "failing") return <div style={META}>Its webhook failed on the last call.</div>;
+  return <div style={META}>Its webhook has not been called successfully yet.</div>;
 };
 
 const InPlayRow: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
-  <div style={ROW} data-row={row.threadId}>
+  <div style={ROW} data-row={domKey(row)}>
     <Dot light={row.light} />
     <div style="flex:1;min-width:0">
       <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">
         <span style="font-size:15px;font-weight:600">{row.holder}</span>
         <span style={`font-size:13px;color:${T.dim}`}>
-          {"has the ball since "}
+          {row.delivered ? `got a delivery from ${row.from} · ` : "is on it · "}
+          {"since "}
           <When iso={row.since} now={now} />
           {row.reach ? ` · ${REACH_WORDS[row.reach]}` : ""}
         </span>
       </div>
+      {row.delivered && (
+        <div style={`font-size:13.5px;color:${T.greenDeep};margin:3px 0`}>{`Delivered, waiting for ${row.holder} to pick it up`}</div>
+      )}
+      <ResultLine row={row} />
       {row.vagueNext ? (
         <div style={`font-size:13.5px;color:${T.amberInk};margin:3px 0`}>
           {`Delivers next: not said. Its working_on is ${row.deliversNext?.trim() ? `"${row.deliversNext.trim()}"` : "empty"}; ` +
@@ -102,30 +151,35 @@ const InPlayRow: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
       )}
       <Origin row={row} now={now} />
       <HookNote row={row} />
+      <History row={row} now={now} />
     </div>
   </div>
 );
 
 const HumanRow: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
-  <div style={ROW} data-row={row.threadId}>
+  <div style={ROW} data-row={domKey(row)}>
     <Dot light="human" />
     <div style="flex:1;min-width:0">
       <div style="font-size:15px;font-weight:600">{`${row.waiting} waits for a human`}</div>
       {row.deliversNext && <div style={`font-size:13.5px;color:${T.body};margin:3px 0`}>{row.deliversNext}</div>}
+      <ResultLine row={row} />
       <Origin row={row} now={now} />
+      <History row={row} now={now} />
     </div>
   </div>
 );
 
 const QuietRow: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
-  <div style={ROW} data-row={row.threadId}>
+  <div style={ROW} data-row={domKey(row)}>
     <Dot light="grey" />
     <div style="flex:1;min-width:0">
       <div style={`font-size:13.5px;color:${T.body}`}>
-        {row.done ? `Done, said ${row.from} · ` : "Nothing since "}
-        {row.done ? null : <When iso={row.lastActivity} now={now} />}
+        {row.done ? `Done, said ${row.from}, ` : "Nothing since "}
+        <When iso={row.lastActivity} now={now} />
       </div>
+      <ResultLine row={row} />
       <Origin row={row} now={now} />
+      <History row={row} now={now} />
     </div>
   </div>
 );

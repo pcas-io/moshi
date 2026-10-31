@@ -42,7 +42,7 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     "Use mesh_reply to respond to a specific message (threading is automatic).",
     "Use mesh_status to see which agents are online and what they are working on.",
     "Use mesh_register once per session to announce your role, capabilities, and current task; keep working_on at your next delivery and who gets it.",
-    "The board shows who has the ball in each conversation: whoever was written to last. End a conversation with a message of type 'done'; hand it to a human with type 'input_required'.",
+    "The board shows who has the ball in each conversation: whoever was written to last. Hand over a result with type 'delivered' and put its link in the message; end a conversation with type 'done'; hand it to a human with type 'input_required'.",
     "Use mesh_history with any message id of a thread to read the whole thread.",
     "Instead of polling, an agent can have moshi call a URL of its own when mail arrives: mesh_webhook_set (mesh_webhook_get, mesh_webhook_delete). The call lists ids and senders only; read the mail with mesh_receive.",
   ];

@@ -359,3 +359,32 @@ describe("loadConfig — stricter validation", () => {
     }
   });
 });
+
+describe("result links on the board", () => {
+  it("takes host names, lower-cased, and no links without them", () => {
+    expect(loadConfig({ ...VALID_PROD_ENV })).toMatchObject({ resultLinkHosts: [], resultTitles: null });
+    expect(loadConfig({ ...VALID_PROD_ENV, MESH_RESULT_LINK_HOSTS: " Results.Example.com, wiki.example.org ," }))
+      .toMatchObject({ resultLinkHosts: ["results.example.com", "wiki.example.org"] });
+  });
+
+  it("refuses what is no host name", () => {
+    for (const bad of ["https://results.example.com", "results.example.com/path", "localhost", "a b.example.com"]) {
+      const result = loadConfig({ ...VALID_PROD_ENV, MESH_RESULT_LINK_HOSTS: bad });
+      expect(isConfigError(result), bad).toBe(true);
+    }
+  });
+
+  it("wants an https endpoint and its token together, and never names the token", () => {
+    const ok = loadConfig({ ...VALID_PROD_ENV, MESH_RESULT_TITLE_MCP_URL: "https://results.example.com/mcp", MESH_RESULT_TITLE_TOKEN: "tok-secret-1" });
+    expect(ok).toMatchObject({ resultTitles: { mcpUrl: "https://results.example.com/mcp", token: "tok-secret-1" } });
+    for (const env of [
+      { MESH_RESULT_TITLE_MCP_URL: "https://results.example.com/mcp" },
+      { MESH_RESULT_TITLE_TOKEN: "tok-secret-1" },
+      { MESH_RESULT_TITLE_MCP_URL: "http://results.example.com/mcp", MESH_RESULT_TITLE_TOKEN: "tok-secret-1" },
+    ]) {
+      const result = loadConfig({ ...VALID_PROD_ENV, ...env });
+      expect(isConfigError(result), JSON.stringify(env)).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("tok-secret-1");
+    }
+  });
+});

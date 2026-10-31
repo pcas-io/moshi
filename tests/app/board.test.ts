@@ -53,7 +53,7 @@ describe("/board", () => {
     expect(html).toContain("Who has the ball");
     expect(html).toContain('href="/board"');
     expect(html).toMatch(/>tech<\/span>/);
-    expect(html).toMatch(/has the ball since <time datetime="2026-10-31T11:55:00.000Z" title="2026-10-31 11:55 UTC">5 min ago<\/time>/);
+    expect(html).toMatch(/is on it · since <time datetime="2026-10-31T11:55:00.000Z" title="2026-10-31 11:55 UTC">5 min ago<\/time>/);
     expect(html).not.toContain("SECRET");
   });
 
@@ -98,5 +98,51 @@ describe("/board", () => {
     const fragment = await get("/fragments/board", admin, FRAGMENT);
     expect(fragment.status).toBe(200);
     expect(await fragment.text()).toBe(innerOf(page, "board"));
+  });
+});
+
+describe("/board stage 2", () => {
+  const HOST = "results.example.com";
+  const ID = "06ae5d2b-cf6a-7b57-8000-625378008c57";
+
+  beforeEach(async () => {
+    t = createTestApp({ resultLinkHosts: [HOST] }, { now: () => NOW });
+    t.h.agents.create("kate");
+    t.h.agents.create("tech");
+    admin = (await signIn(t.app, ADMIN_TOKEN)).cookie;
+  });
+
+  function sayText(from: string, to: string, minutesAgo: number, type: string, payload: string) {
+    const m = createMessage({ from, to, type, payload, context: "SECRET CONTEXT" });
+    m.created_at = new Date(NOW - minutesAgo * 60_000).toISOString();
+    persistMessage(t.h.db, m, { fromKey: from, toKey: to });
+  }
+
+  it("shows the last action, a delivery waiting for pickup, the result link and a folded history, and no text", async () => {
+    sayText("tech", "kate", 30, "review_request", "SECRET please look");
+    sayText("kate", "tech", 5, "delivered", `SECRET summary, result: https://${HOST}/entities/${ID}.`);
+    const html = await (await get("/board", admin)).text();
+    expect(html).toContain("got a delivery from kate");
+    expect(html).toContain("Delivered, waiting for tech to pick it up");
+    expect(html).toMatch(/Last: <span[^>]*>delivered<\/span> from <span[^>]*>kate<\/span> to <span[^>]*>tech<\/span>/);
+    expect(html).toContain(`href="https://${HOST}/entities/${ID}"`);
+    expect(html).toContain(`…${ID.slice(-8)}`); // no title service: the end of the id
+    expect(html).toContain('data-live-keep="kate~tech"');
+    expect(html).toContain("History (last 2)");
+    expect(html).not.toContain("SECRET");
+  });
+
+  it("ends a done row with its time, and names a webhook that never succeeded", async () => {
+    say("kate", "tech", 30);
+    const t2 = say("tech", "kate", 10, "done");
+    void t2;
+    t.h.webhooks.set("tech", { url: "https://hooks.example.com/t", authMode: "standard_webhooks", includeBroadcasts: false, types: null, minPriority: "low" }, undefined, "admin");
+    let html = await (await get("/board", admin)).text();
+    expect(html).toMatch(/Done, said tech, <time datetime="[^"]+" title="[^"]+">10 min ago<\/time>/);
+    say("kate", "tech", 2);
+    t.h.presence.list = async () => (await t.h.agents.list()).map((a) => ({ agent: t.h.agents.getByName(a.name)!, presence: "stale" as const, effectiveLastSeen: null }));
+    html = await (await get("/board", admin)).text();
+    expect(html).toContain("Its webhook has not been called successfully yet.");
+    expect(html).not.toContain("No webhook");
   });
 });

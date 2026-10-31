@@ -7,6 +7,16 @@ version and commit are on `GET /health`.
 ## [Unreleased]
 
 ### Added
+- `/board` stage 2: each line names the last action (type, sender,
+  recipient, when), says "Delivered, waiting for X to pick it up" after a
+  hand-over (`delivered`, `review_result`, `deploy_status`, or a result link),
+  shows the result link with the linked entity's title, and folds open to the
+  last ten actions between the two, kept open across refreshes.
+- `MESH_RESULT_LINK_HOSTS`, `MESH_RESULT_TITLE_MCP_URL`,
+  `MESH_RESULT_TITLE_TOKEN`: which links count as results, and where their
+  titles come from (one `get_entity` call per id with a read-only token, in
+  the background, cached; the token is never logged).
+- Message type `delivered` among the recommended ones.
 - `/board` (admin only): one line per conversation with who has the ball, what
   they deliver next (their `working_on`), since when, and a light that says
   whether it moves: reachable holders (online, or a hook that last succeeded)

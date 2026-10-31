@@ -26,6 +26,7 @@ import { V2HomePage } from "../views/v2/home.js";
 import { V2AgentsPage } from "../views/v2/agents.js";
 import { V2BoardPage } from "../views/v2/board.js";
 import { loadBoard } from "../services/board.js";
+import type { BoardLinks } from "../services/board.js";
 import {
   V2LogPage,
   messageRoutingOf,
@@ -45,11 +46,13 @@ export interface DashboardDeps {
   activity: ActivityService;
   presence: PresenceService;
   webhooks: WebhookService;
+  /** Result links on the board (MESH_RESULT_LINK_HOSTS); absent: none. */
+  boardLinks?: BoardLinks;
   /** Render clock. Injected by tests so page and fragment agree exactly. */
   now?: () => number;
 }
 
-export function createDashboardRoutes({ db, nats, agents, activity, presence, webhooks, now = Date.now }: DashboardDeps): Hono<HonoEnv> {
+export function createDashboardRoutes({ db, nats, agents, activity, presence, webhooks, boardLinks, now = Date.now }: DashboardDeps): Hono<HonoEnv> {
   const dash = new Hono<HonoEnv>();
 
   // --- Dashboard: Home (v2) ---
@@ -73,7 +76,7 @@ export function createDashboardRoutes({ db, nats, agents, activity, presence, we
     const agent = c.get("agent");
     if (agent?.role !== "admin") return c.redirect("/");
     const clock = now();
-    const board = await loadBoard({ db, presence, webhooks, now: clock });
+    const board = await loadBoard({ db, presence, webhooks, now: clock, links: boardLinks });
     return page(c,
       <V2BoardPage board={board} now={clock} userRole={agent.role} userName={agent.name} csrfToken={issueCsrf(c)} />,
     );

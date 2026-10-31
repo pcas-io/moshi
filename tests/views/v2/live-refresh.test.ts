@@ -152,6 +152,17 @@ describe("live-refresh script", () => {
     expect(el.scrollers[0]!.scrollTop).toBe(340);
   });
 
+  it("keeps an opened <details data-live-keep> open across a swap, by key, also for a key like 'constructor'", async () => {
+    const markup = '<details data-live-keep="kate~tech"></details><details data-live-keep="constructor"></details><details data-live-keep="x"></details>';
+    const el = live("/f", markup);
+    const w = world([el]);
+    el.details[0]!.open = true;
+    w.replies.push({ status: 200, etag: '"v"', body: markup + "<i></i>" });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(el.swaps).toBe(1);
+    expect(el.details.map((d) => d.open)).toEqual([true, false, false]);
+  });
+
   it("marks rows it has not seen before, once, and only where the page asked for it", async () => {
     const marked = live("/a", '<i data-id="a"></i>', { "data-live-mark": "rows" });
     const plain = live("/b", '<i data-id="a"></i>');

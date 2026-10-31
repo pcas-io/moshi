@@ -19,6 +19,8 @@ import type { ActivityService } from "./services/activity.js";
 import type { RateLimiter } from "./services/ratelimit.js";
 import type { PresenceService } from "./services/presence.js";
 import type { WebhookService } from "./services/webhooks.js";
+import { ResultTitles } from "./services/result-titles.js";
+import type { BoardLinks } from "./services/board.js";
 import type { NatsPingable } from "./services/health.js";
 import { checkHealth } from "./services/health.js";
 import { log } from "./services/logger.js";
@@ -60,10 +62,23 @@ export interface AppDeps {
   now?: () => number;
 }
 
+/** Result links on the board, if the operator allowed any; their titles, if
+ *  the operator gave a read-only token for them. One per process. */
+function boardLinksOf(config: Config): BoardLinks | undefined {
+  if (config.resultLinkHosts.length === 0) return undefined;
+  const titles = config.resultTitles ? new ResultTitles(config.resultTitles) : null;
+  return {
+    hosts: config.resultLinkHosts,
+    titleOf: (id) => titles?.titleOf(id) ?? null,
+    want: (ids) => titles?.want(ids),
+  };
+}
+
 type NodeBindings = { incoming?: { socket?: { remoteAddress?: string } } };
 
 export function createApp({ config, db, nats, agents, activity, presence, rateLimiter, webhooks, now }: AppDeps): Hono<HonoEnv> {
   const app = new Hono<HonoEnv>();
+  const boardLinks = boardLinksOf(config);
 
   // From SIGTERM on, every answer ends its connection (src/services/shutdown.ts).
   app.use("*", closeConnectionsWhileDraining());
@@ -212,10 +227,10 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   app.route("/", createMcpRoute({ nats, agents, activity, rateLimiter, presence, webhooks, db }));
 
   // --- Dashboard pages, the connect flow and the agent admin actions ---
-  app.route("/", createDashboardRoutes({ db, nats, agents, activity, presence, webhooks, now }));
+  app.route("/", createDashboardRoutes({ db, nats, agents, activity, presence, webhooks, boardLinks, now }));
 
   // --- The live sections' fragments (behind auth, like the pages) ---
-  app.route("/", createFragmentRoutes({ db, agents, presence, webhooks, now }));
+  app.route("/", createFragmentRoutes({ db, agents, presence, webhooks, boardLinks, now }));
 
   // The signal that makes those refreshes immediate: GET /sse/messages.
   app.route("/", createSseRoutes());

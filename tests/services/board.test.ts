@@ -10,7 +10,7 @@ import { ActivityService } from "../../src/services/activity";
 import { createMessage, persistMessage } from "../../src/services/message";
 import type { AgentWithPresence, Presence } from "../../src/services/presence";
 import type { WebhookStatus } from "../../src/services/webhooks";
-import { buildBoard, lightOf, reachOf, isVague, waitsForHuman, BOARD_THRESHOLDS, QUIET_LISTED } from "../../src/services/board";
+import { buildBoard, lightOf, reachOf, isVague, waitsForHuman, resultLinksIn, BOARD_THRESHOLDS, QUIET_LISTED, HISTORY_LISTED } from "../../src/services/board";
 
 const NOW = Date.parse("2026-10-31T12:00:00.000Z");
 let db: Database.Database;
@@ -190,5 +190,60 @@ describe("delivers next", () => {
   it("knows the generic words", () => {
     for (const vague of ["", " ", "idle", "Idle.", "none", "-", "n/a", "waiting"]) expect(isVague(vague), vague).toBe(true);
     expect(isVague("idle until kate's review")).toBe(false);
+  });
+});
+
+describe("stage 2: last action, delivery, result, history", () => {
+  const HOST = "results.example.com";
+  const link = (id: string) => `https://${HOST}/entities/${id}`;
+  const ID1 = "06ae5d2b-cf6a-7b57-8000-625378008c57";
+  const ID2 = "06ae5dc8-e919-7fc6-8000-131dead25f8d";
+  const links = (titles: Record<string, string> = {}) => ({ hosts: [HOST], titleOf: (id: string) => titles[id] ?? null });
+
+  function sayWith(from: string, to: string, minutesAgo: number, type: string, payload: string, context = "-") {
+    const m = createMessage({ from, to, type, payload, context });
+    m.created_at = new Date(NOW - minutesAgo * 60_000).toISOString();
+    persistMessage(db, m, { fromKey: from, toKey: to });
+  }
+  const boardWith = (l = links()) => buildBoard({ db, agents: roster(), hooks: new Map(), now: NOW, links: l });
+
+  it("finds result links only on allowed hosts, https, with an id; the last one in a text wins", () => {
+    const text = `see ${link(ID1)}, then ${link(ID2)}. Not http://${HOST}/entities/${ID1}, not https://evil.example.com/entities/${ID1}, not https://${HOST}/no-id`;
+    expect(resultLinksIn(text, [HOST])).toEqual([
+      { url: link(ID1), id: ID1 },
+      { url: link(ID2), id: ID2 },
+    ]);
+    expect(resultLinksIn(text, [])).toEqual([]);
+    expect(resultLinksIn(`https://user:pw@${HOST}/entities/${ID1} https://${HOST}:8443/entities/${ID1}`, [HOST])).toEqual([]);
+  });
+
+  it("calls a review_result or delivered message a delivery, and a message with a result link too", () => {
+    sayWith("kate", "tech", 5, "review_result", "looks good");
+    expect(boardWith().inPlay[0]).toMatchObject({ holder: "tech", delivered: true, result: null });
+    sayWith("tech", "kate", 3, "info", `done, see ${link(ID1)}`);
+    expect(boardWith().inPlay[0]).toMatchObject({ holder: "kate", delivered: true, result: { id: ID1, url: link(ID1), title: null } });
+    sayWith("kate", "tech", 1, "question", "and now?");
+    expect(boardWith().inPlay[0]).toMatchObject({ holder: "tech", delivered: false });
+    // The newest message that carried a link still names the result.
+    expect(boardWith().inPlay[0]!.result).toMatchObject({ id: ID1 });
+  });
+
+  it("takes the title when it is known, from the context as well as the payload", () => {
+    sayWith("kate", "tech", 2, "delivered", "here", `handoff ${link(ID2)}`);
+    expect(boardWith(links({ [ID2]: "Handoff (2)" })).inPlay[0]!.result).toEqual({ url: link(ID2), id: ID2, title: "Handoff (2)" });
+  });
+
+  it("shows no link at all without allowed hosts", () => {
+    sayWith("kate", "tech", 2, "delivered", link(ID2));
+    expect(buildBoard({ db, agents: roster(), hooks: new Map(), now: NOW }).inPlay[0]).toMatchObject({ result: null, delivered: true });
+  });
+
+  it("lists the last ten actions between the two, newest first, without any text", () => {
+    for (let i = 0; i < 12; i++) sayWith(i % 2 ? "tech" : "kate", i % 2 ? "kate" : "tech", 60 - i, "info", `SECRET ${i}`);
+    const row = boardWith().inPlay[0]!;
+    expect(row.history).toHaveLength(HISTORY_LISTED);
+    expect(row.history[0]).toMatchObject({ from: "tech", to: "kate", type: "info", link: null });
+    expect(row.history.map((h) => h.at)).toEqual([...row.history.map((h) => h.at)].sort().reverse());
+    expect(JSON.stringify(row)).not.toContain("SECRET");
   });
 });
