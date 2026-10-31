@@ -16,7 +16,7 @@ import { ulid } from "ulidx";
 import type Database from "better-sqlite3";
 import type { Message, MessagePriority } from "../types.js";
 import { MESSAGE_PRIORITIES } from "../types.js";
-import { WEBHOOK_LIMITS } from "./webhooks.js";
+import { WEBHOOK_LIMITS, kindOf, intervalFor } from "./webhooks.js";
 import { log } from "./logger.js";
 
 /** From the first message to the call: one call for everything in between. */
@@ -64,8 +64,18 @@ const rank = (p: string): number => (MESSAGE_PRIORITIES as readonly string[]).in
 
 interface HookFilter {
   agent_key: string;
+  url: string;
   types: string | null;
   min_priority: MessagePriority;
+  min_interval_seconds: number | null;
+  last_call_at: number | null;
+}
+
+/** When a delivery opened now is due: after the bundle window, and not
+ *  before the hook's interval since its last call has passed. */
+function dueAt(hook: HookFilter, now: number): number {
+  const interval = intervalFor(kindOf(hook.url), hook.min_interval_seconds) * 1000;
+  return Math.max(now + BUNDLE_WINDOW_MS, (hook.last_call_at ?? 0) + interval);
 }
 
 function wants(hook: HookFilter, msg: Message): boolean {
@@ -87,13 +97,19 @@ export function enqueue(db: Database.Database, msg: Message, fromKey: string, to
       toKey === ""
         ? db
             .prepare(
-              `SELECT h.agent_key, h.types, h.min_priority FROM agent_webhooks h JOIN agents a ON a.inbox_key = h.agent_key
+              `SELECT h.agent_key, h.url, h.types, h.min_priority, h.min_interval_seconds, h.last_call_at
+                 FROM agent_webhooks h JOIN agents a ON a.inbox_key = h.agent_key
                 WHERE h.include_broadcasts = 1 AND h.state = 'active' AND a.is_active = 1 AND h.agent_key != ?`,
             )
             .all(fromKey)
         : toKey === null || toKey === fromKey
           ? []
-          : db.prepare("SELECT agent_key, types, min_priority FROM agent_webhooks WHERE agent_key = ? AND state = 'active'").all(toKey)
+          : db
+              .prepare(
+                `SELECT agent_key, url, types, min_priority, min_interval_seconds, last_call_at FROM agent_webhooks
+                  WHERE agent_key = ? AND state = 'active'`,
+              )
+              .all(toKey)
     ) as HookFilter[];
     const targets = hooks.filter((h) => wants(h, msg));
     if (targets.length === 0) return 0;
@@ -109,7 +125,7 @@ export function enqueue(db: Database.Database, msg: Message, fromKey: string, to
         let open = openOne.get(hook.agent_key) as { id: string } | undefined;
         if (!open) {
           open = { id: `wh_${ulid()}` };
-          create.run(open.id, hook.agent_key, now + BUNDLE_WINDOW_MS, new Date(now).toISOString());
+          create.run(open.id, hook.agent_key, dueAt(hook, now), new Date(now).toISOString());
         }
         add.run(open.id, msg.id, msg.from, msg.to, msg.type, msg.priority, msg.correlation_id, msg.created_at);
       }
@@ -141,8 +157,11 @@ export function claimDue(db: Database.Database, limit: number, now: number = Dat
     const lease = db.prepare(
       "UPDATE webhook_deliveries SET closed_at = COALESCE(closed_at, ?), lease_until = ?, attempts = attempts + 1 WHERE id = ?",
     );
+    // The interval counts from here: the call is made now, whatever comes of it.
+    const called = db.prepare("UPDATE agent_webhooks SET last_call_at = ? WHERE agent_key = ?");
     return due.map((d) => {
       lease.run(now, now + LEASE_MS, d.id);
+      called.run(now, d.agent_key);
       return { id: d.id, agentKey: d.agent_key, attempt: d.attempts + 1 };
     });
   });
@@ -177,6 +196,30 @@ export function announced(db: Database.Database, deliveryId: string): { count: n
 /** A delivery with nothing left to call (the agent was deactivated): gone. */
 export function drop(db: Database.Database, claim: Claim): void {
   db.prepare("DELETE FROM webhook_deliveries WHERE id = ?").run(claim.id);
+}
+
+/**
+ * The receiver is busy (429, or 503 with a time to come back) and said when
+ * to come back: the delivery waits that long and keeps collecting. It is no
+ * failure and costs no attempt: the receiver is there, only busy.
+ */
+export function recordDeferred(
+  db: Database.Database,
+  claim: Claim,
+  waitSeconds: number,
+  error: string,
+  now: number = Date.now(),
+): "deferred" | "gone" {
+  const defer = db.transaction((): "deferred" | "gone" => {
+    const moved = db
+      .prepare("UPDATE webhook_deliveries SET due_at = ?, lease_until = NULL, attempts = MAX(attempts - 1, 0) WHERE id = ?")
+      .run(now + waitSeconds * 1000, claim.id).changes;
+    if (moved === 0) return "gone";
+    db.prepare("UPDATE agent_webhooks SET last_error = ? WHERE agent_key = ?")
+      .run(`${error.slice(0, WEBHOOK_LIMITS.ERROR - 40)} (busy, next try in ${waitSeconds} s)`, claim.agentKey);
+    return "deferred";
+  });
+  return defer.immediate();
 }
 
 /** The delivery is done. A hook that was replaced meanwhile is left alone. */

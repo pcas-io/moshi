@@ -6,7 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MESSAGE_PRIORITIES } from "../../types.js";
-import { AUTH_MODES, WEBHOOK_LIMITS, WebhookError } from "../../services/webhooks.js";
+import { AUTH_MODES, WEBHOOK_LIMITS, INTERVAL_SECONDS, WebhookError } from "../../services/webhooks.js";
 import { MAX_URL_LENGTH } from "../../services/webhook-target.js";
 import { ok, error, adminError, pendingCount } from "../shared.js";
 import type { ToolContext } from "../shared.js";
@@ -23,7 +23,9 @@ export function registerWebhookTools(server: McpServer, ctx: ToolContext): void 
       "https on port 443 to a public host only. Signed with Standard Webhooks (webhook-id, webhook-timestamp, webhook-signature); " +
       "secret: paste the key the receiver shows. A whsec_… secret is used to sign the call (Standard Webhooks); any other key is sent as " +
       "'Authorization: Bearer <key>'. Leave it out and moshi makes a whsec_ secret and shows it ONCE in this answer. " +
-      "Replaces a webhook you had and switches it on.",
+      "The URL of a Claude Code routine's API trigger (…/v1/claude_code/routines/<id>/fire) is recognised: its token is sent as a bearer key " +
+      "and the call is the routine's {text}. Every routine call starts a new session on the operator's subscription, so it is called " +
+      "at most every 10 minutes unless min_interval_seconds says otherwise (from 120). Replaces a webhook you had and switches it on.",
     {
       url: z.string().max(MAX_URL_LENGTH).describe("https:// URL on port 443, e.g. the URL of a webhook trigger"),
       auth_mode: z
@@ -42,6 +44,16 @@ export function registerWebhookTools(server: McpServer, ctx: ToolContext): void 
         .optional()
         .describe("Only for these message types (default: all)"),
       min_priority: z.enum(MESSAGE_PRIORITIES).optional().describe("Only for this priority and above (default low: all)"),
+      min_interval_seconds: z
+        .number()
+        .int()
+        .min(INTERVAL_SECONDS.webhook.min)
+        .max(INTERVAL_SECONDS.max)
+        .optional()
+        .describe(
+          `Least time between two calls, in seconds. Webhook: ${INTERVAL_SECONDS.webhook.min} and up (default ${INTERVAL_SECONDS.webhook.default}); ` +
+            `Claude Code routine: ${INTERVAL_SECONDS.claude_routine.min} and up (default ${INTERVAL_SECONDS.claude_routine.default}). At most ${INTERVAL_SECONDS.max}.`,
+        ),
     },
     async (params) => {
       if (ctx.isAdmin) return adminError();
@@ -61,6 +73,7 @@ export function registerWebhookTools(server: McpServer, ctx: ToolContext): void 
             includeBroadcasts: params.include_broadcasts ?? false,
             types: params.types ?? null,
             minPriority: params.min_priority ?? "low",
+            minIntervalSeconds: params.min_interval_seconds,
           },
           params.secret,
           agentName,

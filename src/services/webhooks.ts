@@ -16,7 +16,7 @@ import type Database from "better-sqlite3";
 import { MESSAGE_PRIORITIES } from "../types.js";
 import type { MessagePriority } from "../types.js";
 import { seal, open } from "../seal.js";
-import { checkUrl, resolveTarget } from "./webhook-target.js";
+import { checkUrl, resolveTarget, isClaudeRoutineUrl } from "./webhook-target.js";
 import type { Resolved } from "./webhook-target.js";
 import { checkSigningSecret, checkBearerKey, generateSigningSecret, SIGNING_SECRET_PREFIX } from "./webhook-sign.js";
 import type { ActivityService } from "./activity.js";
@@ -30,6 +30,27 @@ export const WEBHOOK_LIMITS = {
   ERROR: 200,
 } as const;
 
+/** What a hook calls: any receiver of webhooks, or a Claude Code routine's
+ *  API trigger, where every call starts a session (told by the URL). */
+export type HookKind = "webhook" | "claude_routine";
+
+export function kindOf(url: string): HookKind {
+  return isClaudeRoutineUrl(url) ? "claude_routine" : "webhook";
+}
+
+/** Least time between two calls of a hook, in seconds. A routine takes at
+ *  most 30 calls an hour, and each one draws on the operator's subscription:
+ *  ten minutes unless the operator chooses otherwise. */
+export const INTERVAL_SECONDS = {
+  webhook: { min: 30, default: 30 },
+  claude_routine: { min: 120, default: 600 },
+  max: 3600,
+} as const;
+
+export function intervalFor(kind: HookKind, chosen: number | null | undefined): number {
+  return chosen ?? INTERVAL_SECONDS[kind].default;
+}
+
 const KEY_SALT = "moshi/webhook-secret";
 const KEY_INFO = "moshi/webhook-secret/v1";
 
@@ -41,6 +62,8 @@ export interface WebhookSettings {
   /** Only these message types; null for all. */
   types: string[] | null;
   minPriority: MessagePriority;
+  /** Absent: the default of the hook's kind (`INTERVAL_SECONDS`). */
+  minIntervalSeconds?: number;
 }
 
 /** What `mesh_status` may tell everybody: no URL, no filter. */
@@ -53,11 +76,14 @@ export interface WebhookStatus {
 
 /** What the agent itself and the admin see. Never the secret. */
 export interface WebhookView extends WebhookStatus {
+  kind: HookKind;
   url: string;
   auth_mode: AuthMode;
   include_broadcasts: boolean;
   types: string[] | null;
   min_priority: MessagePriority;
+  /** In force: the chosen value, or the kind's default. */
+  min_interval_seconds: number;
   consecutive_failures: number;
   last_error: string | null;
   disabled_at: string | null;
@@ -70,6 +96,7 @@ export interface WebhookView extends WebhookStatus {
 /** What a call needs. `secret` is null when it can no longer be opened. */
 export interface WebhookMaterial {
   agentName: string;
+  kind: HookKind;
   url: string;
   authMode: AuthMode;
   secret: string | null;
@@ -84,6 +111,7 @@ interface Row {
   include_broadcasts: number;
   types: string | null;
   min_priority: MessagePriority;
+  min_interval_seconds: number | null;
   state: "active" | "disabled";
   consecutive_failures: number;
   last_success_at: string | null;
@@ -168,8 +196,17 @@ export class WebhookService {
   ): { view: WebhookView; generatedSecret?: string } {
     const url = checkUrl(settings.url);
     if (!url.ok) throw new WebhookError(`url: ${url.reason}`);
+    const kind = kindOf(url.url);
     const authMode = settings.authMode ?? authModeFor(secret);
     if (!(AUTH_MODES as readonly string[]).includes(authMode)) throw new WebhookError(`auth_mode: one of ${AUTH_MODES.join(", ")}`);
+    if (kind === "claude_routine" && authMode !== "bearer") {
+      throw new WebhookError("secret: a Claude Code routine takes the token shown with its API trigger (sk-ant-oat01-…), sent as a bearer key");
+    }
+    const interval = settings.minIntervalSeconds;
+    const bounds = INTERVAL_SECONDS[kind];
+    if (interval !== undefined && (!Number.isInteger(interval) || interval < bounds.min || interval > INTERVAL_SECONDS.max)) {
+      throw new WebhookError(`min_interval_seconds: a whole number from ${bounds.min} to ${INTERVAL_SECONDS.max} for this kind of hook`);
+    }
     if (!(MESSAGE_PRIORITIES as readonly string[]).includes(settings.minPriority)) {
       throw new WebhookError(`min_priority: one of ${MESSAGE_PRIORITIES.join(", ")}`);
     }
@@ -201,12 +238,14 @@ export class WebhookService {
       this.db
         .prepare(
           `INSERT INTO agent_webhooks (agent_key, hook_id, url, auth_mode, secret_sealed, include_broadcasts, types, min_priority,
-                                       state, consecutive_failures, last_success_at, last_failure_at, last_error, disabled_at, created_at, updated_at)
+                                       min_interval_seconds, last_call_at, state, consecutive_failures, last_success_at, last_failure_at,
+                                       last_error, disabled_at, created_at, updated_at)
            VALUES (@agent_key, @hook_id, @url, @auth_mode, @secret_sealed, @include_broadcasts, @types, @min_priority,
-                   'active', 0, NULL, NULL, NULL, NULL, @now, @now)
+                   @min_interval_seconds, NULL, 'active', 0, NULL, NULL, NULL, NULL, @now, @now)
            ON CONFLICT(agent_key) DO UPDATE SET
              hook_id = excluded.hook_id, url = excluded.url, auth_mode = excluded.auth_mode, secret_sealed = excluded.secret_sealed,
              include_broadcasts = excluded.include_broadcasts, types = excluded.types, min_priority = excluded.min_priority,
+             min_interval_seconds = excluded.min_interval_seconds,
              state = 'active', consecutive_failures = 0, last_success_at = NULL, last_failure_at = NULL, last_error = NULL,
              disabled_at = NULL, updated_at = excluded.updated_at`,
         )
@@ -219,6 +258,7 @@ export class WebhookService {
           include_broadcasts: settings.includeBroadcasts ? 1 : 0,
           types: types ? JSON.stringify(types) : null,
           min_priority: settings.minPriority,
+          min_interval_seconds: interval ?? null,
           now,
         });
     });
@@ -230,7 +270,7 @@ export class WebhookService {
       entity_id: agentKey,
       // Never the URL: a trigger URL is often half a secret, and the log is
       // shown to everyone who signs in to the dashboard.
-      summary: `Webhook of "${this.nameOf(agentKey) ?? agentKey}" set (${authMode})`,
+      summary: `Webhook of "${this.nameOf(agentKey) ?? agentKey}" set (${kind === "claude_routine" ? "Claude Code routine" : authMode})`,
       agent_name: actor,
     });
     return { view: this.get(agentKey)!, ...(generatedSecret ? { generatedSecret } : {}) };
@@ -245,13 +285,16 @@ export class WebhookService {
            FROM webhook_deliveries d WHERE d.agent_key = ? ORDER BY d.due_at LIMIT 1`,
       )
       .get(agentKey) as { attempts: number; due_at: number; messages: number } | undefined;
+    const kind = kindOf(row.url);
     return {
       ...statusOf(row),
+      kind,
       url: row.url,
       auth_mode: row.auth_mode,
       include_broadcasts: row.include_broadcasts === 1,
       types: row.types ? (JSON.parse(row.types) as string[]) : null,
       min_priority: row.min_priority,
+      min_interval_seconds: intervalFor(kind, row.min_interval_seconds),
       consecutive_failures: row.consecutive_failures,
       last_error: row.last_error,
       disabled_at: row.disabled_at,
@@ -296,6 +339,7 @@ export class WebhookService {
     if (!row) return null;
     return {
       agentName: row.name,
+      kind: kindOf(row.url),
       url: row.url,
       authMode: row.auth_mode,
       secret: open(row.secret_sealed, this.key, this.context(row.agent_key, row.hook_id)),

@@ -8,7 +8,7 @@
 
 import type { FC } from "hono/jsx";
 import { MESSAGE_PRIORITIES } from "../../types.js";
-import { AUTH_MODES } from "../../services/webhooks.js";
+import { AUTH_MODES, INTERVAL_SECONDS } from "../../services/webhooks.js";
 import type { WebhookView } from "../../services/webhooks.js";
 import { MAX_URL_LENGTH } from "../../services/webhook-target.js";
 import { V2_FONT_FAMILY_MONO, V2_TOKENS } from "./tokens.js";
@@ -27,6 +27,12 @@ const LABEL = `font-size:13px;color:${T.faint}`;
 const FIELD = "display:flex;flex-direction:column;gap:5px";
 const MONO_VALUE = `font-family:${V2_FONT_FAMILY_MONO};font-size:12px;color:${T.body};word-break:break-all`;
 
+function formatInterval(seconds: number): string {
+  if (seconds % 60 !== 0) return `${seconds} s`;
+  const minutes = seconds / 60;
+  return minutes === 1 ? "minute" : `${minutes} minutes`;
+}
+
 const Status: FC<{ hook: WebhookView }> = ({ hook }) => (
   <>
     <Fact
@@ -36,7 +42,9 @@ const Status: FC<{ hook: WebhookView }> = ({ hook }) => (
       {STATE_WORDS[hook.state]}
     </Fact>
     <Fact label="URL" valueStyle={MONO_VALUE}>{hook.url}</Fact>
+    <Fact label="Calls">{hook.kind === "claude_routine" ? "Claude Code routine (new session per call)" : "Webhook"}</Fact>
     <Fact label="Signed">{hook.auth_mode === "bearer" ? "Bearer key" : "Standard Webhooks"}</Fact>
+    <Fact label="At most">{`once every ${formatInterval(hook.min_interval_seconds)}`}</Fact>
     <Fact label="For">
       {[
         hook.include_broadcasts ? "direct and broadcast" : "direct messages",
@@ -121,6 +129,17 @@ export const WebhookPanel: FC<{ agent: V2AgentsAgent; csrfToken: string; newSecr
               <option value={p} selected={(hook?.min_priority ?? "low") === p}>{p}</option>
             ))}
           </select>
+        </div>
+        <div style={FIELD}>
+          <label for={id("interval")} style={LABEL}>
+            {`At most every … seconds (empty: ${INTERVAL_SECONDS.webhook.default} for a webhook, ${INTERVAL_SECONDS.claude_routine.default} for a Claude Code routine)`}
+          </label>
+          <input
+            id={id("interval")} class="d-input" name="min_interval_seconds" type="number" inputmode="numeric"
+            min={INTERVAL_SECONDS.webhook.min} max={INTERVAL_SECONDS.max} step={1}
+            value={hook && hook.min_interval_seconds !== INTERVAL_SECONDS[hook.kind].default ? String(hook.min_interval_seconds) : ""}
+            style={RENAME_INPUT}
+          />
         </div>
         <label style={`font-size:13.5px;color:${T.body};display:flex;gap:8px;align-items:center`}>
           <input type="checkbox" name="include_broadcasts" value="1" checked={hook?.include_broadcasts ?? false} />

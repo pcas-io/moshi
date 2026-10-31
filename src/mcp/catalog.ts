@@ -53,8 +53,8 @@ export const MCP_TOOL_CATALOG: readonly McpToolRef[] = [
   {
     name: "mesh_webhook_set",
     signature:
-      "(url, secret?, include_broadcasts?=false, types?, min_priority?='low', auth_mode?=by the secret) → {webhook, secret?, inbox_pending}",
-    desc: "Have moshi call your https URL when mail arrives (at most once per 30 s, ids only) — signed, the made-up secret is shown once",
+      "(url, secret?, include_broadcasts?=false, types?, min_priority?='low', min_interval_seconds?, auth_mode?=by the secret) → {webhook, secret?, inbox_pending}",
+    desc: "Have moshi call your https URL or Claude Code routine when mail arrives (ids only, at most once per interval) — the made-up secret is shown once",
   },
   {
     name: "mesh_webhook_get",

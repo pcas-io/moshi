@@ -206,7 +206,7 @@ describe("what a hook is called for", () => {
 describe("when the target does not answer", () => {
   it("tries three times, at +0, +10 s and +60 s, and shows it", async () => {
     webhooks.set("kate", settings(), undefined, "kate");
-    answer = () => ({ ok: false, retryable: true, error: "ECONNREFUSED" });
+    answer = () => ({ ok: false, retryable: true, reached: true, error: "ECONNREFUSED" });
     send("worky", "kate");
 
     clock += BUNDLE_WINDOW_MS;
@@ -233,7 +233,7 @@ describe("when the target does not answer", () => {
 
   it("does not try again after a refusal such as 401", async () => {
     webhooks.set("kate", settings(), undefined, "kate");
-    answer = () => ({ ok: false, retryable: false, status: 401, error: "HTTP 401" });
+    answer = () => ({ ok: false, retryable: false, reached: true, status: 401, error: "HTTP 401" });
     send("worky", "kate");
     clock += BUNDLE_WINDOW_MS;
     await dispatcher.tick();
@@ -245,7 +245,7 @@ describe("when the target does not answer", () => {
 
   it("switches the hook off after five failed deliveries in a row, and queues nothing more", async () => {
     webhooks.set("kate", settings(), undefined, "kate");
-    answer = () => ({ ok: false, retryable: false, status: 404, error: "HTTP 404" });
+    answer = () => ({ ok: false, retryable: false, reached: true, status: 404, error: "HTTP 404" });
     for (let i = 0; i < DISABLE_AFTER_FAILURES; i++) {
       send("worky", "kate");
       clock += BUNDLE_WINDOW_MS;
@@ -264,9 +264,9 @@ describe("when the target does not answer", () => {
   it("a success in between starts the count again", async () => {
     webhooks.set("kate", settings(), undefined, "kate");
     const outcomes: PostResult[] = [
-      { ok: false, retryable: false, error: "HTTP 404" },
+      { ok: false, retryable: false, reached: true, error: "HTTP 404" },
       { ok: true, status: 202 },
-      { ok: false, retryable: false, error: "HTTP 404" },
+      { ok: false, retryable: false, reached: true, error: "HTTP 404" },
     ];
     answer = () => outcomes.shift()!;
     for (let i = 0; i < 3; i++) {
@@ -418,5 +418,106 @@ describe("lifecycle", () => {
     const kate = db.prepare("SELECT secret_sealed FROM agent_webhooks WHERE agent_key = 'kate'").get() as { secret_sealed: string };
     db.prepare("UPDATE agent_webhooks SET secret_sealed = ? WHERE agent_key = 'groky'").run(kate.secret_sealed);
     expect(webhooks.material("groky")?.secret).toBeNull();
+  });
+});
+
+describe("a Claude Code routine", () => {
+  const ROUTINE = "https://api.anthropic.com/v1/claude_code/routines/trig_01ABCdef/fire";
+  const TOKEN = "test-routine-token-0123456789";
+  const routine = (over: Partial<WebhookSettings> = {}) => settings({ url: ROUTINE, authMode: undefined, ...over });
+
+  it("is recognised by its URL, takes its token as a bearer key and defaults to ten minutes", () => {
+    const { view } = webhooks.set("kate", routine(), TOKEN, "kate");
+    expect(view).toMatchObject({ kind: "claude_routine", auth_mode: "bearer", min_interval_seconds: 600 });
+    expect(webhooks.set("groky", settings(), undefined, "groky").view).toMatchObject({ kind: "webhook", min_interval_seconds: 30 });
+  });
+
+  it("refuses a signing secret, a missing token, and an interval under two minutes", () => {
+    expect(() => webhooks.set("kate", routine(), "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw", "kate")).toThrow(/Claude Code routine/);
+    expect(() => webhooks.set("kate", routine(), undefined, "kate")).toThrow(/Claude Code routine/);
+    expect(() => webhooks.set("kate", routine({ minIntervalSeconds: 60 }), TOKEN, "kate")).toThrow(/min_interval_seconds: .*120/);
+    expect(() => webhooks.set("kate", settings({ minIntervalSeconds: 3601 }), undefined, "kate")).toThrow(/min_interval_seconds/);
+    expect(webhooks.set("kate", routine({ minIntervalSeconds: 120 }), TOKEN, "kate").view.min_interval_seconds).toBe(120);
+  });
+
+  it("is called with {text} after the window, then not again before its interval", async () => {
+    webhooks.set("kate", routine({ minIntervalSeconds: 300 }), TOKEN, "kate");
+    send("worky", "kate");
+    clock += BUNDLE_WINDOW_MS;
+    await dispatcher.tick();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(ROUTINE);
+    expect(calls[0].headers).toEqual({ authorization: `Bearer ${TOKEN}`, "anthropic-version": "2023-06-01" });
+    expect((calls[0].json as unknown as { text: string }).text).toMatch(/^moshi: 1 new message for kate from worky\. Read them with mesh_receive\./);
+    expect(calls[0].body).not.toContain("SECRET");
+
+    // Ten more messages right after: collected, and due five minutes after the first call.
+    const firstCall = clock;
+    for (let i = 0; i < 10; i++) send("worky", "kate");
+    clock = firstCall + 300_000 - 1;
+    await dispatcher.tick();
+    expect(calls).toHaveLength(1);
+    clock = firstCall + 300_000;
+    await dispatcher.tick();
+    expect(calls).toHaveLength(2);
+    expect((calls[1].json as unknown as { text: string }).text).toMatch(/^moshi: 10 new messages/);
+  });
+
+  it("waits as long as a busy routine says, and that is no failure", async () => {
+    webhooks.set("kate", routine(), TOKEN, "kate");
+    const outcomes: PostResult[] = [
+      { ok: false, retryable: true, reached: true, status: 429, retryAfterSeconds: 120, error: "HTTP 429" },
+      { ok: true, status: 200 },
+    ];
+    answer = () => outcomes.shift()!;
+    send("worky", "kate");
+    clock += BUNDLE_WINDOW_MS;
+    await dispatcher.tick();
+    expect(webhooks.get("kate")).toMatchObject({ state: "active", consecutive_failures: 0, pending: { attempts: 0 } });
+    expect(webhooks.get("kate")?.last_error).toMatch(/HTTP 429 \(busy, next try in 120 s\)/);
+
+    clock += 119_000;
+    await dispatcher.tick();
+    expect(calls).toHaveLength(1);
+    clock += 1_000;
+    await dispatcher.tick();
+    expect(calls).toHaveLength(2);
+    expect(webhooks.get("kate")).toMatchObject({ consecutive_failures: 0, pending: null });
+  });
+
+  it("does not call again after a timeout: the session may have started", async () => {
+    webhooks.set("kate", routine(), TOKEN, "kate");
+    answer = () => ({ ok: false, retryable: true, reached: true, error: "timeout after 5000 ms" });
+    send("worky", "kate");
+    clock += BUNDLE_WINDOW_MS;
+    await dispatcher.tick();
+    clock += 600_000;
+    await dispatcher.tick();
+    expect(calls).toHaveLength(1);
+    expect(webhooks.get("kate")).toMatchObject({ consecutive_failures: 1, pending: null });
+  });
+
+  it("calls again when the call certainly did not arrive", async () => {
+    webhooks.set("kate", routine(), TOKEN, "kate");
+    const outcomes: PostResult[] = [{ ok: false, retryable: true, reached: false, error: "ECONNREFUSED" }, { ok: true, status: 200 }];
+    answer = () => outcomes.shift()!;
+    send("worky", "kate");
+    clock += BUNDLE_WINDOW_MS;
+    await dispatcher.tick();
+    clock += RETRY_DELAYS_MS[0];
+    await dispatcher.tick();
+    expect(calls).toHaveLength(2);
+    expect(webhooks.get("kate")).toMatchObject({ consecutive_failures: 0 });
+  });
+
+  it("leaves a webhook at its 30 seconds", async () => {
+    webhooks.set("kate", settings(), undefined, "kate");
+    send("worky", "kate");
+    clock += BUNDLE_WINDOW_MS;
+    await dispatcher.tick();
+    send("worky", "kate");
+    clock += BUNDLE_WINDOW_MS;
+    await dispatcher.tick();
+    expect(calls).toHaveLength(2);
   });
 });

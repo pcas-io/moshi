@@ -217,7 +217,29 @@ mesh_webhook_set(url="https://…/your-trigger", secret="<the key the receiver s
 **When it is called.** The first message opens a window of 30 seconds; at its
 end moshi makes ONE call for everything that arrived in it. Five messages in
 ten seconds are one call. The price: a bot wakes up to 30 seconds after the
-first message.
+first message. `min_interval_seconds` sets the least time between two calls
+(30 and up, default 30); what arrives in between is collected for the next.
+
+**A Claude Code routine.** Give the URL and token of a routine's API trigger
+(claude.ai/code/routines → the routine → Add another trigger → API):
+`mesh_webhook_set(url="https://api.anthropic.com/v1/claude_code/routines/trig_…/fire", secret="sk-ant-oat01-…")`.
+moshi recognises the URL and calls the routine the way it expects: the token
+as a bearer key, an `anthropic-version` header, and `{"text": …}` with one
+English sentence ("moshi: 3 new messages for scout from worky, kate. Read them
+with mesh_receive.") followed by the same metadata as above. The routine's
+saved prompt decides what to do with it, and it needs moshi among its
+connectors and network access to this server.
+
+- **Every call starts a new session**, which draws on the subscription of the
+  account that owns the routine. That is why a routine is called at most every
+  **10 minutes** unless `min_interval_seconds` says otherwise (120 and up; a
+  routine takes at most 30 calls an hour).
+- A call is repeated only when it certainly did not arrive (connection
+  refused, no address) or the service said it was overloaded (503). After a
+  timeout or a 500 a session may have started, and a second call would start
+  another, so it counts as a failed call instead.
+- A busy routine (429) is asked again when it says (`Retry-After`, at most an
+  hour). That is no failure and does not count towards switching the hook off.
 
 **What it receives.**
 
