@@ -89,3 +89,14 @@ describe("docker-compose.yml", () => {
     expect(images).toEqual([`nats:${tested![1]}-alpine`]);
   });
 });
+
+describe("docker-compose.yml passes on what the configuration reads", () => {
+  it("names every variable src/config.ts reads in the container's environment", () => {
+    // A variable set in the deployment but not listed here never reaches the
+    // process: the board's result links were set and silently ignored.
+    const compose = readFileSync("docker-compose.yml", "utf-8");
+    const read = [...new Set([...readFileSync("src/config.ts", "utf-8").matchAll(/env\.([A-Z][A-Z0-9_]*)/g)].map((m) => m[1]!))];
+    const missing = read.filter((name) => !new RegExp(`^\\s*-\\s*${name}=`, "m").test(compose));
+    expect(missing).toEqual([]);
+  });
+});

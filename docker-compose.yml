@@ -33,6 +33,13 @@ services:
       # shell: install.sh, install.ps1, the connect snippets. Empty means the
       # request's own Host is used, and a Host is the client's to choose.
       - MESH_PUBLIC_URL=${MESH_PUBLIC_URL:-}
+      # Result links on /board: the hosts whose links in a message count as
+      # its result (comma-separated), and, optionally, where their titles come
+      # from: an MCP endpoint with a READ-ONLY token. Empty: no result links;
+      # a link without the title pair shows the end of its id.
+      - MESH_RESULT_LINK_HOSTS=${MESH_RESULT_LINK_HOSTS:-}
+      - MESH_RESULT_TITLE_MCP_URL=${MESH_RESULT_TITLE_MCP_URL:-}
+      - MESH_RESULT_TITLE_TOKEN=${MESH_RESULT_TITLE_TOKEN:-}
       - DATABASE_PATH=/data/moshi.db
       # Daily copies of the database. Empty means the defaults: next to the
       # database (/data/backups), seven of them. BACKUP_KEEP=0 switches them off.
