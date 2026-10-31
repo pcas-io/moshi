@@ -1,5 +1,6 @@
-// The board (src/services/board.ts): who has the ball, and whether it moves.
-// Real SQLite and a fixed clock; presence and hooks are given per test.
+// The board (src/services/board.ts): who has the ball between two agents, and
+// whether it moves. Real SQLite and a fixed clock; presence and hooks are
+// given per test.
 
 import { describe, it, expect, beforeEach } from "vitest";
 import type Database from "better-sqlite3";
@@ -9,7 +10,7 @@ import { ActivityService } from "../../src/services/activity";
 import { createMessage, persistMessage } from "../../src/services/message";
 import type { AgentWithPresence, Presence } from "../../src/services/presence";
 import type { WebhookStatus } from "../../src/services/webhooks";
-import { buildBoard, lightOf, reachOf, isVague, BOARD_THRESHOLDS, QUIET_LISTED } from "../../src/services/board";
+import { buildBoard, lightOf, reachOf, isVague, waitsForHuman, BOARD_THRESHOLDS, QUIET_LISTED } from "../../src/services/board";
 
 const NOW = Date.parse("2026-10-31T12:00:00.000Z");
 let db: Database.Database;
@@ -25,7 +26,7 @@ beforeEach(() => {
 function say(from: string, to: string, minutesAgo: number, opts: { type?: string; thread?: string } = {}): string {
   const m = createMessage({ from, to, type: opts.type ?? "info", payload: "SECRET PAYLOAD", context: "SECRET CONTEXT", correlation_id: opts.thread });
   m.created_at = new Date(NOW - minutesAgo * 60_000).toISOString();
-  persistMessage(db, m, { toKey: to === "broadcast" ? "" : to.toLowerCase() });
+  persistMessage(db, m, { fromKey: from.toLowerCase(), toKey: to === "broadcast" ? "" : to.toLowerCase() });
   return m.id;
 }
 
@@ -45,41 +46,50 @@ const hook = (over: Partial<WebhookStatus> = {}): WebhookStatus => ({ state: "ac
 const board = (presence: Record<string, Presence> = {}, hooks: Record<string, WebhookStatus> = {}, workingOn: Record<string, string | null> = {}) =>
   buildBoard({ db, agents: roster(presence, workingOn), hooks: new Map(Object.entries(hooks)), now: NOW });
 
-describe("whose ball it is", () => {
-  it("lies with the recipient of the last direct message, and moves with a review", () => {
-    const t = say("kate", "tech", 30, { type: "review_request" });
-    expect(board().inPlay[0]).toMatchObject({ threadId: t, holder: "tech", from: "kate", to: "tech" });
-    say("tech", "kate", 5, { type: "review_result", thread: t });
-    expect(board().inPlay).toHaveLength(1);
-    expect(board().inPlay[0]).toMatchObject({ threadId: t, holder: "kate" });
+describe("one line per pair of agents", () => {
+  it("keeps a conversation that goes on in new threads on one line, with the newest thread linked", () => {
+    // What the agents do: every turn a new mesh_send, no correlation_id.
+    say("kate", "tech", 30, { type: "review_request" });
+    say("tech", "kate", 20, { type: "review_result" });
+    const newest = say("kate", "tech", 5, { type: "task_update" });
+    const b = board();
+    expect(b.inPlay).toHaveLength(1);
+    expect(b.inPlay[0]).toMatchObject({ holder: "tech", from: "kate", to: "tech", threadId: newest });
   });
 
-  it("is moved by no broadcast", () => {
-    const t = say("kate", "tech", 10);
-    say("worky", "broadcast", 1, { thread: t });
+  it("moves the ball with each direct message, either way round", () => {
+    say("kate", "tech", 30, { type: "review_request" });
+    expect(board().inPlay[0]).toMatchObject({ holder: "tech" });
+    say("tech", "kate", 5, { type: "review_result" });
+    expect(board().inPlay).toHaveLength(1);
+    expect(board().inPlay[0]).toMatchObject({ holder: "kate" });
+  });
+
+  it("keeps different pairs apart, and broadcasts out", () => {
+    say("kate", "tech", 10);
+    say("kate", "worky", 8);
+    say("worky", "broadcast", 1);
+    expect(board().inPlay.map((r) => r.holder).sort()).toEqual(["tech", "worky"]);
+  });
+
+  it("is ended by done and starts again with the next message", () => {
+    say("kate", "tech", 30);
+    say("tech", "kate", 10, { type: "done" });
+    expect(board().inPlay).toEqual([]);
+    expect(board().quiet[0]).toMatchObject({ done: true, light: "grey", holder: null });
+    say("kate", "tech", 2);
     expect(board().inPlay[0]).toMatchObject({ holder: "tech" });
   });
 
-  it("is with a human after input_required, and lists it apart", () => {
-    say("kate", "worky", 5, { type: "input_required" });
-    const b = board();
-    expect(b.inPlay).toEqual([]);
-    expect(b.waitingForHuman[0]).toMatchObject({ humanBall: true, holder: null, from: "kate", light: "red" });
-  });
-
-  it("is with nobody once a strand is done", () => {
-    const t = say("kate", "tech", 30);
-    say("tech", "kate", 2, { type: "done", thread: t });
-    const b = board();
-    expect(b.inPlay).toEqual([]);
-    expect(b.quiet[0]).toMatchObject({ threadId: t, done: true, light: "grey", holder: null });
-  });
-
   it("goes grey after a day without anything, and lists at most the newest quiet ones", () => {
-    for (let i = 0; i < QUIET_LISTED + 3; i++) say("kate", "tech", BOARD_THRESHOLDS.quietHours * 60 + i);
+    for (let i = 0; i < QUIET_LISTED + 3; i++) {
+      agents.create(`a${i}`);
+      say("kate", `a${i}`, BOARD_THRESHOLDS.quietHours * 60 + i);
+    }
     const b = board();
     expect(b.inPlay).toEqual([]);
     expect(b.quiet).toHaveLength(QUIET_LISTED);
+    expect(b.quiet[0].to).toBe("a0"); // newest first
   });
 
   it("never carries a payload or a context", () => {
@@ -88,16 +98,40 @@ describe("whose ball it is", () => {
   });
 });
 
-describe("the light", () => {
-  it("goes by time for a reachable holder", () => {
-    expect(lightOf("online", 5)).toBe("green");
-    expect(lightOf("hook", BOARD_THRESHOLDS.greenMinutes)).toBe("yellow");
-    expect(lightOf("online", BOARD_THRESHOLDS.redMinutes)).toBe("red");
+describe("wait for human", () => {
+  it("takes a strand handed to a human with input_required, neutral rather than red", () => {
+    say("kate", "worky", 5, { type: "input_required" });
+    const b = board();
+    expect(b.inPlay).toEqual([]);
+    expect(b.waitingForHuman[0]).toMatchObject({ humanBall: true, holder: null, waiting: "kate", light: "human" });
   });
 
-  it("is yellow at best for a holder that is only quiet, red for one that cannot be reached", () => {
-    expect(lightOf("stale", 1)).toBe("yellow");
+  it("takes a holder whose working_on says it waits for a human", () => {
+    say("kate", "tech", 50);
+    const b = board({}, {}, { tech: "wartet auf Mensch: Admin-Login für die UI-Abnahme" });
+    expect(b.inPlay).toEqual([]);
+    expect(b.waitingForHuman[0]).toMatchObject({ waiting: "tech", light: "human", deliversNext: "wartet auf Mensch: Admin-Login für die UI-Abnahme" });
+  });
+
+  it("knows the phrases in both languages, and nothing else", () => {
+    for (const yes of ["wartet auf Mensch: Login", "Wartet auf einen Menschen", "waiting for a human: sign-off", "waits for human"]) {
+      expect(waitsForHuman(yes), yes).toBe(true);
+    }
+    for (const no of ["delivering: fix to kate", "waiting", "humane waiting", null]) expect(waitsForHuman(no), String(no)).toBe(false);
+  });
+});
+
+describe("the light", () => {
+  it("is red only when nobody can wake the holder", () => {
     expect(lightOf("unreachable", 1)).toBe("red");
+    expect(lightOf("online", 600)).toBe("yellow");
+    expect(lightOf("hook", 600)).toBe("yellow");
+  });
+
+  it("is green for a reachable holder whose ball is fresh, yellow after a while or when only quiet", () => {
+    expect(lightOf("online", 5)).toBe("green");
+    expect(lightOf("hook", BOARD_THRESHOLDS.greenMinutes)).toBe("yellow");
+    expect(lightOf("stale", 1)).toBe("yellow");
   });
 
   it("counts a sleeping bot with a working hook as reachable", () => {
@@ -108,16 +142,27 @@ describe("the light", () => {
     expect(reachOf("live", null)).toBe("online");
   });
 
-  it("puts it together per strand: a bot asleep with a working hook is green, without one red", () => {
+  it("puts it together per strand", () => {
     say("kate", "tech", 5);
     expect(board({ tech: "offline" }, { tech: hook() }).inPlay[0]).toMatchObject({ light: "green", reach: "hook" });
     expect(board({ tech: "offline" }).inPlay[0]).toMatchObject({ light: "red", reach: "unreachable" });
+    expect(board({ tech: "live" }).inPlay[0]).toMatchObject({ light: "green", reach: "online" });
   });
 
   it("is red for a holder that was deactivated", () => {
     say("kate", "tech", 5);
     agents.revokeById(agents.getByName("tech")!.id, "admin");
     expect(board().inPlay[0]).toMatchObject({ light: "red", reach: "unreachable" });
+  });
+
+  it("sorts red, yellow, green, and the newest first within each", () => {
+    say("kate", "tech", 100);
+    say("kate", "worky", 50);
+    say("worky", "tech", 2, {});
+    // Three pairs: kate↔tech 100 min, kate↔worky 50 min (both yellow), worky↔tech 2 min (green).
+    const order = board().inPlay.map((r) => `${r.light}:${r.from}>${r.holder}`);
+    expect(order).toEqual(["yellow:kate>worky", "yellow:kate>tech", "green:worky>tech"]);
+    expect(board({ worky: "offline" }).inPlay.map((r) => r.light)).toEqual(["red", "yellow", "green"]);
   });
 });
 

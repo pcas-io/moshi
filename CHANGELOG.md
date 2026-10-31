@@ -30,6 +30,18 @@ version and commit are on `GET /health`.
 - Migration `0014_webhook_interval.sql`: `agent_webhooks.min_interval_seconds`
   and `last_call_at`. A release from before it ignores both.
 
+### Fixed
+- `/board` shows one line per **pair of agents**, not per thread: the agents
+  often go on in a new thread instead of replying in the old one, and every
+  abandoned thread kept a ball (61 lines, 50 red in the first review). The
+  ball lies with whoever was written to last between the two; the link goes
+  to the newest thread.
+- Red now means only "nobody can wake the holder"; a reachable holder whose
+  ball has lain for a while is yellow. "Wait for human" is neutral (blue),
+  and also takes a holder whose `working_on` says it waits for a human.
+  Times carry the absolute moment (`<time datetime>`, tooltip in UTC), a
+  legend explains the colours, the most urgent and newest come first.
+
 ### Changed
 - `mesh_register` describes `working_on` as the next delivery and who gets
   it; the board shows it as such.

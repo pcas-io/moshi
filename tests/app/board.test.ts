@@ -53,7 +53,7 @@ describe("/board", () => {
     expect(html).toContain("Who has the ball");
     expect(html).toContain('href="/board"');
     expect(html).toMatch(/>tech<\/span>/);
-    expect(html).toContain("has the ball since 5 min ago");
+    expect(html).toMatch(/has the ball since <time datetime="2026-10-31T11:55:00.000Z" title="2026-10-31 11:55 UTC">5 min ago<\/time>/);
     expect(html).not.toContain("SECRET");
   });
 
@@ -61,7 +61,16 @@ describe("/board", () => {
     say("kate", "tech", 5, "input_required");
     const html = await (await get("/board", admin)).text();
     expect(html).toContain("Wait for human");
-    expect(html).toContain("kate needs an answer from a human");
+    expect(html).toContain("kate waits for a human");
+    expect(html).toContain("Nothing is moving."); // only a human can move it now
+  });
+
+  it("keeps a conversation that goes on in new threads on one line", async () => {
+    say("kate", "tech", 30, "review_request");
+    say("tech", "kate", 20, "review_result");
+    say("kate", "tech", 5, "task_update");
+    const html = await (await get("/board", admin)).text();
+    expect(html.match(/data-row=/g)).toHaveLength(1);
   });
 
   it("says when nothing is moving", async () => {

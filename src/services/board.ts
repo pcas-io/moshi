@@ -1,17 +1,22 @@
-// The board: who has the ball in each conversation, and whether it is moving.
+// The board: who has the ball between two agents, and whether it is moving.
 //
-// A strand is a moshi thread. Its ball lies with the RECIPIENT of its last
-// direct message: whoever was written to last is the one expected to answer
-// or deliver. Broadcasts move no ball. Two message types say more than that:
+// A strand is a PAIR of agents (A ↔ B, either way round), not a thread: the
+// agents often go on in a new thread instead of replying in the old one, and
+// a strand per thread left a ball in every abandoned thread (decision
+// 06ae5d56). The ball lies with the RECIPIENT of the last direct message
+// between the two, whichever thread it was in: whoever was written to last is
+// the one expected to answer or deliver. Broadcasts move no ball.
 //
-//   done            the strand is finished; nobody holds a ball
-//   input_required  the ball is with a human, not with an agent: the sender
-//                   needs a decision or an answer from outside the mesh
+//   done            the last message between them ends the strand
+//   input_required  the sender needs a human: the ball is outside the mesh
 //
-// No person is named anywhere here: the human is a role. The light measures
-// whether the holder can be REACHED (online, or a hook that last succeeded:
-// a bot that sleeps between wake-up calls is reachable all the same) and how
-// long the ball has lain. A strand with nothing for a day goes grey.
+// A holder whose own `working_on` says it waits for a human ("waiting for a
+// human: …") is listed with them. A human is a role here, never a name.
+//
+// The light says whether the holder can be WOKEN and how long the ball has
+// lain. Red means nobody can wake it: not online, and no hook whose last
+// call succeeded. A reachable holder is green for a while, then yellow. A
+// strand with nothing for a day, or done, is grey; a human's ball is neutral.
 //
 // Nothing of a message's text is used: only who, to whom, which type and
 // when. "Delivers next" is the holder's own `working_on`.
@@ -27,7 +32,6 @@ export const INPUT_REQUIRED_TYPE = "input_required";
 /** Start values. Minutes without movement, and hours until a strand is quiet. */
 export const BOARD_THRESHOLDS = {
   greenMinutes: 15,
-  redMinutes: 45,
   quietHours: 24,
   /** How far back the board looks for strands at all. */
   windowDays: 7,
@@ -36,29 +40,35 @@ export const BOARD_THRESHOLDS = {
 /** How many finished or quiet strands the board still lists. */
 export const QUIET_LISTED = 10;
 
-export type Light = "green" | "yellow" | "red" | "grey";
+/** `working_on` that says its agent waits for a human, in either language. */
+const WAITS_FOR_HUMAN = /^\s*(wartet auf (einen |eine )?(mensch|menschen)|waiting (for|on) (a )?human|wait(s)? for (a )?human)\b/i;
 
-/** How the holder can be woken: by its hook, by being online, or not at all. */
+export type Light = "green" | "yellow" | "red" | "grey" | "human";
+
+/** How the holder can be woken: by being online, by its hook, or not at all. */
 export type Reach = "online" | "hook" | "stale" | "unreachable";
 
 export interface BoardRow {
-  threadId: string;
-  /** Who moved the ball last, and to whom. */
+  /** The two agents, ordered: who moved the ball last first. */
   from: string;
   to: string;
-  /** The type of that message (as the sender wrote it). */
+  /** The newest thread between them: where the link goes. */
+  threadId: string;
+  /** The type of the last direct message (as the sender wrote it). */
   type: string;
-  /** The agent holding the ball; null when a human holds it or nobody does. */
+  /** The agent holding the ball; null when it is with a human or done. */
   holder: string | null;
+  /** The agent that waits for a human; null unless `humanBall`. */
+  waiting: string | null;
   humanBall: boolean;
   done: boolean;
   /** When the ball came to its holder (ISO). */
   since: string;
-  /** Last message of the strand at all (ISO). */
+  /** Last message between the two at all, broadcasts not counted (ISO). */
   lastActivity: string;
   light: Light;
   reach: Reach | null;
-  /** The holder's `working_on`, as it announced it. */
+  /** The holder's (or the waiting agent's) `working_on`, as announced. */
   deliversNext: string | null;
   /** The holder holds a ball but says nothing about what comes next. */
   vagueNext: boolean;
@@ -66,17 +76,18 @@ export interface BoardRow {
 }
 
 export interface Board {
-  /** Strands where a human has the ball. */
+  /** Strands whose ball is with a human. */
   waitingForHuman: BoardRow[];
-  /** Strands where an agent has the ball. */
+  /** Strands where an agent has the ball: red, then yellow, then green; newest first in each. */
   inPlay: BoardRow[];
   /** Finished or quiet strands, newest first, at most `QUIET_LISTED`. */
   quiet: BoardRow[];
-  /** At least one strand is in play or waits for a human, and none is green. */
+  /** At least one strand is open, and none is green. */
   nothingMoving: boolean;
 }
 
-interface LastDirect {
+interface LastBetween {
+  pair: string;
   thread_id: string;
   from_agent: string;
   to_agent: string;
@@ -86,33 +97,38 @@ interface LastDirect {
   last_activity: string;
 }
 
-/** The last direct message of every thread with traffic in the window. */
-export function lastDirectMessages(db: Database.Database, now: number): LastDirect[] {
+/** The last direct message between every pair of agents with traffic in the window. */
+export function lastBetweenPairs(db: Database.Database, now: number): LastBetween[] {
   const since = new Date(now - BOARD_THRESHOLDS.windowDays * 86_400_000).toISOString();
   return db
     .prepare(
-      `WITH recent AS (
-         SELECT COALESCE(correlation_id, id) AS thread_id, from_agent, to_agent, to_key, type, created_at, rowid AS rid
-           FROM messages WHERE created_at >= ?
+      `WITH direct AS (
+         SELECT COALESCE(correlation_id, id) AS thread_id, from_agent, to_agent, to_key, type, created_at, rowid AS rid,
+                lower(COALESCE(from_key, from_agent)) AS a, lower(COALESCE(NULLIF(to_key, ''), to_agent)) AS b
+           FROM messages WHERE created_at >= ? AND to_agent != 'broadcast'
        ),
-       activity AS (SELECT thread_id, MAX(created_at) AS last_activity FROM recent GROUP BY thread_id),
+       paired AS (SELECT direct.*, min(a, b) || char(31) || max(a, b) AS pair FROM direct),
        ranked AS (
-         SELECT recent.*, ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY created_at DESC, rid DESC) AS rn
-           FROM recent WHERE to_agent != 'broadcast'
+         SELECT paired.*, ROW_NUMBER() OVER (PARTITION BY pair ORDER BY created_at DESC, rid DESC) AS rn,
+                MAX(created_at) OVER (PARTITION BY pair) AS last_activity
+           FROM paired
        )
-       SELECT r.thread_id, r.from_agent, r.to_agent, r.to_key, r.type, r.created_at, a.last_activity
-         FROM ranked r JOIN activity a ON a.thread_id = r.thread_id
-        WHERE r.rn = 1
-        ORDER BY r.created_at DESC
+       SELECT pair, thread_id, from_agent, to_agent, to_key, type, created_at, last_activity
+         FROM ranked WHERE rn = 1
+        ORDER BY created_at DESC
         LIMIT 500`,
     )
-    .all(since) as LastDirect[];
+    .all(since) as LastBetween[];
 }
 
 /** A `working_on` that says nothing about the next delivery. */
 export function isVague(workingOn: string | null | undefined): boolean {
   const text = (workingOn ?? "").trim();
   return text === "" || /^(idle|none|nothing|n\/a|-+|waiting|wartet|nichts|leer)\.?$/i.test(text);
+}
+
+export function waitsForHuman(workingOn: string | null | undefined): boolean {
+  return WAITS_FOR_HUMAN.test(workingOn ?? "");
 }
 
 export function reachOf(presence: Presence | undefined, hook: WebhookStatus | null): Reach {
@@ -122,12 +138,12 @@ export function reachOf(presence: Presence | undefined, hook: WebhookStatus | nu
 }
 
 /**
- * The light of a strand that an agent holds. Reachable holders go by time;
- * a quiet one that may still look in is yellow at best; one that cannot be
- * reached is red.
+ * The light of a strand that an agent holds. Red only when nobody can wake
+ * the holder; a quiet one that may still look in is yellow; a reachable one
+ * is green until the ball has lain for `greenMinutes`, then yellow.
  */
 export function lightOf(reach: Reach, minutesSince: number): Light {
-  if (reach === "unreachable" || minutesSince >= BOARD_THRESHOLDS.redMinutes) return "red";
+  if (reach === "unreachable") return "red";
   if (reach === "stale" || minutesSince >= BOARD_THRESHOLDS.greenMinutes) return "yellow";
   return "green";
 }
@@ -152,25 +168,29 @@ export interface BoardInputs {
 export function buildBoard({ db, agents, hooks, now }: BoardInputs): Board {
   const byKey = new Map(agents.map((a) => [inboxKeyOf(a.agent), a]));
   const byName = new Map(agents.map((a) => [a.agent.name.toLowerCase(), a]));
+  const find = (key: string | null, name: string) => (key ? byKey.get(key) : undefined) ?? byName.get(name.toLowerCase());
   const quietAfter = BOARD_THRESHOLDS.quietHours * 3_600_000;
 
-  const rows: BoardRow[] = lastDirectMessages(db, now).map((m) => {
+  const rows: BoardRow[] = lastBetweenPairs(db, now).map((m) => {
     const done = m.type === DONE_TYPE;
-    const humanBall = !done && m.type === INPUT_REQUIRED_TYPE;
-    const holderEntry = done || humanBall ? undefined : (m.to_key ? byKey.get(m.to_key) : undefined) ?? byName.get(m.to_agent.toLowerCase());
-    const holderKey = holderEntry ? inboxKeyOf(holderEntry.agent) : null;
-    const hook = holderKey ? hooks.get(holderKey) ?? null : null;
-    const quiet = now - Date.parse(m.last_activity) >= quietAfter;
-    const minutesSince = (now - Date.parse(m.created_at)) / 60_000;
+    const quiet = done || now - Date.parse(m.last_activity) >= quietAfter;
+    const asked = !done && m.type === INPUT_REQUIRED_TYPE;
+    const recipient = done || asked ? undefined : find(m.to_key, m.to_agent);
+    const holderWaits = !quiet && Boolean(recipient) && waitsForHuman(recipient?.agent.working_on);
+    const humanBall = !quiet && (asked || holderWaits);
+    const waitingEntry = asked ? find(null, m.from_agent) : holderWaits ? recipient : undefined;
+    const holderEntry = humanBall ? undefined : recipient;
+    const hook = holderEntry ? hooks.get(inboxKeyOf(holderEntry.agent)) ?? null : null;
     const reach = done || humanBall ? null : holderEntry && holderEntry.agent.is_active ? reachOf(holderEntry.presence, hook) : "unreachable";
-    const light: Light = done || quiet ? "grey" : humanBall ? "red" : lightOf(reach!, minutesSince);
-    const deliversNext = holderEntry?.agent.working_on ?? null;
+    const light: Light = quiet ? "grey" : humanBall ? "human" : lightOf(reach!, (now - Date.parse(m.created_at)) / 60_000);
+    const deliversNext = (holderEntry ?? waitingEntry)?.agent.working_on ?? null;
     return {
-      threadId: m.thread_id,
       from: m.from_agent,
       to: m.to_agent,
+      threadId: m.thread_id,
       type: m.type,
       holder: done || humanBall ? null : holderEntry?.agent.name ?? m.to_agent,
+      waiting: humanBall ? waitingEntry?.agent.name ?? (asked ? m.from_agent : m.to_agent) : null,
       humanBall,
       done,
       since: m.created_at,
@@ -178,25 +198,27 @@ export function buildBoard({ db, agents, hooks, now }: BoardInputs): Board {
       light,
       reach,
       deliversNext,
-      vagueNext: light !== "grey" && !humanBall && isVague(deliversNext),
+      vagueNext: !quiet && !humanBall && isVague(deliversNext),
       hook,
     };
   });
 
-  const live = rows.filter((r) => r.light !== "grey");
-  const waitingForHuman = live.filter((r) => r.humanBall);
-  const inPlay = live.filter((r) => !r.humanBall).sort(byUrgency);
+  const open = rows.filter((r) => r.light !== "grey");
   return {
-    waitingForHuman,
-    inPlay,
-    quiet: rows.filter((r) => r.light === "grey").slice(0, QUIET_LISTED),
-    nothingMoving: live.length > 0 && !live.some((r) => r.light === "green"),
+    waitingForHuman: open.filter((r) => r.humanBall).sort(newestFirst),
+    inPlay: open.filter((r) => !r.humanBall).sort(byUrgency),
+    quiet: rows.filter((r) => r.light === "grey").sort(newestFirst).slice(0, QUIET_LISTED),
+    nothingMoving: open.length > 0 && !open.some((r) => r.light === "green"),
   };
 }
 
-const URGENCY: Record<Light, number> = { red: 0, yellow: 1, green: 2, grey: 3 };
+const URGENCY: Record<Light, number> = { red: 0, yellow: 1, green: 2, human: 3, grey: 4 };
 
-/** Red first, then yellow, then green; the longest-lying ball first within each. */
+function newestFirst(a: BoardRow, b: BoardRow): number {
+  return b.since.localeCompare(a.since);
+}
+
+/** Red first, then yellow, then green; the newest first within each. */
 function byUrgency(a: BoardRow, b: BoardRow): number {
-  return URGENCY[a.light] - URGENCY[b.light] || a.since.localeCompare(b.since);
+  return URGENCY[a.light] - URGENCY[b.light] || newestFirst(a, b);
 }
