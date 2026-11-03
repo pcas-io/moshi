@@ -54,6 +54,10 @@ export interface Config {
    *  get_entity), with a read-only token. Both MESH_RESULT_TITLE_MCP_URL and
    *  MESH_RESULT_TITLE_TOKEN, or neither: then links keep the end of their id. */
   resultTitles: { mcpUrl: string; token: string } | null;
+  /** Settings that were wrong but only switch a display feature off (result
+   *  links, their titles). Logged at start; they never stop the process: a
+   *  half-filled optional setting once kept production down. */
+  warnings: string[];
 }
 
 export interface ConfigError {
@@ -215,13 +219,15 @@ export function loadConfig(
   else if (cspRaw !== "") errors.push(`MESH_CSP must be enforce, report or off (got "${env.MESH_CSP}")`);
 
   // Result links on the board: which hosts, and where their titles come from.
-  // Names only in the messages, never the token.
+  // Names only in the messages, never the token. Both are display features:
+  // a wrong value is a warning and switches the feature off, never an error.
+  const warnings: string[] = [];
   const resultLinkHosts: string[] = [];
   for (const raw of (env.MESH_RESULT_LINK_HOSTS ?? "").split(",")) {
     const host = raw.trim().toLowerCase();
     if (host === "") continue;
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
-      errors.push(`MESH_RESULT_LINK_HOSTS lists host names, comma-separated, e.g. results.example.com (got "${raw.trim()}")`);
+      warnings.push(`MESH_RESULT_LINK_HOSTS lists host names, comma-separated, e.g. results.example.com (got "${raw.trim()}"); that entry is skipped`);
     } else {
       resultLinkHosts.push(host);
     }
@@ -237,9 +243,9 @@ export function loadConfig(
       parsed = null;
     }
     if (!parsed || parsed.protocol !== "https:" || parsed.username || parsed.password) {
-      errors.push(`MESH_RESULT_TITLE_MCP_URL must be an https URL when titles are wanted (got "${titleUrlRaw}")`);
+      warnings.push("MESH_RESULT_TITLE_MCP_URL must be an https URL without credentials when titles are wanted; titles are off");
     } else if (titleToken === "") {
-      errors.push("MESH_RESULT_TITLE_TOKEN must be set together with MESH_RESULT_TITLE_MCP_URL");
+      warnings.push("MESH_RESULT_TITLE_TOKEN must be set together with MESH_RESULT_TITLE_MCP_URL; titles are off");
     } else {
       resultTitles = { mcpUrl: parsed.toString(), token: titleToken };
     }
@@ -267,6 +273,7 @@ export function loadConfig(
     publicUrl,
     resultLinkHosts,
     resultTitles,
+    warnings,
   };
 }
 

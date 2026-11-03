@@ -367,24 +367,30 @@ describe("result links on the board", () => {
       .toMatchObject({ resultLinkHosts: ["results.example.com", "wiki.example.org"] });
   });
 
-  it("refuses what is no host name", () => {
+  it("skips what is no host name with a warning, and still starts", () => {
     for (const bad of ["https://results.example.com", "results.example.com/path", "localhost", "a b.example.com"]) {
-      const result = loadConfig({ ...VALID_PROD_ENV, MESH_RESULT_LINK_HOSTS: bad });
-      expect(isConfigError(result), bad).toBe(true);
+      const result = loadConfig({ ...VALID_PROD_ENV, MESH_RESULT_LINK_HOSTS: `${bad},wiki.example.org` });
+      expect(isConfigError(result), bad).toBe(false);
+      expect(result, bad).toMatchObject({ resultLinkHosts: ["wiki.example.org"] });
+      expect((result as { warnings: string[] }).warnings, bad).toHaveLength(1);
     }
   });
 
-  it("wants an https endpoint and its token together, and never names the token", () => {
+  it("wants an https endpoint and its token together; half a setting switches titles off and still starts", () => {
     const ok = loadConfig({ ...VALID_PROD_ENV, MESH_RESULT_TITLE_MCP_URL: "https://results.example.com/mcp", MESH_RESULT_TITLE_TOKEN: "tok-secret-1" });
-    expect(ok).toMatchObject({ resultTitles: { mcpUrl: "https://results.example.com/mcp", token: "tok-secret-1" } });
+    expect(ok).toMatchObject({ resultTitles: { mcpUrl: "https://results.example.com/mcp", token: "tok-secret-1" }, warnings: [] });
     for (const env of [
       { MESH_RESULT_TITLE_MCP_URL: "https://results.example.com/mcp" },
       { MESH_RESULT_TITLE_TOKEN: "tok-secret-1" },
       { MESH_RESULT_TITLE_MCP_URL: "http://results.example.com/mcp", MESH_RESULT_TITLE_TOKEN: "tok-secret-1" },
+      // A token pasted into the URL field must not reach the log either.
+      { MESH_RESULT_TITLE_MCP_URL: "tok-secret-1", MESH_RESULT_TITLE_TOKEN: "https://results.example.com/mcp" },
     ]) {
       const result = loadConfig({ ...VALID_PROD_ENV, ...env });
-      expect(isConfigError(result), JSON.stringify(env)).toBe(true);
-      expect(JSON.stringify(result)).not.toContain("tok-secret-1");
+      expect(isConfigError(result), JSON.stringify(env)).toBe(false);
+      expect(result, JSON.stringify(env)).toMatchObject({ resultTitles: null });
+      expect((result as { warnings: string[] }).warnings, JSON.stringify(env)).toHaveLength(1);
+      expect(JSON.stringify((result as { warnings: string[] }).warnings)).not.toContain("tok-secret-1");
     }
   });
 });

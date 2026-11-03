@@ -34,6 +34,7 @@ export const TEST_CONFIG: Config = {
   backupKeep: 0,
   resultLinkHosts: [],
   resultTitles: null,
+  warnings: [],
 };
 
 export interface TestApp {
