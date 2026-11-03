@@ -36,6 +36,7 @@ if (isConfigError(configResult)) {
   process.exit(1);
 }
 const config = configResult;
+for (const warning of config.warnings) log("warn", "configuration: feature switched off", { warning });
 
 // --- Initialize services ---
 const db = initDatabase(config.databasePath, {

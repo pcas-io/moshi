@@ -15,7 +15,9 @@ version and commit are on `GET /health`.
 - `MESH_RESULT_LINK_HOSTS`, `MESH_RESULT_TITLE_MCP_URL`,
   `MESH_RESULT_TITLE_TOKEN`: which links count as results, and where their
   titles come from (one `get_entity` call per id with a read-only token, in
-  the background, cached; the token is never logged).
+  the background, cached; the token is never logged). A wrong or half-filled
+  value is a warning at start and switches only that feature off: an URL
+  without its token once stopped production from starting.
 - Message type `delivered` among the recommended ones.
 - `/board` (admin only): one line per conversation with who has the ball, what
   they deliver next (their `working_on`), since when, and a light that says
