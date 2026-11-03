@@ -7,6 +7,10 @@ version and commit are on `GET /health`.
 ## [Unreleased]
 
 ### Added
+- `/board`: a result title longer than 90 characters is cut, the whole one
+  is in the link's tooltip; "Delivers next" drops a leading "delivering:" or
+  "liefert:" the label already says; a `working_on` starting with "idle:"
+  counts as saying nothing about the next delivery.
 - `/board` says whether result titles work, above the lines: "working · last
   answer …", "not asked yet", "off" (with the setting that is wrong, if one
   is), or, prominently, "failing since …" with the reason an operator can act

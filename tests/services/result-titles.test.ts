@@ -164,7 +164,7 @@ describe("ResultTitles.status", () => {
 describe("cleanTitle and titleFromAnswer", () => {
   it("makes one bounded line without control or direction characters", () => {
     expect(cleanTitle("  A\n\tB‮C  ")).toBe("A B C");
-    expect(cleanTitle("x".repeat(300))).toHaveLength(120);
+    expect(cleanTitle("x".repeat(400))).toHaveLength(300);
     expect(cleanTitle("")).toBeNull();
     expect(cleanTitle(null)).toBeNull();
   });

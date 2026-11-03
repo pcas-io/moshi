@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from "vitest";
 import { BoardSection } from "../../../src/views/v2/board";
-import type { Board, ResultStatus } from "../../../src/services/board";
+import type { Board, BoardRow, ResultStatus } from "../../../src/services/board";
 
 const NOW = Date.parse("2026-11-03T14:00:00.000Z");
 const EMPTY: Board = { waitingForHuman: [], inPlay: [], quiet: [], nothingMoving: false, resultStatus: null };
@@ -47,5 +47,31 @@ describe("result status on /board", () => {
     expect(ok).toContain("Result titles: working · last answer");
     expect(ok).not.toContain('role="note"');
     expect(await render({ state: "unchecked" })).toContain("not asked yet");
+  });
+});
+
+describe("result links on /board", () => {
+  const ID = "06ae5d2b-cf6a-7b57-8000-625378008c57";
+  const URL_ = `https://results.example.com/entities/${ID}`;
+  const row = (title: string | null): BoardRow => ({
+    pairKey: "kate\u001ftech", delivered: true, result: { url: URL_, id: ID, title }, history: [],
+    from: "kate", to: "tech", threadId: "t1", type: "delivered", holder: "tech", waiting: null,
+    humanBall: false, done: false, since: new Date(NOW - 60_000).toISOString(), lastActivity: new Date(NOW - 60_000).toISOString(),
+    light: "green", reach: "online", deliversNext: "liefert: review to kate", vagueNext: false, hook: null,
+  });
+  const html = async (r: BoardRow) => String(await Promise.resolve(BoardSection({ board: { ...EMPTY, inPlay: [r] }, now: NOW })));
+
+  it("cuts a long title and keeps the whole one in the tooltip", async () => {
+    const long = `Handoff ${"x".repeat(150)} end`;
+    const out = await html(row(long));
+    expect(out).toContain(`${long.slice(0, 89)}…</a>`);
+    expect(out).toContain(`title="${long}\n${URL_}"`);
+  });
+
+  it("shows the end of the id without a title, and the delivery without its prefix", async () => {
+    const out = await html(row(null));
+    expect(out).toContain(`…${ID.slice(-8)}</a>`);
+    expect(out).toContain("Delivers next: review to kate");
+    expect(out).not.toContain("liefert:");
   });
 });
