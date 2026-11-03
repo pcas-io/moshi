@@ -25,7 +25,8 @@ export const FAILURE_TTL_MS = 5 * 60 * 1000;
 export const LOOKUP_TIMEOUT_MS = 3_000;
 const MAX_IN_FLIGHT = 4;
 const MAX_ENTRIES = 1000;
-const MAX_TITLE = 120;
+// Kept whole up to here; the board cuts what it shows and puts the rest in a tooltip.
+const MAX_TITLE = 300;
 
 export type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
 

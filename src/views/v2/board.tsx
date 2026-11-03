@@ -11,7 +11,7 @@
 
 import type { FC } from "hono/jsx";
 import type { Board, BoardRow, Light, Reach, ResultLink, ResultStatus } from "../../services/board.js";
-import { BOARD_THRESHOLDS } from "../../services/board.js";
+import { BOARD_THRESHOLDS, deliveryText } from "../../services/board.js";
 import { threadHref } from "../../services/thread-link.js";
 import { V2Layout } from "./layout.js";
 import { V2_TOKENS, V2_FONT_FAMILY_MONO } from "./tokens.js";
@@ -62,12 +62,19 @@ const Dot: FC<{ light: Light }> = ({ light }) => (
 /** A key the DOM can carry: the pair's two inbox keys, joined visibly. */
 const domKey = (row: BoardRow): string => row.pairKey.replace("\u001f", "~");
 
-/** A result: its title when known, else the end of its id. Never other text. */
-const Result: FC<{ link: ResultLink }> = ({ link }) => (
-  <a href={link.url} target="_blank" rel="noopener noreferrer" title={link.url}>
-    {link.title ?? `…${link.id.slice(-8)}`}
-  </a>
-);
+const SHOWN_TITLE = 90;
+
+/** A result: its title when known (cut, the whole one in the tooltip), else
+ *  the end of its id. Never other text. */
+const Result: FC<{ link: ResultLink }> = ({ link }) => {
+  const title = link.title;
+  const shown = title && title.length > SHOWN_TITLE ? `${title.slice(0, SHOWN_TITLE - 1)}…` : title;
+  return (
+    <a href={link.url} target="_blank" rel="noopener noreferrer" title={title ? `${title}\n${link.url}` : link.url}>
+      {shown ?? `…${link.id.slice(-8)}`}
+    </a>
+  );
+};
 
 /** The last action between the two, and the link to the newest thread. */
 const Origin: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
@@ -147,7 +154,7 @@ const InPlayRow: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
             "it should name the next delivery and who gets it."}
         </div>
       ) : (
-        <div style={`font-size:13.5px;color:${T.body};margin:3px 0`}>{`Delivers next: ${row.deliversNext}`}</div>
+        <div style={`font-size:13.5px;color:${T.body};margin:3px 0`}>{`Delivers next: ${deliveryText(row.deliversNext)}`}</div>
       )}
       <Origin row={row} now={now} />
       <HookNote row={row} />

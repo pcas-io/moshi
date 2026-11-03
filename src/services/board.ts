@@ -166,10 +166,17 @@ export function lastBetweenPairs(db: Database.Database, now: number): LastBetwee
     .all(since) as LastBetween[];
 }
 
-/** A `working_on` that says nothing about the next delivery. */
+/** A `working_on` that says nothing about the next delivery: empty, a bare
+ *  "idle"-like word, or one that starts with "idle:" (idle, whatever follows). */
 export function isVague(workingOn: string | null | undefined): boolean {
   const text = (workingOn ?? "").trim();
-  return text === "" || /^(idle|none|nothing|n\/a|-+|waiting|wartet|nichts|leer)\.?$/i.test(text);
+  return text === "" || /^(idle|none|nothing|n\/a|-+|waiting|wartet|nichts|leer)\.?$/i.test(text) || /^idle\s*:/i.test(text);
+}
+
+/** `working_on` as the board shows it after "Delivers next:": without a
+ *  leading "delivering:"/"liefert:" the label already says. */
+export function deliveryText(workingOn: string | null | undefined): string {
+  return (workingOn ?? "").trim().replace(/^(delivering|delivers(\s+next)?|liefert|next)\s*:\s*/i, "");
 }
 
 export function waitsForHuman(workingOn: string | null | undefined): boolean {

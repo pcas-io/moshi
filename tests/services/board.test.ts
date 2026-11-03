@@ -10,7 +10,7 @@ import { ActivityService } from "../../src/services/activity";
 import { createMessage, persistMessage } from "../../src/services/message";
 import type { AgentWithPresence, Presence } from "../../src/services/presence";
 import type { WebhookStatus } from "../../src/services/webhooks";
-import { buildBoard, lightOf, reachOf, isVague, waitsForHuman, resultLinksIn, BOARD_THRESHOLDS, QUIET_LISTED, HISTORY_LISTED } from "../../src/services/board";
+import { buildBoard, lightOf, reachOf, isVague, deliveryText, waitsForHuman, resultLinksIn, BOARD_THRESHOLDS, QUIET_LISTED, HISTORY_LISTED } from "../../src/services/board";
 
 const NOW = Date.parse("2026-10-31T12:00:00.000Z");
 let db: Database.Database;
@@ -190,6 +190,16 @@ describe("delivers next", () => {
   it("knows the generic words", () => {
     for (const vague of ["", " ", "idle", "Idle.", "none", "-", "n/a", "waiting"]) expect(isVague(vague), vague).toBe(true);
     expect(isVague("idle until kate's review")).toBe(false);
+    expect(isVague("idle: waits for kate's review")).toBe(true);
+    expect(isVague("Idle : nothing")).toBe(true);
+  });
+
+  it("shows the next delivery without the prefix the label already says", () => {
+    expect(deliveryText("liefert: landing page v0.6 to tech")).toBe("landing page v0.6 to tech");
+    expect(deliveryText("  Delivering:  report to kate")).toBe("report to kate");
+    expect(deliveryText("delivers next: x")).toBe("x");
+    expect(deliveryText("review of the delivering: step")).toBe("review of the delivering: step");
+    expect(deliveryText(null)).toBe("");
   });
 });
 
