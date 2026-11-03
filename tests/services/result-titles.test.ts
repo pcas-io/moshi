@@ -43,7 +43,7 @@ describe("ResultTitles", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe(URL_);
     expect((calls[0]!.init.headers as Record<string, string>).authorization).toBe(`Bearer ${TOKEN}`);
-    expect(calls[0]!.init.redirect).toBe("error");
+    expect(calls[0]!.init.redirect).toBe("manual");
     expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
       jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_entity", arguments: { id: ID } },
     });
@@ -103,6 +103,61 @@ describe("ResultTitles", () => {
     untitled.want([ID]);
     await untitled.settled();
     expect(untitled.titleOf(ID)).toBeNull();
+  });
+});
+
+describe("ResultTitles.status", () => {
+  const failing = async (reply: () => Response | Promise<Response>) => {
+    const t = titles(fetcher(reply));
+    t.want([ID]);
+    await t.settled();
+    const s = t.status();
+    expect(s.state).toBe("failing");
+    return s as { state: "failing"; reason: string; since: number; at: number };
+  };
+
+  it("is unchecked before the first lookup and ok after an answer, also one without a title", async () => {
+    const t = titles(fetcher(() => json(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { isError: true, content: [{ type: "text", text: "not_found" }] } }))));
+    expect(t.status()).toEqual({ state: "unchecked" });
+    t.want([ID]);
+    await t.settled();
+    expect(t.status()).toEqual({ state: "ok", at: clock });
+  });
+
+  it("names a redirect and its target, follows nothing and never shows a query", async () => {
+    const s = await failing(() => new Response(null, { status: 307, headers: { location: "/mcp/?k=secret" } }));
+    expect(s.reason).toContain("redirects (HTTP 307) to https://results.example.com/mcp/");
+    expect(s.reason).toContain("MESH_RESULT_TITLE_MCP_URL");
+    expect(s.reason).not.toContain("secret");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("says that the token is refused, that nothing answers, and what was no MCP", async () => {
+    expect((await failing(() => json("{}", 401))).reason).toContain("refuses the token");
+    expect((await failing(() => json("{}", 404))).reason).toContain("no MCP endpoint");
+    expect((await failing(() => { throw Object.assign(new Error("aborted"), { name: "TimeoutError" }); })).reason).toContain("no answer within 3 s");
+    expect((await failing(() => { throw new TypeError("fetch failed"); })).reason).toContain("cannot reach");
+    expect((await failing(() => new Response("<html>login</html>", { headers: { "content-type": "text/html" } }))).reason).toContain("no MCP");
+    expect((await failing(() => json(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: "x" } })))).reason).toContain("-32601");
+  });
+
+  it("keeps when the failing started, and recovers with the next answer", async () => {
+    let fail = true;
+    const t = titles(fetcher(() => (fail ? json("{}", 401) : json(answer("Back")))));
+    t.want([ID]);
+    await t.settled();
+    const first = clock;
+    clock += FAILURE_TTL_MS;
+    t.want([ID]);
+    await t.settled();
+    expect(t.status()).toMatchObject({ state: "failing", since: first, at: clock });
+    expect(JSON.stringify(t.status())).not.toContain(TOKEN);
+    fail = false;
+    clock += FAILURE_TTL_MS;
+    t.want([ID]);
+    await t.settled();
+    expect(t.status()).toEqual({ state: "ok", at: clock });
+    expect(t.titleOf(ID)).toBe("Back");
   });
 });
 

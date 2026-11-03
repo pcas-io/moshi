@@ -146,3 +146,36 @@ describe("/board stage 2", () => {
     expect(html).not.toContain("No webhook");
   });
 });
+
+describe("/board result status from the configuration", () => {
+  const page = async (overrides: Parameters<typeof createTestApp>[0]) => {
+    t = createTestApp(overrides, { now: () => NOW });
+    admin = (await signIn(t.app, ADMIN_TOKEN)).cookie;
+    return (await get("/board", admin)).text();
+  };
+
+  it("shows no status without result links", async () => {
+    expect(await page({})).not.toContain("data-result-status");
+  });
+
+  it("says titles are off when only links are set", async () => {
+    const html = await page({ resultLinkHosts: ["results.example.com"] });
+    expect(html).toContain('data-result-status="off"');
+    expect(html).toContain("switch them on");
+  });
+
+  it("names a half-filled title setting that the start only warned about", async () => {
+    const html = await page({
+      resultLinkHosts: ["results.example.com"],
+      warnings: ["MESH_RESULT_TITLE_TOKEN must be set together with MESH_RESULT_TITLE_MCP_URL; titles are off"],
+    });
+    expect(html).toContain("MESH_RESULT_TITLE_TOKEN must be set together with MESH_RESULT_TITLE_MCP_URL");
+  });
+
+  it("is unchecked while no link has needed a title, and never shows the token", async () => {
+    const html = await page({ resultLinkHosts: ["results.example.com"], resultTitles: { mcpUrl: "https://results.example.com/mcp/", token: "tok-secret-9" } });
+    expect(html).toContain('data-result-status="unchecked"');
+    expect(html).not.toContain("tok-secret-9");
+  });
+});
+

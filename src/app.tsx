@@ -65,12 +65,16 @@ export interface AppDeps {
 /** Result links on the board, if the operator allowed any; their titles, if
  *  the operator gave a read-only token for them. One per process. */
 function boardLinksOf(config: Config): BoardLinks | undefined {
-  if (config.resultLinkHosts.length === 0) return undefined;
+  // A wrong result setting does not stop the start (config.warnings); the
+  // board says which one it is, so nobody has to read the log to find it.
+  const warning = config.warnings.find((w) => w.startsWith("MESH_RESULT_")) ?? null;
+  if (config.resultLinkHosts.length === 0 && !config.resultTitles && !warning) return undefined;
   const titles = config.resultTitles ? new ResultTitles(config.resultTitles) : null;
   return {
     hosts: config.resultLinkHosts,
     titleOf: (id) => titles?.titleOf(id) ?? null,
     want: (ids) => titles?.want(ids),
+    status: () => titles?.status() ?? { state: "off", reason: warning },
   };
 }
 

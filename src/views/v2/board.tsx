@@ -10,7 +10,7 @@
 // name.
 
 import type { FC } from "hono/jsx";
-import type { Board, BoardRow, Light, Reach, ResultLink } from "../../services/board.js";
+import type { Board, BoardRow, Light, Reach, ResultLink, ResultStatus } from "../../services/board.js";
 import { BOARD_THRESHOLDS } from "../../services/board.js";
 import { threadHref } from "../../services/thread-link.js";
 import { V2Layout } from "./layout.js";
@@ -184,11 +184,53 @@ const QuietRow: FC<{ row: BoardRow; now: number }> = ({ row, now }) => (
   </div>
 );
 
+const iso = (ms: number): string => new Date(ms).toISOString();
+
+/** Whether result titles work: the operator reads here what the log would say. */
+const ResultStatusLine: FC<{ status: ResultStatus; now: number }> = ({ status, now }) => {
+  if (status.state === "failing") {
+    return (
+      <div
+        role="note"
+        data-result-status="failing"
+        style={`margin-bottom:18px;padding:12px 18px;border-radius:${T.radiusBox}px;background:${T.redSoft};` +
+          `border:1px solid ${T.redLine};color:${T.red};font-size:13.5px`}
+      >
+        <strong style="font-weight:600">{"Result titles are failing"}</strong>
+        {" since "}
+        <When iso={iso(status.since)} now={now} />
+        {` (last try `}
+        <When iso={iso(status.at)} now={now} />
+        {`): ${status.reason}. Until then a link shows the end of its id.`}
+      </div>
+    );
+  }
+  const text =
+    status.state === "ok" ? null
+      : status.state === "unchecked" ? "Result titles: not asked yet. They are fetched in the background when a link needs one."
+      : status.reason ? `Result titles are off: ${status.reason}. A link shows the end of its id.`
+      : "Result titles are off: a link shows the end of its id. MESH_RESULT_TITLE_MCP_URL and MESH_RESULT_TITLE_TOKEN switch them on.";
+  return (
+    <div data-result-status={status.state} style={`${META};margin:-8px 0 14px`}>
+      {status.state === "ok" ? (
+        <>
+          <span style={`display:inline-block;width:8px;height:8px;border-radius:999px;margin-right:6px;background:${T.live}`} />
+          {"Result titles: working · last answer "}
+          <When iso={iso(status.at)} now={now} />
+        </>
+      ) : (
+        text
+      )}
+    </div>
+  );
+};
+
 /** The inside of the live container: the same markup for page and fragment. */
 export const BoardSection: FC<{ board: Board; now: number }> = ({ board, now }) => {
   const open = board.inPlay.length + board.waitingForHuman.length;
   return (
     <>
+      {board.resultStatus && <ResultStatusLine status={board.resultStatus} now={now} />}
       {board.nothingMoving && (
         <div
           role="note"
