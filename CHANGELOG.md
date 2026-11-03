@@ -7,6 +7,12 @@ version and commit are on `GET /health`.
 ## [Unreleased]
 
 ### Added
+- `/board` says whether result titles work, above the lines: "working · last
+  answer …", "not asked yet", "off" (with the setting that is wrong, if one
+  is), or, prominently, "failing since …" with the reason an operator can act
+  on (a redirect and its target, the token refused, no MCP endpoint, no
+  answer). Titles still never follow a redirect: the token goes to the
+  configured address only.
 - `/board` stage 2: each line names the last action (type, sender,
   recipient, when), says "Delivered, waiting for X to pick it up" after a
   hand-over (`delivered`, `review_result`, `deploy_status`, or a result link),

@@ -202,6 +202,18 @@ await dump("10-log-audit", V2LogPage({
   };
   const board = buildBoard({ db, agents: roster, hooks: new Map(), now: NOW.getTime(), links });
   await dump("15-board", V2BoardPage({ board, now: NOW.getTime(), userRole: "admin", userName: "admin", csrfToken: "preview-csrf" }));
+  // The same board with the title endpoint failing: what the operator reads instead of the log.
+  const failing = {
+    ...board,
+    resultStatus: {
+      state: "failing" as const,
+      since: NOW.getTime() - 20 * 60_000,
+      at: NOW.getTime() - 60_000,
+      reason: "the address redirects (HTTP 307) to https://results.example.com/mcp/; titles never follow a redirect, set MESH_RESULT_TITLE_MCP_URL to that address",
+    },
+  };
+  await dump("15-board-titles-failing", V2BoardPage({ board: failing, now: NOW.getTime(), userRole: "admin", userName: "admin", csrfToken: "preview-csrf" }));
+  await dump("15-board-titles-ok", V2BoardPage({ board: { ...board, resultStatus: { state: "ok", at: NOW.getTime() - 2 * 60_000 } }, now: NOW.getTime(), userRole: "admin", userName: "admin", csrfToken: "preview-csrf" }));
 }
 
 const connectBase = {

@@ -28,6 +28,7 @@
 import type Database from "better-sqlite3";
 import type { Presence, AgentWithPresence } from "./presence.js";
 import type { WebhookStatus } from "./webhooks.js";
+import type { TitleStatus } from "./result-titles.js";
 import { inboxKeyOf } from "./agent.js";
 
 export const DONE_TYPE = "done";
@@ -126,6 +127,8 @@ export interface Board {
   quiet: BoardRow[];
   /** At least one strand is open, and none is green. */
   nothingMoving: boolean;
+  /** The result titles' state; null when result links are not set up. */
+  resultStatus: ResultStatus | null;
 }
 
 interface LastBetween {
@@ -190,8 +193,13 @@ export function lightOf(reach: Reach, minutesSince: number): Light {
   return "green";
 }
 
-/** Result links with a way to ask for the titles still missing. */
-export type BoardLinks = ResultLinks & { want(ids: string[]): void };
+/** What the board says about its result titles: off (with the setting that
+ *  is wrong, if one is), or whether the title endpoint answers. */
+export type ResultStatus = { state: "off"; reason: string | null } | TitleStatus;
+
+/** Result links with a way to ask for the titles still missing, and the
+ *  state of that asking. */
+export type BoardLinks = ResultLinks & { want(ids: string[]): void; status(): ResultStatus };
 
 /** The board as the page and its fragment show it. Titles it does not know
  *  yet are asked for afterwards, never waited for: the next refresh has them. */
@@ -209,7 +217,7 @@ export async function loadBoard(deps: {
     .filter((l): l is ResultLink => l !== null && l.title === null)
     .map((l) => l.id);
   if (unknown.length > 0) deps.links?.want([...new Set(unknown)]);
-  return board;
+  return { ...board, resultStatus: deps.links?.status() ?? null };
 }
 
 export interface BoardInputs {
@@ -343,6 +351,7 @@ export function buildBoard({ db, agents, hooks, now, links }: BoardInputs): Boar
     inPlay: open.filter((r) => !r.humanBall).sort(byUrgency),
     quiet: rows.filter((r) => r.light === "grey").sort(newestFirst).slice(0, QUIET_LISTED),
     nothingMoving: open.length > 0 && !open.some((r) => r.light === "green"),
+    resultStatus: null,
   };
 }
 

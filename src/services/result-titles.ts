@@ -12,6 +12,11 @@
 // five minutes; without a token there is nothing to ask and every link keeps
 // the end of its id. The token is never logged, and an error says no more
 // than its kind.
+//
+// `status()` says whether the endpoint answers, for the board itself: an
+// operator sees "redirects to …" or "HTTP 401" there without reading logs.
+// Only the endpoint's state counts: a tool error for one id (unknown entity)
+// is an answer, the endpoint works.
 
 import { log } from "./logger.js";
 
@@ -23,6 +28,51 @@ const MAX_ENTRIES = 1000;
 const MAX_TITLE = 120;
 
 export type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
+
+/** Whether the title endpoint answers. Times are epoch milliseconds. */
+export type TitleStatus =
+  | { state: "unchecked" }
+  | { state: "ok"; at: number }
+  | { state: "failing"; at: number; since: number; reason: string };
+
+/** A lookup that failed, with what the operator is to read on the board. */
+class LookupError extends Error {
+  constructor(
+    readonly kind: string,
+    readonly reason: string,
+  ) {
+    super(kind);
+  }
+}
+
+/** Where a redirect points, as an origin and path only (no query, no credentials). */
+function redirectTarget(location: string | null, base: string): string | null {
+  if (!location) return null;
+  try {
+    const u = new URL(location, base);
+    return u.protocol === "https:" || u.protocol === "http:" ? `${u.origin}${u.pathname}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The operator's sentence for an HTTP answer that is no MCP answer. */
+function httpReason(res: Response, url: string): LookupError {
+  if ((res.status >= 300 && res.status < 400) || res.type === "opaqueredirect") {
+    const to = redirectTarget(res.headers.get("location"), url);
+    return new LookupError(
+      `HTTP ${res.status} redirect`,
+      to
+        ? `the address redirects (HTTP ${res.status}) to ${to}; titles never follow a redirect, set MESH_RESULT_TITLE_MCP_URL to that address`
+        : `the address redirects (HTTP ${res.status}); titles never follow a redirect, set MESH_RESULT_TITLE_MCP_URL to the final address`,
+    );
+  }
+  if (res.status === 401 || res.status === 403) {
+    return new LookupError(`HTTP ${res.status}`, `HTTP ${res.status}: the endpoint refuses the token; MESH_RESULT_TITLE_TOKEN has to be a read token for it`);
+  }
+  if (res.status === 404) return new LookupError("HTTP 404", "HTTP 404: there is no MCP endpoint at this address");
+  return new LookupError(`HTTP ${res.status}`, `HTTP ${res.status} from the endpoint`);
+}
 
 interface Entry {
   title: string | null;
@@ -64,6 +114,7 @@ export class ResultTitles {
   private cache = new Map<string, Entry>();
   private asking = new Set<string>();
   private queue: string[] = [];
+  private health: TitleStatus = { state: "unchecked" };
 
   constructor(
     private readonly opts: {
@@ -88,6 +139,11 @@ export class ResultTitles {
       this.queue.push(id);
     }
     this.pump();
+  }
+
+  /** Whether the endpoint answered the last lookup, and if not, why. */
+  status(): TitleStatus {
+    return this.health;
   }
 
   /** Resolves when everything asked for so far has an answer (tests). */
@@ -118,23 +174,44 @@ export class ResultTitles {
   private async ask(id: string): Promise<void> {
     const fetcher = this.opts.fetch ?? ((url, init) => fetch(url, init));
     try {
-      const res = await fetcher(this.opts.mcpUrl, {
-        method: "POST",
-        redirect: "error",
-        signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
-        headers: {
-          authorization: `Bearer ${this.opts.token}`,
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream",
-        },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_entity", arguments: { id } } }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const title = titleFromAnswer(rpcResult(await res.text(), res.headers.get("content-type") ?? ""));
+      let res: Response;
+      try {
+        res = await fetcher(this.opts.mcpUrl, {
+          method: "POST",
+          // Never follow: the token goes to this address and nowhere else. A
+          // redirect is reported with its target instead.
+          redirect: "manual",
+          signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
+          headers: {
+            authorization: `Bearer ${this.opts.token}`,
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_entity", arguments: { id } } }),
+        });
+      } catch (err) {
+        throw (err as Error).name === "TimeoutError"
+          ? new LookupError("timeout", `no answer within ${LOOKUP_TIMEOUT_MS / 1000} s`)
+          : new LookupError("network", "cannot reach the endpoint (DNS, TLS or network)");
+      }
+      if (!res.ok) throw httpReason(res, this.opts.mcpUrl);
+      let answer: unknown;
+      try {
+        answer = rpcResult(await res.text(), res.headers.get("content-type") ?? "");
+      } catch {
+        throw new LookupError("not mcp", "the answer is no MCP (JSON-RPC) answer");
+      }
+      const rpcError = (answer as { error?: { code?: unknown } })?.error;
+      if (rpcError) throw new LookupError("rpc error", `the endpoint answered with JSON-RPC error ${String(rpcError.code ?? "")}`.trim());
+      this.health = { state: "ok", at: this.now() };
+      const title = titleFromAnswer(answer);
       this.remember(id, title, title ? TITLE_TTL_MS : FAILURE_TTL_MS);
     } catch (err) {
+      const e = err instanceof LookupError ? err : new LookupError("error", "the lookup failed");
+      const now = this.now();
+      this.health = { state: "failing", at: now, since: this.health.state === "failing" ? this.health.since : now, reason: e.reason };
       this.remember(id, null, FAILURE_TTL_MS);
-      log("warn", "result title lookup failed", { error: (err as Error).name === "TimeoutError" ? "timeout" : String((err as Error).message).slice(0, 80) });
+      log("warn", "result title lookup failed", { error: e.kind });
     }
   }
 }
