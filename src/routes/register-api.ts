@@ -43,9 +43,12 @@ export function createRegisterApiRoutes({ registration, guard, behindProxy = tru
       // Nothing that is not a registration token is accepted here, by design.
       return c.json({ error: "registration_token_required" }, 401);
     }
-    // A throttled client gets its answer before any work: no scrypt, no audit row, no body read.
+    // A throttled client whose token cannot be ours (no token shape, unknown id) gets its answer before
+    // any work: no scrypt, no audit row, no body read. A token with a known id is always checked: the
+    // throttle is shared by every kind of credential from that address (an office behind one NAT),
+    // and valid credentials must pass. scrypt is asynchronous, so checking them stalls nothing.
     const wait = guard?.waitFor(c) ?? 0;
-    if (wait > 0) {
+    if (wait > 0 && !registration.namesKnownToken(header.slice(7))) {
       c.header("Retry-After", String(wait));
       return c.json({ error: "too_many_attempts" }, 429);
     }

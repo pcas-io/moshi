@@ -213,23 +213,29 @@ describe("registration tokens: rate limit and audit (criteria 5, 6)", () => {
 });
 
 describe("registration tokens: flood resistance (automated security review)", () => {
-  it("answers a throttled client before any scrypt, body read or audit row", async () => {
-    const { token, registration_token } = await mint();
+  it("answers a throttled client with a token that cannot be ours before any scrypt or audit row", async () => {
+    await mint();
     capture();
-    const forged = token.slice(0, -4) + (token.endsWith("AAAA") ? "BBBB" : "AAAA");
-    const statuses: number[] = [];
-    for (let i = 0; i < 10; i++) statuses.push((await register(forged, `x-${i}`)).status);
-    expect(statuses.every((s) => s === 401)).toBe(true);
+    const unknown = `rt_${"0".repeat(26)}_${"A".repeat(43)}`;
+    for (let i = 0; i < 10; i++) expect((await register(unknown, `x-${i}`)).status).toBe(401);
     const crypto = await import("node:crypto");
     const scrypt = vi.spyOn(crypto.default, "scrypt");
     const auditBefore = (t.h.db.prepare("SELECT COUNT(*) AS n FROM registration_audit").get() as { n: number }).n;
-    const throttled = await register(token, "anna-ok"); // even the right token waits: same client
+    const throttled = await register(unknown, "x-late");
     expect(throttled.status).toBe(429);
     expect(Number(throttled.headers.get("Retry-After"))).toBeGreaterThan(0);
     expect(scrypt).not.toHaveBeenCalled();
     expect((t.h.db.prepare("SELECT COUNT(*) AS n FROM registration_audit").get() as { n: number }).n).toBe(auditBefore);
-    expect(t.h.agents.getByName("anna-ok")).toBeNull();
-    expect(registration_token.id).toBeTruthy();
+  });
+
+  it("still lets a valid token through from a throttled address (shared throttle, e.g. one NAT)", async () => {
+    const { token } = await mint();
+    capture();
+    const unknown = `rt_${"0".repeat(26)}_${"A".repeat(43)}`;
+    for (let i = 0; i < 12; i++) await register(unknown, `x-${i}`);  // someone else on the address
+    const ok = await register(token, "anna-ok");
+    expect(ok.status).toBe(201);
+    expect(t.h.agents.getByName("anna-ok")?.is_active).toBe(1);
   });
 
   it("does not audit tokens it cannot attribute (unknown id or no token shape)", async () => {

@@ -160,6 +160,14 @@ export class RegistrationService {
       .all(tokenId, Math.max(1, Math.min(limit, 500))) as { name: string | null; result: string; created_at: string }[];
   }
 
+  /** Whether a presented plaintext names a token we have (shape + id, no hashing). Lets a route
+   *  answer a throttled client cheaply when its token cannot be ours, while a token with a known id
+   *  is always checked: valid credentials pass, whatever else happened from the same address. */
+  namesKnownToken(plain: string): boolean {
+    const parsed = parseRegistrationToken(plain);
+    return !!parsed && !!this.db.prepare("SELECT 1 FROM registration_tokens WHERE id = ?").get(parsed.id);
+  }
+
   /** Only attempts that name a token we have are recorded: an attempt with a token that is no token
    *  of ours cannot be attributed to anyone, and recording it would let anyone fill the table. Those
    *  are counted and logged by the sign-in guard instead. */
