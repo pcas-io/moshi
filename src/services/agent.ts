@@ -3,7 +3,8 @@ import { ulid } from "ulidx";
 import type Database from "better-sqlite3";
 import type { Agent } from "../types";
 import { MAX_AGENTS } from "../types";
-import type { ActivityService } from "./activity";
+import type { ActivityService, AuditBy, AuditDetail } from "./activity";
+import { auditByOf } from "./activity";
 import { log } from "./logger";
 
 // Minimal interface for NATS cleanup — only what AgentService needs.
@@ -120,6 +121,33 @@ export class AgentService {
     });
   }
 
+  /**
+   * One audit row about agent `targetKey` plus its log line. `by` is what the
+   * route passed: who, from where, from which (hashed) address. A bare string
+   * is an older caller's actor name and writes no origin.
+   */
+  private audit(
+    action: string,
+    id: string,
+    summary: string,
+    targetKey: string,
+    by: string | AuditBy | undefined,
+    detail?: AuditDetail,
+  ): void {
+    const who = auditByOf(by);
+    this.activity.audit({
+      action,
+      entity_type: "agent",
+      entity_id: id,
+      summary,
+      agent_name: who.actor,
+      target_key: targetKey,
+      origin: who.origin ?? null,
+      ip_hash: who.ip_hash ?? null,
+      detail: detail ?? null,
+    });
+  }
+
   /** Throws the user-facing reason when `name` cannot be used. */
   private assertUsableName(name: string): void {
     if (isReservedAgentName(name)) throw new Error(reservedNameError(name));
@@ -149,7 +177,7 @@ export class AgentService {
   create(
     name: string,
     avatar?: string,
-    adminName?: string,
+    by?: string | AuditBy,
   ): { agent: Agent; plaintextToken: string } {
     // NATS-safety: reject names that would corrupt subject/durable routing.
     this.assertUsableName(name);
@@ -181,13 +209,7 @@ export class AgentService {
 
     clearTokenCache();
 
-    this.activity.log({
-      action: "agent_created",
-      entity_type: "agent",
-      entity_id: id,
-      summary: `Agent "${name}" created`,
-      agent_name: adminName,
-    });
+    this.audit("agent_created", id, `Agent "${name}" created`, inbox_key, by, { new: { name } });
 
     const agent: Agent = {
       id,
@@ -247,7 +269,7 @@ export class AgentService {
     return row ?? null;
   }
 
-  revokeById(id: string, adminName?: string): boolean {
+  revokeById(id: string, by?: string | AuditBy): boolean {
     const agent = this.db
       .prepare("SELECT name, inbox_key FROM agents WHERE id = ?")
       .get(id) as { name: string; inbox_key: string | null } | undefined;
@@ -262,14 +284,9 @@ export class AgentService {
     clearTokenCache();
 
     if (result.changes > 0) {
-      this.dropWebhook(id, agent.name, "agent deactivated", adminName);
-      this.activity.log({
-        action: "agent_revoked",
-        entity_type: "agent",
-        entity_id: id,
-        summary: `Agent "${agent.name}" revoked`,
-        agent_name: adminName,
-      });
+      this.dropWebhook(id, agent.name, inboxKeyOf(agent), "agent deactivated", by);
+      this.audit("agent_revoked", id, `Agent "${agent.name}" revoked`, inboxKeyOf(agent), by,
+        { old: { is_active: true }, new: { is_active: false } });
       // C8: Clean up NATS consumers so revoked agents don't leak
       // durable subscriptions. Fire-and-forget, non-blocking.
       this.cleanupNatsConsumers(inboxKeyOf(agent), "revoke");
@@ -308,27 +325,21 @@ export class AgentService {
    * go on reporting who writes to the agent long after the token was taken
    * away. Setting it again is one call for the agent with its new token.
    */
-  private dropWebhook(id: string, name: string, reason: string, adminName?: string): void {
+  private dropWebhook(id: string, name: string, key: string, reason: string, by?: string | AuditBy): void {
     const removed = this.db
       .prepare("DELETE FROM agent_webhooks WHERE agent_key = (SELECT inbox_key FROM agents WHERE id = ?)")
       .run(id).changes;
     if (removed === 0) return;
-    this.activity.log({
-      action: "webhook_deleted",
-      entity_type: "agent",
-      entity_id: id,
-      summary: `Webhook of "${name}" removed (${reason})`,
-      agent_name: adminName,
-    });
+    this.audit("webhook_deleted", id, `Webhook of "${name}" removed (${reason})`, key, by);
   }
 
   reactivate(
     id: string,
-    adminName?: string,
+    by?: string | AuditBy,
   ): { plaintextToken: string } | null {
     const agent = this.db
-      .prepare("SELECT name, is_active FROM agents WHERE id = ?")
-      .get(id) as { name: string; is_active: number } | undefined;
+      .prepare("SELECT name, inbox_key, is_active FROM agents WHERE id = ?")
+      .get(id) as { name: string; inbox_key: string | null; is_active: number } | undefined;
 
     if (!agent || agent.is_active === 1) return null;
 
@@ -346,15 +357,10 @@ export class AgentService {
 
     clearTokenCache();
     // One left over from before revoking dropped it.
-    this.dropWebhook(id, agent.name, "agent reactivated", adminName);
+    this.dropWebhook(id, agent.name, inboxKeyOf(agent), "agent reactivated", by);
 
-    this.activity.log({
-      action: "agent_reactivated",
-      entity_type: "agent",
-      entity_id: id,
-      summary: `Agent "${agent.name}" reactivated with new token`,
-      agent_name: adminName,
-    });
+    this.audit("agent_reactivated", id, `Agent "${agent.name}" reactivated with new token`, inboxKeyOf(agent), by,
+      { old: { is_active: false }, new: { is_active: true } });
 
     return { plaintextToken };
   }
@@ -377,7 +383,7 @@ export class AgentService {
    * Returns false when the agent does not exist, true otherwise — also for
    * an unchanged name, which is a no-op without a write or an audit entry.
    */
-  rename(id: string, newName: string, adminName?: string): boolean {
+  rename(id: string, newName: string, by?: string | AuditBy): boolean {
     const agent = this.db
       .prepare("SELECT name, inbox_key, created_at, name_since FROM agents WHERE id = ?")
       .get(id) as
@@ -399,6 +405,7 @@ export class AgentService {
     const oldName = agent.name;
     const heldSince = agent.name_since ?? agent.created_at;
     const now = new Date().toISOString();
+    let key = agent.inbox_key;
     const renamed = this.db.transaction((): boolean => {
       // A row can lack a key when it was created by a build from before
       // migration 0005 after a rollback. Pin it to the address it has been
@@ -409,9 +416,8 @@ export class AgentService {
         const taken = this.db
           .prepare("SELECT 1 FROM agents WHERE inbox_key = ? AND id != ?")
           .get(current, id);
-        this.db
-          .prepare("UPDATE agents SET inbox_key = ? WHERE id = ?")
-          .run(taken ? this.allocateInboxKey(oldName) : current, id);
+        key = taken ? this.allocateInboxKey(oldName) : current;
+        this.db.prepare("UPDATE agents SET inbox_key = ? WHERE id = ?").run(key, id);
       }
       const result = this.db
         .prepare("UPDATE agents SET name = ?, name_since = ?, updated_at = ? WHERE id = ?")
@@ -434,17 +440,12 @@ export class AgentService {
 
     if (!renamed) return false;
 
-    this.activity.log({
-      action: "agent_renamed",
-      entity_type: "agent",
-      entity_id: id,
-      summary: `Agent "${oldName}" renamed to "${newName}"`,
-      agent_name: adminName,
-    });
+    this.audit("agent_renamed", id, `Agent "${oldName}" renamed to "${newName}"`, key ?? oldName.toLowerCase(), by,
+      { old: { name: oldName }, new: { name: newName } });
     return true;
   }
 
-  deleteById(id: string, adminName?: string): boolean {
+  deleteById(id: string, by?: string | AuditBy): boolean {
     const agent = this.db
       .prepare("SELECT name, inbox_key FROM agents WHERE id = ?")
       .get(id) as { name: string; inbox_key: string | null } | undefined;
@@ -460,13 +461,8 @@ export class AgentService {
     if (result.changes > 0) {
       // C8: Clean up NATS consumers for the deleted agent.
       this.cleanupNatsConsumers(inboxKeyOf(agent), "delete");
-      this.activity.log({
-        action: "agent_deleted",
-        entity_type: "agent",
-        entity_id: id,
-        summary: `Agent "${agent.name}" deleted`,
-        agent_name: adminName,
-      });
+      this.audit("agent_deleted", id, `Agent "${agent.name}" deleted`, inboxKeyOf(agent), by,
+        { old: { name: agent.name } });
       return true;
     }
 
@@ -475,11 +471,11 @@ export class AgentService {
 
   resetToken(
     id: string,
-    adminName?: string,
+    by?: string | AuditBy,
   ): { plaintextToken: string } | null {
     const agent = this.db
-      .prepare("SELECT name, is_active FROM agents WHERE id = ?")
-      .get(id) as { name: string; is_active: number } | undefined;
+      .prepare("SELECT name, inbox_key, is_active FROM agents WHERE id = ?")
+      .get(id) as { name: string; inbox_key: string | null; is_active: number } | undefined;
 
     if (!agent || agent.is_active !== 1) return null;
 
@@ -492,15 +488,10 @@ export class AgentService {
       .run(token_hash, now, id);
 
     clearTokenCache();
-    this.dropWebhook(id, agent.name, "token reset", adminName);
+    this.dropWebhook(id, agent.name, inboxKeyOf(agent), "token reset", by);
 
-    this.activity.log({
-      action: "agent_token_reset",
-      entity_type: "agent",
-      entity_id: id,
-      summary: `Token reset for agent "${agent.name}"`,
-      agent_name: adminName,
-    });
+    // No detail: old and new are tokens, and neither belongs in a row.
+    this.audit("agent_token_reset", id, `Token reset for agent "${agent.name}"`, inboxKeyOf(agent), by);
 
     return { plaintextToken };
   }

@@ -53,7 +53,7 @@ const agents = new AgentService(db, activity, nats);
 const rateLimiter = new RateLimiter(RATE_LIMIT_PER_MINUTE);
 // Presence: single write-path (touch) + single read-path (list/countByState).
 // Wired into authMiddleware and every MCP tool that needs agent presence.
-const presence = new PresenceService(db, nats);
+const presence = new PresenceService(db, nats, activity);
 // A message the broker has given up on gets an audit row. Until now nobody
 // was listening when the broker said so.
 nats.onDeadLetter((letter, streamCreated) => recordDeadLetter(db, activity, letter, streamCreated));

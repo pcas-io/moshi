@@ -272,6 +272,7 @@ export class WebhookService {
       // shown to everyone who signs in to the dashboard.
       summary: `Webhook of "${this.nameOf(agentKey) ?? agentKey}" set (${kind === "claude_routine" ? "Claude Code routine" : authMode})`,
       agent_name: actor,
+      target_key: agentKey,
     });
     return { view: this.get(agentKey)!, ...(generatedSecret ? { generatedSecret } : {}) };
   }
@@ -314,6 +315,7 @@ export class WebhookService {
         entity_id: agentKey,
         summary: `Webhook of "${name ?? agentKey}" removed`,
         agent_name: actor,
+        target_key: agentKey,
       });
     }
     return removed;

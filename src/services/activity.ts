@@ -1,6 +1,7 @@
 import { ulid } from "ulidx";
 import type Database from "better-sqlite3";
 import type { Activity, PaginatedResult } from "../types";
+import { log as writeLog } from "./logger";
 
 /**
  * The identity the operator writes under. `auth.ts` resolves the admin
@@ -12,6 +13,57 @@ export const OPERATOR_ACTOR = "admin";
 
 export function isOperatorActor(agentName: string | null | undefined): boolean {
   return agentName === undefined || agentName === null || agentName === OPERATOR_ACTOR;
+}
+
+/**
+ * Where an audited action came from (migration 0016, `activity_log.origin`).
+ * `dashboard`: the Agents page; `admin_api`: `/api/admin`; `register`:
+ * `/api/register` with a registration token; `connect`: the connect flow;
+ * `presence`: an agent's own `mesh_register`.
+ */
+export const AUDIT_ORIGINS = ["dashboard", "admin_api", "register", "connect", "presence"] as const;
+export type AuditOrigin = (typeof AUDIT_ORIGINS)[number];
+
+/**
+ * Who did it, from where. Passed from the route that knows (the dashboard,
+ * the admin API, the register route, the connect page) down to the service
+ * that writes the row. `ip_hash` is `hashIP` of the client address, never the
+ * address itself.
+ */
+export interface AuditBy {
+  actor: string;
+  origin: AuditOrigin;
+  ip_hash?: string | null;
+}
+
+/** Older callers name the actor only; they still write a row, without origin. */
+export function auditByOf(by: string | AuditBy | undefined): Partial<AuditBy> {
+  if (by === undefined) return {};
+  return typeof by === "string" ? { actor: by } : by;
+}
+
+/** A value before and after: what `detail_json` holds where something changed. */
+export interface AuditDetail {
+  old?: unknown;
+  new?: unknown;
+}
+
+export interface ActivityLogParams {
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  summary?: string;
+  agent_name?: string;
+  /** The actor's inbox key (migration 0011). `agent_name` is a label and a
+   *  rename rewrites the message history but no audit row; whatever has to
+   *  find this row again asks by key. */
+  agent_key?: string;
+  /** The inbox key of the agent the row is ABOUT (migration 0016). */
+  target_key?: string | null;
+  origin?: AuditOrigin | null;
+  ip_hash?: string | null;
+  /** Stored as JSON. Never a token or a secret. */
+  detail?: AuditDetail | null;
 }
 
 /** Rolling windows the Log route accepts as `?range=`. */
@@ -43,7 +95,10 @@ export function startOfDayIso(now: number = Date.now()): string {
  * count a count-within-a-page and moved the page boundary silently.
  */
 export interface ActivityFilter {
+  /** An agent's name: rows it did (actor) OR rows about it (`target_key`). */
   agent_name?: string;
+  /** The inbox key `agent_name` resolves to. Set by the service, not by callers. */
+  agent_key?: string;
   entity_type?: string;
   /** Free text over summary/action/actor, plus an exact entity id. */
   q?: string;
@@ -79,8 +134,11 @@ function buildFilter(f: ActivityFilter): SqlFilter {
   // `?agent=` in a bookmarked URL must not empty the whole log.
   const agentName = f.agent_name?.trim();
   if (agentName) {
-    conditions.push("agent_name = ? COLLATE NOCASE");
-    bindings.push(agentName);
+    // Actor OR target: the operator does most of what happens TO an agent,
+    // and those rows carry "admin" as actor. The target is a key, so a
+    // renamed agent is found under its new name with its whole history.
+    conditions.push("(agent_name = ? COLLATE NOCASE OR target_key = ?)");
+    bindings.push(agentName, f.agent_key ?? agentName.toLowerCase());
   }
   const q = f.q?.trim();
   if (q) {
@@ -116,24 +174,16 @@ function buildFilter(f: ActivityFilter): SqlFilter {
 export class ActivityService {
   constructor(private db: Database.Database) {}
 
-  log(params: {
-    action: string;
-    entity_type: string;
-    entity_id: string;
-    summary?: string;
-    agent_name?: string;
-    /** The actor's inbox key (migration 0011). `agent_name` is a label and a
-     *  rename rewrites the message history but no audit row; whatever has to
-     *  find this row again asks by key. */
-    agent_key?: string;
-  }): Activity {
+  log(params: ActivityLogParams): Activity {
     const id = ulid();
     const created_at = new Date().toISOString();
+    const detail_json = params.detail ? JSON.stringify(params.detail) : null;
 
     this.db
       .prepare(
-        `INSERT INTO activity_log (id, action, entity_type, entity_id, summary, agent_name, agent_key, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO activity_log (id, action, entity_type, entity_id, summary, agent_name, agent_key,
+                                   target_key, origin, ip_hash, detail_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -143,6 +193,10 @@ export class ActivityService {
         params.summary ?? null,
         params.agent_name ?? null,
         params.agent_key ?? null,
+        params.target_key ?? null,
+        params.origin ?? null,
+        params.ip_hash ?? null,
+        detail_json,
         created_at,
       );
 
@@ -153,13 +207,45 @@ export class ActivityService {
       entity_id: params.entity_id,
       summary: params.summary ?? null,
       agent_name: params.agent_name ?? null,
+      target_key: params.target_key ?? null,
+      origin: params.origin ?? null,
+      detail_json,
       created_at,
     };
   }
 
+  /**
+   * An audited lifecycle event: the row, and one structured log line with
+   * event, actor, target and origin, so the trail survives in the container
+   * log as well. The line carries nothing else on purpose: no summary, no
+   * detail, never a token or a secret, never the address hash.
+   */
+  audit(params: ActivityLogParams): Activity {
+    const row = this.log(params);
+    writeLog("info", "audit", {
+      event: params.action,
+      actor: params.agent_name ?? OPERATOR_ACTOR,
+      target: params.target_key ?? null,
+      origin: params.origin ?? null,
+      entity_id: params.entity_id,
+    });
+    return row;
+  }
+
+  /** The inbox key a name stands for now, or the lower-cased name: a deleted
+   *  agent's key was its lower-cased name unless it had to be suffixed. */
+  private withKey<F extends ActivityFilter>(f: F): F {
+    const name = f.agent_name?.trim();
+    if (!name || f.agent_key) return f;
+    const row = this.db.prepare("SELECT inbox_key FROM agents WHERE name = ? COLLATE NOCASE").get(name) as
+      | { inbox_key: string | null }
+      | undefined;
+    return { ...f, agent_key: row?.inbox_key ?? name.toLowerCase() };
+  }
+
   list(params: ActivityFilter & { limit: number; offset: number }): PaginatedResult<Activity> {
     const { limit, offset } = params;
-    const { where, bindings } = buildFilter(params);
+    const { where, bindings } = buildFilter(this.withKey(params));
 
     const data = this.db
       .prepare(`SELECT * FROM activity_log${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
@@ -185,7 +271,7 @@ export class ActivityService {
    * row, not the page on screen, so the bars are real totals.
    */
   topActors(params: ActivityFilter & { limit: number }): ActivityActorCount[] {
-    const { where, bindings } = buildFilter(params);
+    const { where, bindings } = buildFilter(this.withKey(params));
 
     return this.db
       .prepare(
@@ -218,13 +304,7 @@ export class ActivityService {
     return result.changes;
   }
 
-  logAsync(params: {
-    action: string;
-    entity_type: string;
-    entity_id: string;
-    summary?: string;
-    agent_name?: string;
-  }): void {
+  logAsync(params: ActivityLogParams): void {
     try {
       this.log(params);
     } catch {

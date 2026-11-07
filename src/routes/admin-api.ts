@@ -10,8 +10,9 @@
 // Bearer itself is compared with the admin token(s) instead.
 //
 // A plaintext token appears exactly once, in the answer to create,
-// reset-token or reactivate. AgentService logs the action, the agent's name
-// and the admin; never the token.
+// reset-token or reactivate. AgentService logs the action, the agent's name,
+// the actor (`admin:api`), origin `admin_api` and the hashed client address;
+// never the token.
 
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
@@ -27,6 +28,7 @@ import type { WebhookService } from "../services/webhooks.js";
 import { loadBoard } from "../services/board.js";
 import type { BoardLinks } from "../services/board.js";
 import { hashToken, timingSafeEqual } from "../auth.js";
+import { auditBy } from "../services/audit-request.js";
 
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -104,7 +106,7 @@ export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLink
       return c.json({ error: "invalid_avatar" }, 400);
     }
     try {
-      const { agent, plaintextToken } = agents.create(name.trim(), avatar, ACTOR);
+      const { agent, plaintextToken } = agents.create(name.trim(), avatar, auditBy(c, ACTOR, "admin_api"));
       return c.json({ agent: publicAgent(agent), token: plaintextToken }, 201);
     } catch (err: unknown) {
       if (err instanceof NameTakenError) return c.json({ error: "name_taken", message: err.message }, 409);
@@ -116,7 +118,7 @@ export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLink
   api.post("/agents/:ref/reset-token", (c) => {
     const agent = resolve(c.req.param("ref"));
     if (!agent) return c.json({ error: "not_found" }, 404);
-    const result = agents.resetToken(agent.id, ACTOR);
+    const result = agents.resetToken(agent.id, auditBy(c, ACTOR, "admin_api"));
     if (!result) return c.json({ error: "not_active" }, 409);
     return c.json({ agent: { id: agent.id, name: agent.name }, token: result.plaintextToken });
   });
@@ -124,14 +126,14 @@ export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLink
   api.post("/agents/:ref/revoke", (c) => {
     const agent = resolve(c.req.param("ref"));
     if (!agent) return c.json({ error: "not_found" }, 404);
-    agents.revokeById(agent.id, ACTOR);
+    agents.revokeById(agent.id, auditBy(c, ACTOR, "admin_api"));
     return c.json({ agent: { id: agent.id, name: agent.name }, is_active: false });
   });
 
   api.post("/agents/:ref/reactivate", (c) => {
     const agent = resolve(c.req.param("ref"));
     if (!agent) return c.json({ error: "not_found" }, 404);
-    const result = agents.reactivate(agent.id, ACTOR);
+    const result = agents.reactivate(agent.id, auditBy(c, ACTOR, "admin_api"));
     if (!result) return c.json({ error: "already_active" }, 409);
     return c.json({ agent: { id: agent.id, name: agent.name }, token: result.plaintextToken });
   });
@@ -157,6 +159,7 @@ export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLink
         const { token, plaintext } = await registration.create({
           label, namePrefix: prefix as string | null | undefined, expiresAt: expires as string | null | undefined,
           maxPerHour: max as number | undefined, createdBy: ACTOR,
+          by: auditBy(c, ACTOR, "admin_api"),
         });
         return c.json({ registration_token: token, token: plaintext }, 201);
       } catch (err: unknown) {
@@ -170,7 +173,7 @@ export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLink
       return c.json({ audit: registration.audit(id) });
     });
     api.post("/registration-tokens/:id/revoke", (c) => {
-      const view = registration.revoke(c.req.param("id"));
+      const view = registration.revoke(c.req.param("id"), auditBy(c, ACTOR, "admin_api"));
       return view ? c.json({ registration_token: view }) : c.json({ error: "not_found" }, 404);
     });
   }

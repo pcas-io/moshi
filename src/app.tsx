@@ -113,6 +113,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   app.use("*", async (c, next) => {
     // Kept before c.env is replaced: without a proxy in front, this is who called.
     c.set("peerAddress", (c.env as unknown as NodeBindings | undefined)?.incoming?.socket?.remoteAddress);
+    c.set("behindProxy", config.behindProxy);
     c.env = {
       NATS_URL: config.natsUrl,
       MESH_ADMIN_TOKEN: config.meshAdminToken,
@@ -223,7 +224,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
 
   // --- Agent registration with a registration token (own token check, no
   // auth middleware; see src/routes/register-api.ts, ADR ocellio 06aef68e) ---
-  const registration = new RegistrationService(db, agents, now ?? Date.now);
+  const registration = new RegistrationService(db, agents, now ?? Date.now, activity);
   app.route("/api/register", createRegisterApiRoutes({ registration, guard, behindProxy: config.behindProxy }));
 
   // --- Auth middleware on all other routes ---

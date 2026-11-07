@@ -167,7 +167,7 @@ export function createHarness(opts: { rateLimiter?: RateLimiter } = {}): Harness
   const activity = new ActivityService(db);
   const agents = new AgentService(db, activity);
   const nats = createFakeMeshNats();
-  const presence = new PresenceService(db, nats);
+  const presence = new PresenceService(db, nats, activity);
   const rateLimiter = opts.rateLimiter ?? new RateLimiter(60);
   const dns = new Map<string, string[]>([["hooks.example.com", ["93.184.215.14"]]]);
   const resolve = async (host: string): Promise<Resolved> => {
