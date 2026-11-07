@@ -36,6 +36,7 @@ import type { McpRouteNats } from "./routes/mcp.js";
 import { createDashboardRoutes } from "./routes/dashboard.js";
 import { createFragmentRoutes } from "./routes/fragments.js";
 import { createSseRoutes } from "./routes/sse.js";
+import { createAdminApiRoutes } from "./routes/admin-api.js";
 import { listenerCount } from "./services/message-events.js";
 import { createOAuthRoutes } from "./oauth.js";
 import { registerCliRoutes, requestOrigin } from "./services/cli-dist.js";
@@ -226,6 +227,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   // and nobody anonymous should get to park a connection on an admin action.
   // /login and /oauth/* are public and read their body, so theirs stay up top.
   app.use("/agents/*", smallFormLimit);
+  app.use("/api/admin/*", smallFormLimit);
 
   // --- MCP endpoint ---
   app.route("/", createMcpRoute({ nats, agents, activity, rateLimiter, presence, webhooks, db }));
@@ -238,6 +240,9 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
 
   // The signal that makes those refreshes immediate: GET /sse/messages.
   app.route("/", createSseRoutes());
+
+  // --- Operator JSON API (admin Bearer only; see src/routes/admin-api.ts) ---
+  app.route("/api/admin", createAdminApiRoutes({ db, agents, presence, webhooks, boardLinks, guard, now }));
 
   // --- OAuth routes ---
   app.route("/", createOAuthRoutes(agents, db, guard));

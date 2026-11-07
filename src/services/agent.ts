@@ -52,6 +52,14 @@ export function takenNameError(name: string): string {
   return `There's already an agent called ${name}. Pick another name.`;
 }
 
+/** A name is held by another agent (case-insensitive, as getByName looks it up). */
+export class NameTakenError extends Error {
+  constructor(name: string) {
+    super(takenNameError(name));
+    this.name = "NameTakenError";
+  }
+}
+
 export function isValidAgentName(name: string): boolean {
   return AGENT_NAME_RE.test(name) && !isReservedAgentName(name);
 }
@@ -145,6 +153,10 @@ export class AgentService {
   ): { agent: Agent; plaintextToken: string } {
     // NATS-safety: reject names that would corrupt subject/durable routing.
     this.assertUsableName(name);
+
+    // Names are unique case-insensitively ("VIBE" when "vibe" exists). Without
+    // this the INSERT would fail on the UNIQUE constraint and leak its text.
+    if (this.getByName(name)) throw new NameTakenError(name);
 
     // Check max agents limit
     const count = this.db
@@ -244,7 +256,7 @@ export class AgentService {
 
     const now = new Date().toISOString();
     const result = this.db
-      .prepare("UPDATE agents SET is_active = 0, updated_at = ? WHERE id = ?")
+      .prepare("UPDATE agents SET is_active = 0, updated_at = ? WHERE id = ? AND is_active = 1")
       .run(now, id);
 
     clearTokenCache();
@@ -381,7 +393,7 @@ export class AgentService {
       .prepare("SELECT id FROM agents WHERE name = ? COLLATE NOCASE AND id != ?")
       .get(newName, id) as { id: string } | undefined;
     if (taken) {
-      throw new Error(takenNameError(newName));
+      throw new NameTakenError(newName);
     }
 
     const oldName = agent.name;
