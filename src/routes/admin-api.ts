@@ -154,7 +154,7 @@ export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLink
       if (expires !== undefined && expires !== null && typeof expires !== "string") return c.json({ error: "invalid_expires_at" }, 400);
       if (max !== undefined && typeof max !== "number") return c.json({ error: "invalid_max_per_hour" }, 400);
       try {
-        const { token, plaintext } = registration.create({
+        const { token, plaintext } = await registration.create({
           label, namePrefix: prefix as string | null | undefined, expiresAt: expires as string | null | undefined,
           maxPerHour: max as number | undefined, createdBy: ACTOR,
         });

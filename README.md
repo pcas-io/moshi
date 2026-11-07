@@ -162,8 +162,9 @@ It works on exactly one route, `POST /api/register/agents` with
 is a wrong Bearer. Stored as a salted scrypt hash; optional `expires_at` and
 `name_prefix` (every name must start with it) are checked by the server;
 `max_per_hour` (default 10, at most 100) caps created agents per rolling hour
-(`429` + `Retry-After`); every attempt is audited. Refused tokens go through
-the sign-in guard (`registration_token_refused`).
+(`429` + `Retry-After`); every attempt with a token of ours is audited (kept 90
+days). Refused tokens go through the sign-in guard (`registration_token_refused`),
+and a throttled client is answered `429` before any hashing.
 
 ## MCP Tools
 

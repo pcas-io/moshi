@@ -29,6 +29,12 @@ export interface SignInGuard {
    * a log line.
    */
   failure(c: Context, reason: SignInFailure): number;
+  /**
+   * Seconds this client still has to wait, 0 when it may try. For routes that
+   * would otherwise do expensive work for a throttled client (registration:
+   * one scrypt per attempt) before they know the credential is wrong.
+   */
+  waitFor(c: Context): number;
 }
 
 export interface SignInGuardOptions {
@@ -61,6 +67,10 @@ export function createSignInGuard(
   }
 
   return {
+    waitFor(c) {
+      const ip = clientIp(c.req, (c.get("peerAddress" as never) as string | undefined) ?? undefined, { behindProxy });
+      return throttle.retryAfter(clientKey(ip));
+    },
     failure(c, reason) {
       const ip = clientIp(c.req, (c.get("peerAddress" as never) as string | undefined) ?? undefined, { behindProxy });
       const client = clientKey(ip);

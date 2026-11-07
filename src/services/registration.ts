@@ -54,10 +54,16 @@ interface Row extends RegistrationToken {
   secret_hash: string;
 }
 
-function hashSecret(secret: string, salt: string): string {
-  return crypto.scryptSync(secret, Buffer.from(salt, "hex"), SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p })
-    .toString("hex");
+/** Off the event loop (libuv thread pool): a flood of attempts must not stall every other request. */
+function hashSecret(secret: string, salt: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(secret, Buffer.from(salt, "hex"), SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p },
+      (err, key) => (err ? reject(err) : resolve(key.toString("hex"))));
+  });
 }
+
+/** How long audit rows are kept (the hourly sweep prunes older ones). */
+export const AUDIT_RETENTION_DAYS = 90;
 
 /** `rt_<id>_<secret>` → its parts, or null for anything else. */
 export function parseRegistrationToken(plain: string): { id: string; secret: string } | null {
@@ -81,13 +87,13 @@ export class RegistrationService {
     private now: () => number = Date.now,
   ) {}
 
-  create(params: {
+  async create(params: {
     label: string;
     namePrefix?: string | null;
     expiresAt?: string | null;
     maxPerHour?: number;
     createdBy: string;
-  }): { token: RegistrationTokenView; plaintext: string } {
+  }): Promise<{ token: RegistrationTokenView; plaintext: string }> {
     const label = params.label.trim();
     if (!label || label.length > MAX_LABEL) throw new Error(`label: 1 to ${MAX_LABEL} characters`);
     const prefix = params.namePrefix?.trim() || null;
@@ -113,7 +119,7 @@ export class RegistrationService {
         `INSERT INTO registration_tokens (id, label, salt, secret_hash, name_prefix, expires_at, max_per_hour, created_at, created_by)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, label, salt, hashSecret(secret, salt), prefix, expiresAt, maxPerHour, createdAt, params.createdBy);
+      .run(id, label, salt, await hashSecret(secret, salt), prefix, expiresAt, maxPerHour, createdAt, params.createdBy);
     return { token: this.view(id)!, plaintext: `${PREFIX}${id.toLowerCase()}_${secret}` };
   }
 
@@ -154,7 +160,11 @@ export class RegistrationService {
       .all(tokenId, Math.max(1, Math.min(limit, 500))) as { name: string | null; result: string; created_at: string }[];
   }
 
+  /** Only attempts that name a token we have are recorded: an attempt with a token that is no token
+   *  of ours cannot be attributed to anyone, and recording it would let anyone fill the table. Those
+   *  are counted and logged by the sign-in guard instead. */
   private record(tokenId: string | null, name: string | null, result: string, ipHash: string | null): void {
+    if (tokenId === null) return;
     this.db
       .prepare(
         `INSERT INTO registration_audit (id, token_id, name, result, ip_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -163,12 +173,12 @@ export class RegistrationService {
   }
 
   /** The token behind a presented plaintext, if it is valid now. */
-  private authenticate(plain: string): { row: Row } | { reason: "invalid" | "revoked" | "expired"; id: string | null } {
+  private async authenticate(plain: string): Promise<{ row: Row } | { reason: "invalid" | "revoked" | "expired"; id: string | null }> {
     const parsed = parseRegistrationToken(plain);
     if (!parsed) return { reason: "invalid", id: null };
     const row = this.db.prepare("SELECT * FROM registration_tokens WHERE id = ?").get(parsed.id) as Row | undefined;
     // An unknown id still costs one scrypt, so the answer time does not tell ids apart.
-    const actual = hashSecret(parsed.secret, row?.salt ?? "00".repeat(16));
+    const actual = await hashSecret(parsed.secret, row?.salt ?? "00".repeat(16));
     const expected = row?.secret_hash ?? "";
     const match = expected.length === actual.length && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
     if (!row || !match) return { reason: "invalid", id: row ? row.id : null };
@@ -177,9 +187,9 @@ export class RegistrationService {
     return { row };
   }
 
-  register(plain: string, rawName: unknown, rawAvatar: unknown, ipHash: string | null): RegisterResult {
+  async register(plain: string, rawName: unknown, rawAvatar: unknown, ipHash: string | null): Promise<RegisterResult> {
     const name = typeof rawName === "string" ? rawName.trim() : "";
-    const auth = this.authenticate(plain);
+    const auth = await this.authenticate(plain);
     if ("reason" in auth) {
       // A wrong secret for a known id is recorded under that id: the owner sees someone tried.
       this.record(auth.id, name || null, `refused_${auth.reason}`, ipHash);
@@ -225,4 +235,11 @@ export class RegistrationService {
       return { ok: false, status: 400, error: err instanceof Error ? err.message : "create_failed" };
     }
   }
+}
+
+/** For the hourly sweep (maintenance-tasks.ts): audit rows older than the retention. */
+export function pruneRegistrationAudit(db: Database.Database, now: number = Date.now(),
+                                       retentionDays: number = AUDIT_RETENTION_DAYS): number {
+  const before = new Date(now - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  return db.prepare("DELETE FROM registration_audit WHERE created_at < ?").run(before).changes;
 }

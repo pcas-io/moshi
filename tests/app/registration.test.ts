@@ -211,3 +211,50 @@ describe("registration tokens: rate limit and audit (criteria 5, 6)", () => {
     expect(agentLog).not.toContain(token);
   });
 });
+
+describe("registration tokens: flood resistance (automated security review)", () => {
+  it("answers a throttled client before any scrypt, body read or audit row", async () => {
+    const { token, registration_token } = await mint();
+    capture();
+    const forged = token.slice(0, -4) + (token.endsWith("AAAA") ? "BBBB" : "AAAA");
+    const statuses: number[] = [];
+    for (let i = 0; i < 10; i++) statuses.push((await register(forged, `x-${i}`)).status);
+    expect(statuses.every((s) => s === 401)).toBe(true);
+    const crypto = await import("node:crypto");
+    const scrypt = vi.spyOn(crypto.default, "scrypt");
+    const auditBefore = (t.h.db.prepare("SELECT COUNT(*) AS n FROM registration_audit").get() as { n: number }).n;
+    const throttled = await register(token, "anna-ok"); // even the right token waits: same client
+    expect(throttled.status).toBe(429);
+    expect(Number(throttled.headers.get("Retry-After"))).toBeGreaterThan(0);
+    expect(scrypt).not.toHaveBeenCalled();
+    expect((t.h.db.prepare("SELECT COUNT(*) AS n FROM registration_audit").get() as { n: number }).n).toBe(auditBefore);
+    expect(t.h.agents.getByName("anna-ok")).toBeNull();
+    expect(registration_token.id).toBeTruthy();
+  });
+
+  it("does not audit tokens it cannot attribute (unknown id or no token shape)", async () => {
+    capture();
+    const unknown = `rt_${"0".repeat(26)}_${"A".repeat(43)}`;
+    expect((await register(unknown, "x-1")).status).toBe(401);
+    expect((await register("rt_nonsense", "x-2")).status).toBe(401);
+    expect((t.h.db.prepare("SELECT COUNT(*) AS n FROM registration_audit").get() as { n: number }).n).toBe(0);
+  });
+
+  it("hashes with the asynchronous scrypt, off the event loop", async () => {
+    const crypto = await import("node:crypto");
+    const sync = vi.spyOn(crypto.default, "scryptSync");
+    const async = vi.spyOn(crypto.default, "scrypt");
+    const { token } = await mint();
+    expect((await register(token, "a-1")).status).toBe(201);
+    expect(sync).not.toHaveBeenCalled();
+    expect(async).toHaveBeenCalled(); // positive control: the spy does see the service's calls
+  });
+
+  it("prunes audit rows past the retention in the hourly sweep", async () => {
+    const { pruneRegistrationAudit, AUDIT_RETENTION_DAYS } = await import("../../src/services/registration");
+    const { token } = await mint();
+    await register(token, "a-1");
+    expect(pruneRegistrationAudit(t.h.db, clock)).toBe(0);
+    expect(pruneRegistrationAudit(t.h.db, clock + (AUDIT_RETENTION_DAYS + 1) * 24 * 3600 * 1000)).toBe(1);
+  });
+});

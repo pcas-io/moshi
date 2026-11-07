@@ -8,7 +8,8 @@
 //
 // Answers: 201 {agent, token} (the new agent's token, once), 400 bad body or
 // name, 401 invalid / revoked / expired token, 403 name outside the prefix,
-// 409 name_taken, 413 body over 4 KB, 429 hourly cap reached (Retry-After).
+// 409 name_taken, 413 body over 4 KB, 429 hourly cap reached or the client is
+// throttled for wrong credentials (Retry-After; then no scrypt is spent).
 // Every attempt is audited; a refused token also goes through the sign-in
 // guard like any wrong credential.
 
@@ -42,6 +43,12 @@ export function createRegisterApiRoutes({ registration, guard, behindProxy = tru
       // Nothing that is not a registration token is accepted here, by design.
       return c.json({ error: "registration_token_required" }, 401);
     }
+    // A throttled client gets its answer before any work: no scrypt, no audit row, no body read.
+    const wait = guard?.waitFor(c) ?? 0;
+    if (wait > 0) {
+      c.header("Retry-After", String(wait));
+      return c.json({ error: "too_many_attempts" }, 429);
+    }
     let body: unknown;
     try {
       body = await c.req.json();
@@ -54,13 +61,13 @@ export function createRegisterApiRoutes({ registration, guard, behindProxy = tru
     const name = Object.hasOwn(body, "name") ? (body as { name: unknown }).name : undefined;
     const avatar = Object.hasOwn(body, "avatar") ? (body as { avatar: unknown }).avatar : undefined;
     const ip = clientIp(c.req, (c.get("peerAddress" as never) as string | undefined) ?? undefined, { behindProxy });
-    const result = registration.register(header.slice(7), name, avatar, ip === "unknown" ? null : hashIP(ip));
+    const result = await registration.register(header.slice(7), name, avatar, ip === "unknown" ? null : hashIP(ip));
     if (result.ok) {
       return c.json({ agent: publicAgent(result.agent), token: result.token }, 201);
     }
     if (result.status === 401) {
-      const wait = guard?.failure(c, "registration_token_refused") ?? 0;
-      if (wait > 0) c.header("Retry-After", String(wait));
+      const after = guard?.failure(c, "registration_token_refused") ?? 0;
+      if (after > 0) c.header("Retry-After", String(after));
     }
     if (result.status === 429 && result.retryAfter) c.header("Retry-After", String(result.retryAfter));
     return c.json({ error: result.error, ...(result.message ? { message: result.message } : {}) }, result.status);

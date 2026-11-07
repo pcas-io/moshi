@@ -9,6 +9,7 @@ import { cleanupExpiredOAuthCodes, purgeLegacyOAuthTokens } from "../oauth-codes
 import { sweepExpiredUnread } from "./expiry.js";
 import { rotateReads } from "./reads.js";
 import { rotateAttempts } from "./attempts.js";
+import { pruneRegistrationAudit } from "./registration.js";
 import { MESSAGE_RETENTION_DAYS, ACTIVITY_RETENTION_DAYS } from "../types.js";
 
 export const BACKUP_TASK = "backup";
@@ -35,6 +36,7 @@ export function maintenanceTasks({ db, activity, backupDir, backupKeep }: Mainte
     // Older than the stream keeps a message: no repeat can become a delivery.
     { name: "send_attempts", run: () => rotateAttempts(db, 7) },
     { name: "activity_log", run: () => activity.rotate(ACTIVITY_RETENTION_DAYS) },
+    { name: "registration_audit", run: () => pruneRegistrationAudit(db) },
     // Last, so the copy is taken after the rows above are gone. Due once per
     // UTC day; the hourly sweep makes a failed attempt come round again.
     ...(backupDir && backupKeep > 0 ? [{ name: BACKUP_TASK, run: () => backupIfDue(db, { dir: backupDir, keep: backupKeep }) }] : []),
