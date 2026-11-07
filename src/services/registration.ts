@@ -177,7 +177,15 @@ export class RegistrationService {
    *  is always checked: valid credentials pass, whatever else happened from the same address. */
   namesKnownToken(plain: string): boolean {
     const parsed = parseRegistrationToken(plain);
-    return !!parsed && !!this.db.prepare("SELECT 1 FROM registration_tokens WHERE id = ?").get(parsed.id);
+    if (!parsed) return false;
+    // Only a LIVE token counts (review C3): a revoked or expired token's id is in every copy of its
+    // plaintext, and a leaked, revoked token must not keep a way past the throttle.
+    return !!this.db
+      .prepare(
+        `SELECT 1 FROM registration_tokens
+         WHERE id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`,
+      )
+      .get(parsed.id, new Date(this.now()).toISOString());
   }
 
   /** Only attempts that name a token we have are recorded: an attempt with a token that is no token

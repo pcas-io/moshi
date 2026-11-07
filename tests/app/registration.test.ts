@@ -246,6 +246,25 @@ describe("registration tokens: flood resistance (automated security review)", ()
     expect(t.h.agents.getByName("anna-ok")?.is_active).toBe(1);
   });
 
+  it("treats a revoked or expired token from a throttled address like an unknown one (review C3)", async () => {
+    const revoked = await mint({ label: "leaked" });
+    const expiring = await mint({ label: "short", expires_at: new Date(START + 60_000).toISOString() });
+    await t.app.request(`/api/admin/registration-tokens/${revoked.registration_token.id}/revoke`, { method: "POST", headers: ADMIN });
+    clock = START + 120_000;
+    capture();
+    const unknown = `rt_${"0".repeat(26)}_${"A".repeat(43)}`;
+    for (let i = 0; i < 10; i++) await register(unknown, `x-${i}`);  // the address is throttled now
+    const crypto = await import("node:crypto");
+    const scrypt = vi.spyOn(crypto.default, "scrypt");
+    const auditBefore = (t.h.db.prepare("SELECT COUNT(*) AS n FROM registration_audit").get() as { n: number }).n;
+    for (const token of [revoked.token, expiring.token]) {
+      const res = await register(token, "anna-late");
+      expect(res.status).toBe(429);
+    }
+    expect(scrypt).not.toHaveBeenCalled();
+    expect((t.h.db.prepare("SELECT COUNT(*) AS n FROM registration_audit").get() as { n: number }).n).toBe(auditBefore);
+  });
+
   it("does not audit tokens it cannot attribute (unknown id or no token shape)", async () => {
     capture();
     const unknown = `rt_${"0".repeat(26)}_${"A".repeat(43)}`;
