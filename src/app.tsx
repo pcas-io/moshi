@@ -37,6 +37,8 @@ import { createDashboardRoutes } from "./routes/dashboard.js";
 import { createFragmentRoutes } from "./routes/fragments.js";
 import { createSseRoutes } from "./routes/sse.js";
 import { createAdminApiRoutes } from "./routes/admin-api.js";
+import { createRegisterApiRoutes } from "./routes/register-api.js";
+import { RegistrationService } from "./services/registration.js";
 import { listenerCount } from "./services/message-events.js";
 import { createOAuthRoutes } from "./oauth.js";
 import { registerCliRoutes, requestOrigin } from "./services/cli-dist.js";
@@ -219,6 +221,11 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   // --- Sign-in / sign-out (no auth; see src/routes/session.ts) ---
   app.route("/", createSessionRoutes({ agents, secureCookie: config.cookieSecure, guard }));
 
+  // --- Agent registration with a registration token (own token check, no
+  // auth middleware; see src/routes/register-api.ts, ADR ocellio 06aef68e) ---
+  const registration = new RegistrationService(db, agents, now ?? Date.now);
+  app.route("/api/register", createRegisterApiRoutes({ registration, guard, behindProxy: config.behindProxy }));
+
   // --- Auth middleware on all other routes ---
   app.use("*", authMiddleware(agents, presence, activity, { secureCookie: config.cookieSecure, guard }));
 
@@ -242,7 +249,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   app.route("/", createSseRoutes());
 
   // --- Operator JSON API (admin Bearer only; see src/routes/admin-api.ts) ---
-  app.route("/api/admin", createAdminApiRoutes({ db, agents, presence, webhooks, boardLinks, guard, now }));
+  app.route("/api/admin", createAdminApiRoutes({ db, agents, presence, webhooks, boardLinks, guard, registration, now }));
 
   // --- OAuth routes ---
   app.route("/", createOAuthRoutes(agents, db, guard));

@@ -21,6 +21,7 @@ import type { Agent } from "../types.js";
 import { NameTakenError } from "../services/agent.js";
 import type { AgentService } from "../services/agent.js";
 import type { SignInGuard } from "../services/signin-guard.js";
+import type { RegistrationService } from "../services/registration.js";
 import type { PresenceService } from "../services/presence.js";
 import type { WebhookService } from "../services/webhooks.js";
 import { loadBoard } from "../services/board.js";
@@ -37,6 +38,8 @@ export interface AdminApiDeps {
   boardLinks?: BoardLinks;
   /** Counts and logs a refused admin Bearer like any other wrong credential. */
   guard?: SignInGuard;
+  /** Registration tokens (ADR ocellio 06aef68e): created, listed, revoked here. */
+  registration?: RegistrationService;
   now?: () => number;
 }
 
@@ -75,7 +78,7 @@ const adminBearerOnly = (guard?: SignInGuard) => createMiddleware<HonoEnv>(async
   return next();
 });
 
-export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLinks, guard, now = Date.now }: AdminApiDeps): Hono<HonoEnv> {
+export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLinks, guard, registration, now = Date.now }: AdminApiDeps): Hono<HonoEnv> {
   const api = new Hono<HonoEnv>();
   api.use("*", adminBearerOnly(guard));
 
@@ -132,6 +135,45 @@ export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLink
     if (!result) return c.json({ error: "already_active" }, 409);
     return c.json({ agent: { id: agent.id, name: agent.name }, token: result.plaintextToken });
   });
+
+  // --- Registration tokens: create (secret once), list and audit (never the
+  // secret or its hash), revoke. The token itself is used at /api/register. ---
+  if (registration) {
+    api.post("/registration-tokens", async (c) => {
+      let body: unknown;
+      try {
+        body = await c.req.json();
+      } catch {
+        return c.json({ error: "invalid_json" }, 400);
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) return c.json({ error: "invalid_body" }, 400);
+      const field = (key: string) => (Object.hasOwn(body as object, key) ? (body as Record<string, unknown>)[key] : undefined);
+      const label = field("label"), prefix = field("name_prefix"), expires = field("expires_at"), max = field("max_per_hour");
+      if (typeof label !== "string") return c.json({ error: "label_required" }, 400);
+      if (prefix !== undefined && prefix !== null && typeof prefix !== "string") return c.json({ error: "invalid_name_prefix" }, 400);
+      if (expires !== undefined && expires !== null && typeof expires !== "string") return c.json({ error: "invalid_expires_at" }, 400);
+      if (max !== undefined && typeof max !== "number") return c.json({ error: "invalid_max_per_hour" }, 400);
+      try {
+        const { token, plaintext } = await registration.create({
+          label, namePrefix: prefix as string | null | undefined, expiresAt: expires as string | null | undefined,
+          maxPerHour: max as number | undefined, createdBy: ACTOR,
+        });
+        return c.json({ registration_token: token, token: plaintext }, 201);
+      } catch (err: unknown) {
+        return c.json({ error: err instanceof Error ? err.message : "create_failed" }, 400);
+      }
+    });
+    api.get("/registration-tokens", (c) => c.json({ registration_tokens: registration.list() }));
+    api.get("/registration-tokens/:id/audit", (c) => {
+      const id = c.req.param("id");
+      if (!registration.view(id)) return c.json({ error: "not_found" }, 404);
+      return c.json({ audit: registration.audit(id) });
+    });
+    api.post("/registration-tokens/:id/revoke", (c) => {
+      const view = registration.revoke(c.req.param("id"));
+      return view ? c.json({ registration_token: view }) : c.json({ error: "not_found" }, 404);
+    });
+  }
 
   // The board as /board shows it: who has the ball per pair. Types, names and
   // times only; no payload or context ever leaves through here.

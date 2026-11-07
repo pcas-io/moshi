@@ -10,7 +10,7 @@ import { clientIp, clientKey, shortIp } from "./client-ip.js";
 import { SignInThrottle, FAILURE_LIMIT } from "./signin-throttle.js";
 import { log } from "./logger.js";
 
-export type SignInFailure = "wrong_token" | "wrong_bearer" | "admin_token_refused";
+export type SignInFailure = "wrong_token" | "wrong_bearer" | "admin_token_refused" | "registration_token_refused";
 
 /** A path is the sender's text. This much of it goes into a log line. */
 const MAX_LOGGED_PATH = 200;
@@ -29,6 +29,12 @@ export interface SignInGuard {
    * a log line.
    */
   failure(c: Context, reason: SignInFailure): number;
+  /**
+   * Seconds this client still has to wait, 0 when it may try. For routes that
+   * would otherwise do expensive work for a throttled client (registration:
+   * one scrypt per attempt) before they know the credential is wrong.
+   */
+  waitFor(c: Context): number;
 }
 
 export interface SignInGuardOptions {
@@ -61,6 +67,10 @@ export function createSignInGuard(
   }
 
   return {
+    waitFor(c) {
+      const ip = clientIp(c.req, (c.get("peerAddress" as never) as string | undefined) ?? undefined, { behindProxy });
+      return throttle.retryAfter(clientKey(ip));
+    },
     failure(c, reason) {
       const ip = clientIp(c.req, (c.get("peerAddress" as never) as string | undefined) ?? undefined, { behindProxy });
       const client = clientKey(ip);
