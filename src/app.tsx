@@ -242,7 +242,7 @@ export function createApp({ config, db, nats, agents, activity, presence, rateLi
   app.route("/", createSseRoutes());
 
   // --- Operator JSON API (admin Bearer only; see src/routes/admin-api.ts) ---
-  app.route("/api/admin", createAdminApiRoutes({ db, agents, presence, webhooks, boardLinks, now }));
+  app.route("/api/admin", createAdminApiRoutes({ db, agents, presence, webhooks, boardLinks, guard, now }));
 
   // --- OAuth routes ---
   app.route("/", createOAuthRoutes(agents, db, guard));

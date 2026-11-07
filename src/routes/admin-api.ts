@@ -18,7 +18,9 @@ import { createMiddleware } from "hono/factory";
 import type Database from "better-sqlite3";
 import type { Env, AppVariables } from "../types.js";
 import type { Agent } from "../types.js";
+import { NameTakenError } from "../services/agent.js";
 import type { AgentService } from "../services/agent.js";
+import type { SignInGuard } from "../services/signin-guard.js";
 import type { PresenceService } from "../services/presence.js";
 import type { WebhookService } from "../services/webhooks.js";
 import { loadBoard } from "../services/board.js";
@@ -33,8 +35,15 @@ export interface AdminApiDeps {
   presence: PresenceService;
   webhooks: WebhookService;
   boardLinks?: BoardLinks;
+  /** Counts and logs a refused admin Bearer like any other wrong credential. */
+  guard?: SignInGuard;
   now?: () => number;
 }
+
+/** The actor in the audit log: this API, told apart from the dashboard's "admin". */
+const ACTOR = "admin:api";
+/** Avatars are ids such as "avatar-21"; nothing longer belongs in the row. */
+const MAX_AVATAR = 64;
 
 /** The fields an operator tool needs; never the token hash, never the inbox key. */
 function publicAgent(a: Omit<Agent, "token_hash">) {
@@ -49,18 +58,26 @@ function publicAgent(a: Omit<Agent, "token_hash">) {
   };
 }
 
-const adminBearerOnly = createMiddleware<HonoEnv>(async (c, next) => {
+// A wrong Bearer reaches this point only when the auth middleware let the
+// request through on something else: a session cookie (an agent's or the
+// admin's) or an agent's own Bearer. The middleware's guard never saw it, so
+// it is counted and logged here, as "admin_token_refused".
+const adminBearerOnly = (guard?: SignInGuard) => createMiddleware<HonoEnv>(async (c, next) => {
   const header = c.req.header("Authorization") ?? "";
   if (!header.startsWith("Bearer ")) return c.json({ error: "admin_bearer_required" }, 401);
   const presented = hashToken(header.slice(7));
   const tokens = [c.env.MESH_ADMIN_TOKEN, c.env.MESH_ADMIN_TOKEN_PREVIOUS].filter((t): t is string => !!t);
-  if (!tokens.some((t) => timingSafeEqual(presented, hashToken(t)))) return c.json({ error: "forbidden" }, 403);
+  if (!tokens.some((t) => timingSafeEqual(presented, hashToken(t)))) {
+    const wait = guard?.failure(c, "admin_token_refused") ?? 0;
+    if (wait > 0) c.header("Retry-After", String(wait));
+    return c.json({ error: "forbidden" }, 403);
+  }
   return next();
 });
 
-export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLinks, now = Date.now }: AdminApiDeps): Hono<HonoEnv> {
+export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLinks, guard, now = Date.now }: AdminApiDeps): Hono<HonoEnv> {
   const api = new Hono<HonoEnv>();
-  api.use("*", adminBearerOnly);
+  api.use("*", adminBearerOnly(guard));
 
   /** By id first (ids never pass to another agent), then by name. */
   const resolve = (ref: string): Agent | null => agents.getById(ref) ?? agents.getByName(ref);
@@ -80,11 +97,14 @@ export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLink
     const name = Object.hasOwn(body, "name") ? (body as { name: unknown }).name : undefined;
     const avatar = Object.hasOwn(body, "avatar") ? (body as { avatar: unknown }).avatar : undefined;
     if (typeof name !== "string" || !name.trim()) return c.json({ error: "name_required" }, 400);
-    if (avatar !== undefined && typeof avatar !== "string") return c.json({ error: "invalid_avatar" }, 400);
+    if (avatar !== undefined && (typeof avatar !== "string" || avatar.length > MAX_AVATAR)) {
+      return c.json({ error: "invalid_avatar" }, 400);
+    }
     try {
-      const { agent, plaintextToken } = agents.create(name.trim(), avatar, "admin");
+      const { agent, plaintextToken } = agents.create(name.trim(), avatar, ACTOR);
       return c.json({ agent: publicAgent(agent), token: plaintextToken }, 201);
     } catch (err: unknown) {
+      if (err instanceof NameTakenError) return c.json({ error: "name_taken", message: err.message }, 409);
       // The service's messages are user-facing (reserved, taken, rule, limit).
       return c.json({ error: err instanceof Error ? err.message : "create_failed" }, 400);
     }
@@ -93,7 +113,7 @@ export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLink
   api.post("/agents/:ref/reset-token", (c) => {
     const agent = resolve(c.req.param("ref"));
     if (!agent) return c.json({ error: "not_found" }, 404);
-    const result = agents.resetToken(agent.id, "admin");
+    const result = agents.resetToken(agent.id, ACTOR);
     if (!result) return c.json({ error: "not_active" }, 409);
     return c.json({ agent: { id: agent.id, name: agent.name }, token: result.plaintextToken });
   });
@@ -101,14 +121,14 @@ export function createAdminApiRoutes({ db, agents, presence, webhooks, boardLink
   api.post("/agents/:ref/revoke", (c) => {
     const agent = resolve(c.req.param("ref"));
     if (!agent) return c.json({ error: "not_found" }, 404);
-    agents.revokeById(agent.id, "admin");
+    agents.revokeById(agent.id, ACTOR);
     return c.json({ agent: { id: agent.id, name: agent.name }, is_active: false });
   });
 
   api.post("/agents/:ref/reactivate", (c) => {
     const agent = resolve(c.req.param("ref"));
     if (!agent) return c.json({ error: "not_found" }, 404);
-    const result = agents.reactivate(agent.id, "admin");
+    const result = agents.reactivate(agent.id, ACTOR);
     if (!result) return c.json({ error: "already_active" }, 409);
     return c.json({ agent: { id: agent.id, name: agent.name }, token: result.plaintextToken });
   });
