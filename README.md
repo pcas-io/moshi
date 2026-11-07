@@ -129,6 +129,22 @@ stored as a SHA-256 hash — lose it and you reset it from **Agents**.
 The old `/messages` and `/activity` routes redirect to `/log` with their query
 strings intact.
 
+### Operator API
+
+`/api/admin` is the same lifecycle and board for tools instead of a browser
+(mesh-cockpit uses it). Only the admin token as Bearer gets in; a dashboard
+session cookie does not, so no page can make a browser call it. JSON, 4 KB
+bodies at most. A plaintext token appears once, in the answer.
+
+| Method | Path | Answer |
+|---|---|---|
+| GET | `/api/admin/agents` | `{agents: [{id, name, role, is_active, working_on, last_seen_at, created_at}]}` |
+| POST | `/api/admin/agents` `{name, avatar?}` | `201 {agent, token}` |
+| POST | `/api/admin/agents/<id or name>/reset-token` | `{agent, token}`, `409` if deactivated |
+| POST | `/api/admin/agents/<id or name>/revoke` | `{agent, is_active: false}` |
+| POST | `/api/admin/agents/<id or name>/reactivate` | `{agent, token}`, `409` if active |
+| GET | `/api/admin/board` | the board: who has the ball per pair (types, names, times; never payload or context) |
+
 ## MCP Tools
 
 `tools/list` over `POST /mcp` is the source of truth; the dashboard's ⌘K
