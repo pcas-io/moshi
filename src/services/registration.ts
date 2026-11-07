@@ -27,6 +27,10 @@ const MAX_LABEL = 80;
 export const DEFAULT_MAX_PER_HOUR = 10;
 export const MAX_PER_HOUR_CAP = 100;
 const HOUR_MS = 60 * 60 * 1000;
+/** At most this many token checks (one scrypt each, ~16 MB, in the libuv pool shared with fs and dns)
+ *  run at once; more get 429 with Retry-After: 1. Bounds a burst that arrives before any failure is
+ *  counted (review C2). */
+export const MAX_INFLIGHT_CHECKS = 4;
 
 export interface RegistrationToken {
   id: string;
@@ -96,6 +100,14 @@ export class RegistrationService {
   }): Promise<{ token: RegistrationTokenView; plaintext: string }> {
     const label = params.label.trim();
     if (!label || label.length > MAX_LABEL) throw new Error(`label: 1 to ${MAX_LABEL} characters`);
+    // An EMPTY value is refused, never read as "none": an empty environment variable in a tool must
+    // not silently mint a token without prefix or expiry (review C1). Leave the field out for "none".
+    if (params.namePrefix !== undefined && params.namePrefix !== null && !params.namePrefix.trim()) {
+      throw new Error("name_prefix: empty; leave it out for no prefix");
+    }
+    if (params.expiresAt !== undefined && params.expiresAt !== null && !params.expiresAt.trim()) {
+      throw new Error("expires_at: empty; leave it out for no expiry");
+    }
     const prefix = params.namePrefix?.trim() || null;
     if (prefix !== null && !validPrefix(prefix)) throw new Error("name_prefix: letters, digits, _ and -, at most 41");
     let expiresAt: string | null = null;
@@ -195,7 +207,21 @@ export class RegistrationService {
     return { row };
   }
 
+  private inflight = 0;
+
   async register(plain: string, rawName: unknown, rawAvatar: unknown, ipHash: string | null): Promise<RegisterResult> {
+    if (this.inflight >= MAX_INFLIGHT_CHECKS) {
+      return { ok: false, status: 429, error: "busy", retryAfter: 1 };
+    }
+    this.inflight++;
+    try {
+      return await this.registerChecked(plain, rawName, rawAvatar, ipHash);
+    } finally {
+      this.inflight--;
+    }
+  }
+
+  private async registerChecked(plain: string, rawName: unknown, rawAvatar: unknown, ipHash: string | null): Promise<RegisterResult> {
     const name = typeof rawName === "string" ? rawName.trim() : "";
     const auth = await this.authenticate(plain);
     if ("reason" in auth) {

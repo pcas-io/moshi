@@ -148,7 +148,7 @@ that came in on a session cookie or an agent's token is counted and logged as
 | POST | `/api/admin/agents/<id or name>/reactivate` | `{agent, token}`, `409` if active |
 | GET | `/api/admin/board` | the board: who has the ball per pair, with `threadId`, `deliversNext`, and the newest result link with its title; types, names, times; never payload or context |
 | POST | `/api/admin/registration-tokens` `{label, name_prefix?, expires_at?, max_per_hour?}` | `201 {registration_token, token}`: a registration token, its plaintext once |
-| GET | `/api/admin/registration-tokens` | the tokens with use counts, never a secret or hash |
+| GET | `/api/admin/registration-tokens` | the tokens with use counts (agents created in the last 90 days: the audit is pruned after that), never a secret or hash |
 | GET | `/api/admin/registration-tokens/<id>/audit` | every attempt made with it, refused ones too |
 | POST | `/api/admin/registration-tokens/<id>/revoke` | ends it at once |
 
@@ -162,7 +162,8 @@ It works on exactly one route, `POST /api/register/agents` with
 is a wrong Bearer. Stored as a salted scrypt hash; optional `expires_at` and
 `name_prefix` (every name must start with it) are checked by the server;
 `max_per_hour` (default 10, at most 100) caps created agents per rolling hour
-(`429` + `Retry-After`); every attempt with a token of ours is audited (kept 90
+(`429` + `Retry-After`); at most four token checks run at once (`429 busy`);
+an EMPTY `name_prefix` or `expires_at` is refused (leave the field out for none); every attempt with a token of ours is audited (kept 90
 days). Refused tokens go through the sign-in guard (`registration_token_refused`),
 and a throttled client whose token cannot be ours is answered `429` before any
 hashing; a token of ours is always checked, so a valid one passes.

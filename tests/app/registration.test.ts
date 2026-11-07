@@ -170,6 +170,14 @@ describe("registration tokens: name prefix (criterion 4)", () => {
     expect((await register(token, "anna-a b")).status).toBe(400);
   });
 
+  it("refuses an EMPTY prefix or expiry instead of minting an unlimited token (review C1)", async () => {
+    for (const body of [{ label: "x", name_prefix: "" }, { label: "x", name_prefix: "   " }, { label: "x", expires_at: "" }]) {
+      const res = await t.app.request("/api/admin/registration-tokens", { method: "POST", headers: ADMIN, body: JSON.stringify(body) });
+      expect(res.status).toBe(400);
+    }
+    expect(((t.h.db.prepare("SELECT COUNT(*) AS n FROM registration_tokens").get()) as { n: number }).n).toBe(0);
+  });
+
   it("refuses an invalid prefix at creation", async () => {
     for (const prefix of ["../", "a b", "-x"]) {
       const res = await t.app.request("/api/admin/registration-tokens", {
@@ -254,6 +262,22 @@ describe("registration tokens: flood resistance (automated security review)", ()
     expect((await register(token, "a-1")).status).toBe(201);
     expect(sync).not.toHaveBeenCalled();
     expect(async).toHaveBeenCalled(); // positive control: the spy does see the service's calls
+  });
+
+  it("runs at most four token checks at once, the rest get 429 busy (review C2)", async () => {
+    const { token } = await mint();
+    const crypto = await import("node:crypto");
+    const real = crypto.default.scrypt;
+    const release: (() => void)[] = [];
+    vi.spyOn(crypto.default, "scrypt").mockImplementation(((...args: unknown[]) => {
+      release.push(() => (real as (...a: unknown[]) => void)(...args));
+    }) as never);
+    const pending = Array.from({ length: 6 }, (_, i) => register(token, `b-${i}`));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(release.length).toBe(4);
+    release.splice(0).forEach((go) => go());
+    const statuses = (await Promise.all(pending)).map((r) => r.status).sort();
+    expect(statuses).toEqual([201, 201, 201, 201, 429, 429]);
   });
 
   it("prunes audit rows past the retention in the hourly sweep", async () => {
