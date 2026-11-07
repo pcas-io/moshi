@@ -10,7 +10,7 @@ import { clientIp, clientKey, shortIp } from "./client-ip.js";
 import { SignInThrottle, FAILURE_LIMIT } from "./signin-throttle.js";
 import { log } from "./logger.js";
 
-export type SignInFailure = "wrong_token" | "wrong_bearer" | "admin_token_refused";
+export type SignInFailure = "wrong_token" | "wrong_bearer" | "admin_token_refused" | "registration_token_refused";
 
 /** A path is the sender's text. This much of it goes into a log line. */
 const MAX_LOGGED_PATH = 200;

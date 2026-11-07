@@ -1,0 +1,228 @@
+// Registration tokens (ADR ocellio 06aef68e): a token that can create agents
+// and nothing else, for machines that must not hold the admin token.
+//
+// Tech-CIO criteria, where each is met:
+//   1 scope        : only POST /api/register/agents accepts it (routes/register-api.ts);
+//                    the auth middleware does not know it, so everywhere else it is a
+//                    wrong Bearer (401) — never an agent, never the operator.
+//   2 at rest      : scrypt hash with a per-token salt; the plaintext exists once.
+//   3 expires_at   : checked here, on the server (expired = 401).
+//   4 name_prefix  : the name must start with it and still pass the agent name rule.
+//   5 rate limit   : `max_per_hour` created agents per rolling hour, counted from the
+//                    audit rows (survives restarts, holds across containers) → 429.
+//   6 audit        : every attempt lands in registration_audit, refused ones too.
+//   7 no escalation: an agent created this way is a plain agent (AgentService.create).
+//   8 own route    : see 1; negative tests per refused case in tests/app/registration.test.ts.
+
+import crypto from "node:crypto";
+import type Database from "better-sqlite3";
+import { ulid } from "ulidx";
+import { AGENT_NAME_RE, NameTakenError } from "./agent";
+import type { AgentService } from "./agent";
+import type { Agent } from "../types";
+
+const PREFIX = "rt_";
+const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32 } as const;
+const MAX_LABEL = 80;
+export const DEFAULT_MAX_PER_HOUR = 10;
+export const MAX_PER_HOUR_CAP = 100;
+const HOUR_MS = 60 * 60 * 1000;
+
+export interface RegistrationToken {
+  id: string;
+  label: string;
+  name_prefix: string | null;
+  expires_at: string | null;
+  max_per_hour: number;
+  created_at: string;
+  created_by: string;
+  revoked_at: string | null;
+}
+
+/** What an admin sees: never the secret or its hash. */
+export interface RegistrationTokenView extends RegistrationToken {
+  created_agents: number;
+  last_used_at: string | null;
+}
+
+export type RegisterResult =
+  | { ok: true; agent: Agent; token: string; tokenId: string }
+  | { ok: false; status: 400 | 401 | 403 | 409 | 429; error: string; message?: string; retryAfter?: number };
+
+interface Row extends RegistrationToken {
+  salt: string;
+  secret_hash: string;
+}
+
+function hashSecret(secret: string, salt: string): string {
+  return crypto.scryptSync(secret, Buffer.from(salt, "hex"), SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p })
+    .toString("hex");
+}
+
+/** `rt_<id>_<secret>` → its parts, or null for anything else. */
+export function parseRegistrationToken(plain: string): { id: string; secret: string } | null {
+  const match = /^rt_([0-9a-z]{26})_([A-Za-z0-9_-]{43})$/.exec(plain);
+  return match ? { id: match[1].toUpperCase(), secret: match[2] } : null;
+}
+
+export function isRegistrationToken(plain: string): boolean {
+  return plain.startsWith(PREFIX);
+}
+
+/** The prefix itself must be the start of a valid agent name. */
+function validPrefix(prefix: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,40}$/.test(prefix);
+}
+
+export class RegistrationService {
+  constructor(
+    private db: Database.Database,
+    private agents: AgentService,
+    private now: () => number = Date.now,
+  ) {}
+
+  create(params: {
+    label: string;
+    namePrefix?: string | null;
+    expiresAt?: string | null;
+    maxPerHour?: number;
+    createdBy: string;
+  }): { token: RegistrationTokenView; plaintext: string } {
+    const label = params.label.trim();
+    if (!label || label.length > MAX_LABEL) throw new Error(`label: 1 to ${MAX_LABEL} characters`);
+    const prefix = params.namePrefix?.trim() || null;
+    if (prefix !== null && !validPrefix(prefix)) throw new Error("name_prefix: letters, digits, _ and -, at most 41");
+    let expiresAt: string | null = null;
+    if (params.expiresAt) {
+      const t = Date.parse(params.expiresAt);
+      if (Number.isNaN(t)) throw new Error("expires_at: an ISO date");
+      if (t <= this.now()) throw new Error("expires_at: must lie in the future");
+      expiresAt = new Date(t).toISOString();
+    }
+    const maxPerHour = params.maxPerHour ?? DEFAULT_MAX_PER_HOUR;
+    if (!Number.isInteger(maxPerHour) || maxPerHour < 1 || maxPerHour > MAX_PER_HOUR_CAP) {
+      throw new Error(`max_per_hour: 1 to ${MAX_PER_HOUR_CAP}`);
+    }
+
+    const id = ulid();
+    const secret = crypto.randomBytes(32).toString("base64url");
+    const salt = crypto.randomBytes(16).toString("hex");
+    const createdAt = new Date(this.now()).toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO registration_tokens (id, label, salt, secret_hash, name_prefix, expires_at, max_per_hour, created_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(id, label, salt, hashSecret(secret, salt), prefix, expiresAt, maxPerHour, createdAt, params.createdBy);
+    return { token: this.view(id)!, plaintext: `${PREFIX}${id.toLowerCase()}_${secret}` };
+  }
+
+  list(): RegistrationTokenView[] {
+    const ids = this.db.prepare("SELECT id FROM registration_tokens ORDER BY created_at DESC").all() as { id: string }[];
+    return ids.map((r) => this.view(r.id)!);
+  }
+
+  view(id: string): RegistrationTokenView | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, label, name_prefix, expires_at, max_per_hour, created_at, created_by, revoked_at
+         FROM registration_tokens WHERE id = ?`,
+      )
+      .get(id) as RegistrationToken | undefined;
+    if (!row) return null;
+    const usage = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n, MAX(created_at) AS last FROM registration_audit WHERE token_id = ? AND result = 'created'`,
+      )
+      .get(id) as { n: number; last: string | null };
+    return { ...row, created_agents: usage.n, last_used_at: usage.last };
+  }
+
+  /** Revoking twice is fine and changes nothing the second time. */
+  revoke(id: string): RegistrationTokenView | null {
+    this.db
+      .prepare("UPDATE registration_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+      .run(new Date(this.now()).toISOString(), id);
+    return this.view(id);
+  }
+
+  audit(tokenId: string, limit = 50): { name: string | null; result: string; created_at: string }[] {
+    return this.db
+      .prepare(
+        `SELECT name, result, created_at FROM registration_audit WHERE token_id = ? ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(tokenId, Math.max(1, Math.min(limit, 500))) as { name: string | null; result: string; created_at: string }[];
+  }
+
+  private record(tokenId: string | null, name: string | null, result: string, ipHash: string | null): void {
+    this.db
+      .prepare(
+        `INSERT INTO registration_audit (id, token_id, name, result, ip_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(ulid(), tokenId, name ? name.slice(0, 64) : null, result, ipHash, new Date(this.now()).toISOString());
+  }
+
+  /** The token behind a presented plaintext, if it is valid now. */
+  private authenticate(plain: string): { row: Row } | { reason: "invalid" | "revoked" | "expired"; id: string | null } {
+    const parsed = parseRegistrationToken(plain);
+    if (!parsed) return { reason: "invalid", id: null };
+    const row = this.db.prepare("SELECT * FROM registration_tokens WHERE id = ?").get(parsed.id) as Row | undefined;
+    // An unknown id still costs one scrypt, so the answer time does not tell ids apart.
+    const actual = hashSecret(parsed.secret, row?.salt ?? "00".repeat(16));
+    const expected = row?.secret_hash ?? "";
+    const match = expected.length === actual.length && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+    if (!row || !match) return { reason: "invalid", id: row ? row.id : null };
+    if (row.revoked_at) return { reason: "revoked", id: row.id };
+    if (row.expires_at && Date.parse(row.expires_at) <= this.now()) return { reason: "expired", id: row.id };
+    return { row };
+  }
+
+  register(plain: string, rawName: unknown, rawAvatar: unknown, ipHash: string | null): RegisterResult {
+    const name = typeof rawName === "string" ? rawName.trim() : "";
+    const auth = this.authenticate(plain);
+    if ("reason" in auth) {
+      // A wrong secret for a known id is recorded under that id: the owner sees someone tried.
+      this.record(auth.id, name || null, `refused_${auth.reason}`, ipHash);
+      return { ok: false, status: 401, error: auth.reason === "invalid" ? "invalid_token" : `token_${auth.reason}` };
+    }
+    const token = auth.row;
+    if (!name || !AGENT_NAME_RE.test(name)) {
+      this.record(token.id, name || null, "refused_name", ipHash);
+      return { ok: false, status: 400, error: "invalid_name" };
+    }
+    if (token.name_prefix && !(name.startsWith(token.name_prefix) && name.length > token.name_prefix.length)) {
+      this.record(token.id, name, "refused_prefix", ipHash);
+      return { ok: false, status: 403, error: "name_prefix", message: `Names must start with ${token.name_prefix}` };
+    }
+    if (rawAvatar !== undefined && (typeof rawAvatar !== "string" || rawAvatar.length > 64)) {
+      this.record(token.id, name, "refused_avatar", ipHash);
+      return { ok: false, status: 400, error: "invalid_avatar" };
+    }
+    const since = new Date(this.now() - HOUR_MS).toISOString();
+    const recent = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n, MIN(created_at) AS first FROM registration_audit
+         WHERE token_id = ? AND result = 'created' AND created_at > ?`,
+      )
+      .get(token.id, since) as { n: number; first: string | null };
+    if (recent.n >= token.max_per_hour) {
+      this.record(token.id, name, "refused_rate", ipHash);
+      const retryAfter = recent.first
+        ? Math.max(1, Math.ceil((Date.parse(recent.first) + HOUR_MS - this.now()) / 1000))
+        : 3600;
+      return { ok: false, status: 429, error: "rate_limited", retryAfter };
+    }
+    try {
+      const created = this.agents.create(name, rawAvatar as string | undefined, `register:${token.id}`);
+      this.record(token.id, name, "created", ipHash);
+      return { ok: true, agent: created.agent, token: created.plaintextToken, tokenId: token.id };
+    } catch (err: unknown) {
+      if (err instanceof NameTakenError) {
+        this.record(token.id, name, "refused_taken", ipHash);
+        return { ok: false, status: 409, error: "name_taken", message: err.message };
+      }
+      this.record(token.id, name, "refused_other", ipHash);
+      return { ok: false, status: 400, error: err instanceof Error ? err.message : "create_failed" };
+    }
+  }
+}

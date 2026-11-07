@@ -147,6 +147,23 @@ that came in on a session cookie or an agent's token is counted and logged as
 | POST | `/api/admin/agents/<id or name>/revoke` | `{agent, is_active: false}` |
 | POST | `/api/admin/agents/<id or name>/reactivate` | `{agent, token}`, `409` if active |
 | GET | `/api/admin/board` | the board: who has the ball per pair, with `threadId`, `deliversNext`, and the newest result link with its title; types, names, times; never payload or context |
+| POST | `/api/admin/registration-tokens` `{label, name_prefix?, expires_at?, max_per_hour?}` | `201 {registration_token, token}`: a registration token, its plaintext once |
+| GET | `/api/admin/registration-tokens` | the tokens with use counts, never a secret or hash |
+| GET | `/api/admin/registration-tokens/<id>/audit` | every attempt made with it, refused ones too |
+| POST | `/api/admin/registration-tokens/<id>/revoke` | ends it at once |
+
+### Registration tokens
+
+A registration token (`rt_…`) creates agents and nothing else, for machines
+that must not hold the admin token (a customer's laptop running mesh-cockpit).
+It works on exactly one route, `POST /api/register/agents` with
+`Authorization: Bearer rt_…` and `{name, avatar?}`, which answers `201
+{agent, token}` with the new agent's own, ordinary token. Everywhere else it
+is a wrong Bearer. Stored as a salted scrypt hash; optional `expires_at` and
+`name_prefix` (every name must start with it) are checked by the server;
+`max_per_hour` (default 10, at most 100) caps created agents per rolling hour
+(`429` + `Retry-After`); every attempt is audited. Refused tokens go through
+the sign-in guard (`registration_token_refused`).
 
 ## MCP Tools
 
