@@ -106,6 +106,12 @@ export interface Activity {
   entity_id: string;
   summary: string | null;
   agent_name: string | null;
+  /** Inbox key of the agent the row is about (migration 0016). */
+  target_key?: string | null;
+  /** dashboard | admin_api | register | connect | presence (migration 0016). */
+  origin?: string | null;
+  /** `{"old": …, "new": …}` where a value changed (migration 0016). */
+  detail_json?: string | null;
   created_at: string;
 }
 
@@ -118,6 +124,9 @@ export interface AppVariables {
   /** The socket's remote address, kept before `c.env` is replaced by the
    *  config bindings. Only used when no proxy named a client. */
   peerAddress?: string;
+  /** `config.behindProxy`, for routes that hash the client address into an
+   *  audit row (src/services/audit-request.ts). */
+  behindProxy?: boolean;
   /** The nonce of this response's Content-Security-Policy. Set before the
    *  handler runs; the views read it through src/views/nonce.tsx. */
   cspNonce: string;

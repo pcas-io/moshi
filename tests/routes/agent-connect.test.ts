@@ -2,6 +2,7 @@
 // the step-4 poll lives on. No NATS, no SQLite: the route only needs the
 // two narrow service interfaces it declares.
 
+import type { AuditBy } from "../../src/services/activity";
 import { describe, it, expect, beforeEach } from "vitest";
 import { Hono } from "hono";
 import type { Agent, AppVariables, Env, RequestAgent } from "../../src/types";
@@ -36,11 +37,11 @@ function agentRow(over: Partial<Agent> = {}): Agent {
 
 class FakeAgents implements ConnectAgentService {
   rows: Agent[] = [];
-  createdBy: string | undefined;
+  createdBy: string | AuditBy | undefined;
   nextId = 1;
 
-  create(name: string, _avatar?: string, adminName?: string) {
-    this.createdBy = adminName;
+  create(name: string, _avatar?: string, by?: string | AuditBy) {
+    this.createdBy = by;
     const agent = agentRow({ id: `01HZ${this.nextId++}`, name });
     this.rows.push(agent);
     return { agent, plaintextToken: `bt_token_for_${name}` };
@@ -199,7 +200,7 @@ describe("POST /agents/connect/create", () => {
       form({ csrf: generateCsrfToken(SECRET, BINDING), name: "dex-eu" }),
     );
     expect(res.status).toBe(302);
-    expect(agents.createdBy).toBe("admin");
+    expect(agents.createdBy).toMatchObject({ actor: "admin", origin: "connect" });
 
     const location = res.headers.get("location") ?? "";
     expect(location).toMatch(/^\/agents\/connect\?step=2&s=[^&]+&client=code$/);

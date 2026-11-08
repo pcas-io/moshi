@@ -17,6 +17,8 @@ import { createConnectSession, readConnectSession } from "../services/connect-se
 import { NAME_RULE_MESSAGE, renderConnectPage, type ConnectStep } from "../views/v2/connect.js";
 import { stepHref } from "../views/v2/connect-parts.js";
 import { formString } from "./form.js";
+import { auditBy } from "../services/audit-request.js";
+import type { AuditBy } from "../services/activity.js";
 import {
   DEFAULT_CONNECT_CLIENT,
   isConnectClientKey,
@@ -31,7 +33,7 @@ export interface ConnectAgentService {
   create(
     name: string,
     avatar?: string,
-    adminName?: string,
+    by?: string | AuditBy,
   ): { agent: Agent; plaintextToken: string };
   getByName(name: string): Agent | null;
 }
@@ -148,7 +150,7 @@ export function createAgentConnectRoutes({
 
     let created: { agent: Agent; plaintextToken: string };
     try {
-      created = agents.create(name, undefined, admin.name);
+      created = agents.create(name, undefined, auditBy(c, admin.name, "connect"));
     } catch (err: unknown) {
       return again(err instanceof Error ? err.message : CREATE_ERROR, 400);
     }

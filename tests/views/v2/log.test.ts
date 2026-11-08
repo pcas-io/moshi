@@ -385,6 +385,21 @@ describe("audit sentences", () => {
       "A call of kate's webhook failed for good"],
     [{ action: "webhook_disabled", agent_name: "kate", summary: 'Webhook of "kate" switched off after repeated failures (HTTP 404)' },
       "kate's webhook was switched off after five failed calls in a row"],
+    // "You" is the operator's alone: the actor that really did it is named.
+    [{ action: "agent_created", agent_name: "admin:api", summary: 'Agent "kate" created' }, "Admin API created kate"],
+    [{ action: "agent_created", agent_name: "register:01TOKEN", summary: 'Agent "kate" created' },
+      "Registration token 01TOKEN created kate"],
+    [{ action: "agent_created", agent_name: "admin", origin: "connect", summary: 'Agent "kate" created' }, "You created kate via Connect"],
+    [{ action: "agent_revoked", agent_name: "admin:api", summary: 'Agent "kate" revoked' }, "Admin API deactivated kate"],
+    [{ action: "agent_reactivated", agent_name: "admin:api", summary: 'Agent "kate" reactivated with new token' }, "Admin API reactivated kate"],
+    [{ action: "agent_token_reset", agent_name: "admin:api", summary: 'Token reset for agent "kate"' }, "Admin API reset kate's token"],
+    [{ action: "webhook_deleted", agent_name: "admin:api", summary: 'Webhook of "kate" removed (token reset)' }, "Admin API removed kate's webhook"],
+    [{ action: "agent_profile_changed", agent_name: "kate", summary: 'Agent "kate" changed its role and capabilities' },
+      "kate changed its role and capabilities"],
+    [{ action: "registration_token_created", agent_name: "admin:api", entity_id: "01TOKEN", summary: 'Registration token 01TOKEN created ("anna")' },
+      "Admin API created registration token 01TOKEN"],
+    [{ action: "registration_token_revoked", agent_name: "admin:api", entity_id: "01TOKEN", summary: "Registration token 01TOKEN revoked" },
+      "Admin API revoked registration token 01TOKEN"],
   ];
 
   for (const [over, expected] of cases) {

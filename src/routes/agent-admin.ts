@@ -9,6 +9,7 @@ import type { AgentService } from "../services/agent.js";
 import { csrfOk } from "../auth.js";
 import { setFlash } from "../services/flash.js";
 import { formString } from "./form.js";
+import { auditBy } from "../services/audit-request.js";
 
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -39,7 +40,7 @@ export function createAgentAdminRoutes({ agents }: AgentAdminDeps): Hono<HonoEnv
     }
 
     try {
-      const { plaintextToken } = agents.create(name, avatar, agent.name);
+      const { plaintextToken } = agents.create(name, avatar, auditBy(c, agent.name, "dashboard"));
       const flashKey = setFlash({ newToken: plaintextToken });
       return c.redirect(`/agents?flash=${flashKey}`);
     } catch (err: unknown) {
@@ -64,7 +65,7 @@ export function createAgentAdminRoutes({ agents }: AgentAdminDeps): Hono<HonoEnv
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
-    agents.revokeById(id, agent.name);
+    agents.revokeById(id, auditBy(c, agent.name, "dashboard"));
     return c.redirect("/agents");
   });
 
@@ -81,7 +82,7 @@ export function createAgentAdminRoutes({ agents }: AgentAdminDeps): Hono<HonoEnv
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
-    const result = agents.reactivate(id, agent.name);
+    const result = agents.reactivate(id, auditBy(c, agent.name, "dashboard"));
     if (result) {
       const flashKey = setFlash({ newToken: result.plaintextToken });
       return c.redirect(`/agents?flash=${flashKey}`);
@@ -112,7 +113,7 @@ export function createAgentAdminRoutes({ agents }: AgentAdminDeps): Hono<HonoEnv
 
     let found: boolean;
     try {
-      found = agents.rename(id, name, agent.name);
+      found = agents.rename(id, name, auditBy(c, agent.name, "dashboard"));
     } catch (err: unknown) {
       return refuse(
         err instanceof Error
@@ -145,7 +146,7 @@ export function createAgentAdminRoutes({ agents }: AgentAdminDeps): Hono<HonoEnv
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
-    const result = agents.resetToken(id, agent.name);
+    const result = agents.resetToken(id, auditBy(c, agent.name, "dashboard"));
     if (result) {
       const flashKey = setFlash({ newToken: result.plaintextToken });
       return c.redirect(`/agents?flash=${flashKey}`);
@@ -166,7 +167,7 @@ export function createAgentAdminRoutes({ agents }: AgentAdminDeps): Hono<HonoEnv
       return c.redirect(`/agents?flash=${flashKey}`);
     }
 
-    agents.deleteById(id, agent.name);
+    agents.deleteById(id, auditBy(c, agent.name, "dashboard"));
     return c.redirect("/agents");
   });
 

@@ -10,7 +10,10 @@
 //   4 name_prefix  : the name must start with it and still pass the agent name rule.
 //   5 rate limit   : `max_per_hour` created agents per rolling hour, counted from the
 //                    audit rows (survives restarts, holds across containers) → 429.
-//   6 audit        : every attempt lands in registration_audit, refused ones too.
+//   6 audit        : every attempt lands in registration_audit, refused ones too; minting
+//                    and revoking a token are `registration_token_created` / `_revoked`
+//                    rows in activity_log (never the secret), a created agent is an
+//                    `agent_created` row with origin `register` and actor `register:<id>`.
 //   7 no escalation: an agent created this way is a plain agent (AgentService.create).
 //   8 own route    : see 1; negative tests per refused case in tests/app/registration.test.ts.
 
@@ -20,6 +23,8 @@ import { ulid } from "ulidx";
 import { AGENT_NAME_RE, NameTakenError } from "./agent";
 import type { AgentService } from "./agent";
 import type { Agent } from "../types";
+import { registerActor } from "./activity";
+import type { ActivityService, AuditBy } from "./activity";
 
 const PREFIX = "rt_";
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32 } as const;
@@ -89,6 +94,7 @@ export class RegistrationService {
     private db: Database.Database,
     private agents: AgentService,
     private now: () => number = Date.now,
+    private activity?: ActivityService,
   ) {}
 
   async create(params: {
@@ -97,6 +103,8 @@ export class RegistrationService {
     expiresAt?: string | null;
     maxPerHour?: number;
     createdBy: string;
+    /** Origin and hashed address for the audit row; the actor is `createdBy`. */
+    by?: AuditBy;
   }): Promise<{ token: RegistrationTokenView; plaintext: string }> {
     const label = params.label.trim();
     if (!label || label.length > MAX_LABEL) throw new Error(`label: 1 to ${MAX_LABEL} characters`);
@@ -132,6 +140,17 @@ export class RegistrationService {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(id, label, salt, await hashSecret(secret, salt), prefix, expiresAt, maxPerHour, createdAt, params.createdBy);
+    // The settings only. The secret exists once, in the answer; its hash and salt stay in their table.
+    this.activity?.audit({
+      action: "registration_token_created",
+      entity_type: "registration_token",
+      entity_id: id,
+      summary: `Registration token ${id} created ("${label}")`,
+      agent_name: params.createdBy,
+      origin: params.by?.origin ?? null,
+      ip_hash: params.by?.ip_hash ?? null,
+      detail: { new: { label, name_prefix: prefix, expires_at: expiresAt, max_per_hour: maxPerHour } },
+    });
     return { token: this.view(id)!, plaintext: `${PREFIX}${id.toLowerCase()}_${secret}` };
   }
 
@@ -156,11 +175,24 @@ export class RegistrationService {
     return { ...row, created_agents: usage.n, last_used_at: usage.last };
   }
 
-  /** Revoking twice is fine and changes nothing the second time. */
-  revoke(id: string): RegistrationTokenView | null {
-    this.db
+  /** Revoking twice is fine and changes nothing the second time (and writes no second audit row). */
+  revoke(id: string, by?: AuditBy): RegistrationTokenView | null {
+    const revokedAt = new Date(this.now()).toISOString();
+    const changed = this.db
       .prepare("UPDATE registration_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
-      .run(new Date(this.now()).toISOString(), id);
+      .run(revokedAt, id).changes;
+    if (changed > 0) {
+      this.activity?.audit({
+        action: "registration_token_revoked",
+        entity_type: "registration_token",
+        entity_id: id,
+        summary: `Registration token ${id} revoked`,
+        agent_name: by?.actor,
+        origin: by?.origin ?? null,
+        ip_hash: by?.ip_hash ?? null,
+        detail: { old: { revoked_at: null }, new: { revoked_at: revokedAt } },
+      });
+    }
     return this.view(id);
   }
 
@@ -265,7 +297,8 @@ export class RegistrationService {
       return { ok: false, status: 429, error: "rate_limited", retryAfter };
     }
     try {
-      const created = this.agents.create(name, rawAvatar as string | undefined, `register:${token.id}`);
+      const created = this.agents.create(name, rawAvatar as string | undefined,
+        { actor: registerActor(token.id), origin: "register", ip_hash: ipHash });
       this.record(token.id, name, "created", ipHash);
       return { ok: true, agent: created.agent, token: created.plaintextToken, tokenId: token.id };
     } catch (err: unknown) {

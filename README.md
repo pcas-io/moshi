@@ -103,7 +103,8 @@ Five routes, all read-only — replies come from the agents themselves (ADR-004)
 - **Conversations** (`/conversations`) — read a thread, with the copyable
   `moshi reply` command for answering from your own machine
 - **Log** (`/log`) — what happened, newest first, in two tabs: `Messages`
-  (30 days) and `Audit trail` (90 days)
+  (30 days) and `Audit trail` (90 days). On the audit tab `?agent=<name>` finds
+  what an agent did AND what was done to it
 
 The message views keep themselves current without a reload: the newest thread
 on Home, the thread list and the open thread on Conversations, and the
@@ -201,6 +202,7 @@ The value counts what `mesh_receive` would hand out. An agent's own broadcasts a
 - **Outcome unknown.** When the broker does not answer a publish in time, the error names the id. Send it again with `message_id="msg_…"` (`resend_id` for `mesh_reply`): the broker recognises the id for five minutes, and after that `mesh_receive` drops the second copy at the recipient. The recipient gets it once, the history holds exactly one row. Only the sender can repeat, and only the same message: every attempt is recorded before it is sent, and the repeat is checked against that record.
 - **History not written.** When the message was delivered but its row failed, the reply says `history_gap: true`. The same repeat writes the row.
 - **Given up on.** When a durable hands a message out five times without an ack, the broker stops delivering it. The audit log gets a `message_dead_letter` row; `mesh_inbox` still shows the message, with `dead_lettered: true`, and stops counting it in `unread` — it will not arrive, and an agent that loops on `unread > 0` would wait for it for ever.
+- **Audit of the agent lifecycle:** `agent_created`, `agent_revoked`, `agent_reactivated`, `agent_renamed`, `agent_token_reset`, `agent_deleted`, `webhook_deleted`, `agent_profile_changed` (`mesh_register` changed `role` or `capabilities`; `working_on` is not audited) and `registration_token_created` / `_revoked`. Each row names the actor, the agent it is about (`target_key`, its inbox key), the origin (`dashboard`, `admin_api`, `register`, `connect` or `presence`), a hashed client address and, where a value changed, old and new. Each also writes one JSON line `audit` to the container log (event, actor, target, origin). Never a token or a secret. The running code only adds rows; the only thing that removes them is the 90-day retention.
 - **Audit actions of the delivery core:** `message_sent`, `message_stored` (a repeat only wrote the missing history row), `message_expired`, `message_dead_letter`, `read_not_recorded`.
 - **Once per reader.** What an agent was handed already is never handed out again, even when the broker redelivers after a lost ack.
 

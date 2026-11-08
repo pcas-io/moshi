@@ -33,6 +33,7 @@
 import type Database from "better-sqlite3";
 import type { Agent } from "../types.js";
 import { log } from "./logger.js";
+import type { ActivityService } from "./activity.js";
 
 export type Presence = "live" | "stale" | "offline" | "never";
 
@@ -124,11 +125,77 @@ interface RawKvEntry {
  *  healthy write takes a few milliseconds. */
 export const TOUCH_KV_WAIT_MS = 300;
 
+/** `agents.capabilities` as written by `touch` (a JSON array); older free-form text as it is. */
+function parseStoredList(raw: string | null): unknown {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
 export class PresenceService {
   constructor(
     private readonly db: Database.Database,
     private readonly nats: NatsPresenceBackend,
+    /** Writes `agent_profile_changed` when `role` or `capabilities` change. */
+    private readonly activity?: ActivityService,
   ) {}
+
+  /**
+   * The `role` / `capabilities` an agent is about to overwrite, if it sends
+   * either. A bare liveness touch reads nothing. `working_on` is no part of
+   * it: it changes with every delivery and would bury the audit.
+   */
+  private profileBefore(agentName: string, meta: PresenceMeta) {
+    if (!this.activity || (meta.role === undefined && meta.capabilities === undefined)) return null;
+    return (this.db
+      .prepare("SELECT id, name, inbox_key, role, capabilities FROM agents WHERE name = ? COLLATE NOCASE")
+      .get(agentName) as
+      | { id: string; name: string; inbox_key: string | null; role: string | null; capabilities: string | null }
+      | undefined) ?? null;
+  }
+
+  /** One `agent_profile_changed` row with what changed, old and new; none when nothing did. */
+  private auditProfile(
+    before: NonNullable<ReturnType<PresenceService["profileBefore"]>>,
+    meta: PresenceMeta,
+    ipHash: string | null,
+  ): void {
+    const old: Record<string, unknown> = {};
+    const next: Record<string, unknown> = {};
+    if (meta.role !== undefined && meta.role !== before.role) {
+      old.role = before.role;
+      next.role = meta.role;
+    }
+    if (meta.capabilities !== undefined) {
+      const stored = JSON.stringify(meta.capabilities);
+      if (stored !== before.capabilities) {
+        old.capabilities = parseStoredList(before.capabilities);
+        next.capabilities = meta.capabilities;
+      }
+    }
+    const fields = Object.keys(next);
+    if (fields.length === 0) return;
+    const key = before.inbox_key ?? before.name.toLowerCase();
+    try {
+      this.activity!.audit({
+        action: "agent_profile_changed",
+        entity_type: "agent",
+        entity_id: before.id,
+        summary: `Agent "${before.name}" changed its ${fields.join(" and ")}`,
+        agent_name: before.name,
+        target_key: key,
+        origin: "presence",
+        ip_hash: ipHash,
+        detail: { old, new: next },
+      });
+    } catch (err: unknown) {
+      // The profile is written; a failed audit row must not fail mesh_register.
+      log("warn", "profile audit failed", { agent: before.name, err: String(err) });
+    }
+  }
 
   /**
    * Record that `agentName` interacted with the mesh right now. Updates
@@ -140,7 +207,8 @@ export class PresenceService {
    * corresponding SQLite columns. Unsupplied fields are left untouched
    * (so a bare `touch(name)` acts as a pure liveness bump).
    */
-  async touch(agentName: string, meta: PresenceMeta = {}): Promise<void> {
+  async touch(agentName: string, meta: PresenceMeta = {}, audit: { ip_hash?: string | null } = {}): Promise<void> {
+    const before = this.profileBefore(agentName, meta);
     // 1. SQLite — always updated, this is the authoritative audit trail.
     //    Build a dynamic SET clause so that unsupplied meta fields keep
     //    their current value (a bare touch is a pure liveness bump).
@@ -165,6 +233,7 @@ export class PresenceService {
         `UPDATE agents SET ${assignments.join(", ")} WHERE name = ? COLLATE NOCASE`,
       )
       .run(...values);
+    if (before) this.auditProfile(before, meta, audit.ip_hash ?? null);
 
     // 2. NATS KV — best effort liveness flag (timestamp only), the bucket
     //    has its own TTL auto-expire. Metadata deliberately stays out of
