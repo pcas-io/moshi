@@ -135,6 +135,15 @@ describe("MCP tools — agent identity", () => {
     expect(viaRoot.json.count).toBe(2);
   });
 
+  it("mesh_status leaves deactivated agents out, as the dashboard promises", async () => {
+    const before = await callTool(alpha, "mesh_status", {});
+    expect((before.json.agents as { name: string }[]).map((a) => a.name)).toContain("beta");
+    h.agents.revokeById(h.agents.getByName("beta")!.id);
+    const after = await callTool(alpha, "mesh_status", {});
+    expect((after.json.agents as { name: string }[]).map((a) => a.name)).not.toContain("beta");
+    expect((after.json.agents as { name: string }[]).map((a) => a.name)).toContain("alpha");
+  });
+
   it("mesh_register persists metadata in SQLite and mesh_status reads it back (D4)", async () => {
     const reg = await callTool(alpha, "mesh_register", { role: "reviewer", capabilities: ["review"], working_on: "top5" });
     expect(reg.json.registered).toBe(true);

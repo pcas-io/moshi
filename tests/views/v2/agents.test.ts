@@ -38,6 +38,41 @@ function agent(over: Partial<V2AgentsAgent> = {}): V2AgentsAgent {
 const BASE = { csrfToken: "csrf-token-1", userRole: "admin" } as const;
 const GREEN = "#0e8a3e"; // V2_TOKENS.green — the selected row's inset marker
 
+describe("V2AgentsPage — deactivated agents", () => {
+  const roster = [
+    agent({ id: "a1", name: "scout", presence: "live" }),
+    agent({ id: "a2", name: "qa-bot", presence: "offline" }),
+    agent({ id: "gone1", name: "old-bot", presence: "offline", is_active: false }),
+    agent({ id: "gone2", name: "retired", presence: "never", is_active: false, last_seen_at: null }),
+  ];
+
+  it("groups them under their own heading, collapsed, and leaves them out of the counts", async () => {
+    const html = await render({ ...BASE, agents: roster });
+    expect(html).toContain("Deactivated (2)");
+    expect(html).toContain("All 2");
+    expect(html).toContain("Asleep 1");
+    expect(html).toContain("2 registered, 1 awake");
+    expect(html.indexOf("<details")).toBeGreaterThan(html.indexOf(">qa-bot<"));
+    expect(html.slice(html.indexOf("<details"), html.indexOf("<summary"))).not.toContain("open");
+    expect(html.slice(html.indexOf("<details"), html.indexOf("</details>"))).toContain("old-bot");
+  });
+
+  it("opens the group when one of them is inspected, so the selected row is visible", async () => {
+    const html = await render({ ...BASE, agents: roster, inspectId: "gone1" });
+    expect(html.slice(html.indexOf("<details"), html.indexOf("<summary"))).toContain("open");
+    expect(html).toContain("Reactivate");
+  });
+
+  it("never selects a deactivated agent by default while an active one exists", async () => {
+    const html = await render({ ...BASE, agents: [roster[2], roster[1]] });
+    expect(html).not.toContain("Reactivate");
+  });
+
+  it("shows no group without deactivated agents", async () => {
+    expect(await render({ ...BASE, agents: roster.slice(0, 2) })).not.toContain("<details");
+  });
+});
+
 describe("V2AgentsPage — presence", () => {
   const roster = [
     agent({ id: "a1", name: "scout", presence: "live" }),

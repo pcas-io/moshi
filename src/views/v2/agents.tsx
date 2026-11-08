@@ -210,9 +210,10 @@ const AgentRow: FC<{ agent: V2AgentsAgent; selected: boolean; href: string }> = 
 
 const AgentsTable: FC<{
   visible: V2AgentsAgent[];
+  deactivated: V2AgentsAgent[];
   selectedId: string | null;
   filter?: PresenceFilter;
-}> = ({ visible, selectedId, filter }) => (
+}> = ({ visible, deactivated, selectedId, filter }) => (
   // min-width:0 is load-bearing: without it the flex item refuses to shrink and
   // the scroller below never engages.
   <div style={`flex:1 1 600px;min-width:0;${CARD_PANEL}`}>
@@ -249,7 +250,28 @@ const AgentsTable: FC<{
         message and its button would start at x≈360 on a phone — off-screen
         until you drag the table sideways, on the one screen a new user sees
         first. Rows need the track; a centred sentence does not. */}
-    {visible.length === 0 && <TableEmptyState />}
+    {visible.length === 0 && deactivated.length === 0 && <TableEmptyState />}
+    {/* Out of the way but reachable: reactivating or deleting one still starts here. Open when one of
+        them is the agent in the aside, so the selected row is never hidden. */}
+    {deactivated.length > 0 && (
+      <details open={deactivated.some((a) => a.id === selectedId)} style={`border-top:1px solid ${T.lineSoft}`}>
+        <summary style={`padding:13px 20px;font-size:13.5px;color:${T.dim};cursor:pointer`}>
+          {`Deactivated (${deactivated.length})`}
+        </summary>
+        <div style="overflow-x:auto">
+          <div style="min-width:720px">
+            {deactivated.map((a) => (
+              <AgentRow
+                key={a.id}
+                agent={a}
+                selected={a.id === selectedId}
+                href={`/agents?inspect=${encodeURIComponent(a.id)}${filter ? `&presence=${filter}` : ""}`}
+              />
+            ))}
+          </div>
+        </div>
+      </details>
+    )}
   </div>
 );
 
@@ -281,8 +303,12 @@ const ErrorBand: FC<{ error: string }> = ({ error }) => (
 // ── Page ────────────────────────────────────────────────────────
 
 export const V2AgentsPage: FC<V2AgentsProps> = ({
-  agents, csrfToken, error, inspectId, presenceFilter, newToken, webhookSecret, userRole, userName,
+  agents: roster, csrfToken, error, inspectId, presenceFilter, newToken, webhookSecret, userRole, userName,
 }) => {
+  // Counts, filters and the default selection are about the active roster; deactivated agents get their
+  // own group below it. `inspected` still finds them by id.
+  const agents = roster.filter((a) => a.is_active);
+  const deactivated = roster.filter((a) => !a.is_active);
   const total = agents.length;
   const live = agents.filter((a) => a.presence === "live").length;
   const stale = agents.filter((a) => a.presence === "stale").length;
@@ -300,10 +326,10 @@ export const V2AgentsPage: FC<V2AgentsProps> = ({
   // agent, or failing that the first one on the roster. `null` therefore only
   // happens with an empty roster, the one case that renders no aside at all.
   const inspected: V2AgentsAgent | null =
-    agents.find((a) => a.id === inspectId)
+    roster.find((a) => a.id === inspectId)
     ?? visible.find((a) => a.presence === "live")
     ?? visible[0]
-    ?? agents[0]
+    ?? roster[0]
     ?? null;
 
   return (
@@ -325,7 +351,7 @@ export const V2AgentsPage: FC<V2AgentsProps> = ({
 
       {/* The one m-rise on this screen: the split row, never the table rows. */}
       <div class="m-rise" style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
-        <AgentsTable visible={visible} selectedId={inspected?.id ?? null} filter={filter} />
+        <AgentsTable visible={visible} deactivated={deactivated} selectedId={inspected?.id ?? null} filter={filter} />
         {inspected && (
           <DetailAside agent={inspected} csrfToken={csrfToken}>
             <WebhookPanel agent={inspected} csrfToken={csrfToken} newSecret={webhookSecret} />
