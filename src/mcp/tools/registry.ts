@@ -32,7 +32,9 @@ export function registerRegistryTools(server: McpServer, ctx: ToolContext): void
       // Single read-path: PresenceService.list() joins SQLite + NATS KV
       // and runs the 4-state calculation. C4 graceful degradation on
       // NATS failure is handled inside the service.
-      const entries = await presence.list();
+      // Deactivated agents are gone from the mesh, as the dashboard tells the operator; they stay in
+      // the dashboard (and the audit) only.
+      const entries = (await presence.list()).filter((e) => e.agent.is_active === 1);
       // The state of each hook, never its URL: a trigger URL is half a secret.
       const hooks = ctx.webhooks.statuses();
       const agentList = entries.map((e) => ({
