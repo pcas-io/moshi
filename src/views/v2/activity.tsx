@@ -9,7 +9,7 @@
 import type { Child, FC } from "hono/jsx";
 import type { Activity, PaginatedResult } from "../../types.js";
 import type { ActivityActorCount } from "../../services/activity.js";
-import { isOperatorActor } from "../../services/activity.js";
+import { ADMIN_API_ACTOR, isOperatorActor, registerActorTokenId } from "../../services/activity.js";
 import { V2Avatar, avatarRadius } from "./components.js";
 import { V2_FONT_FAMILY_MONO, V2_TOKENS, kindColors } from "./tokens.js";
 import { BROADCAST_RECIPIENT, LOG_CARD_STYLE, LOG_EMPTY_TEXT, LogEmptyBlock } from "./messages.js";
@@ -31,6 +31,7 @@ const ENTITY_LABELS: Record<string, string> = {
   message: "message",
   session: "sign-in",
   agent: "agent change",
+  registration_token: "registration token",
 };
 
 export function entityLabel(entityType: string): string {
@@ -45,6 +46,26 @@ export function entityLabel(entityType: string): string {
 function quotedNames(summary: string | null): string[] {
   if (!summary) return [];
   return Array.from(summary.matchAll(/"([^"]+)"/g), (m) => m[1]);
+}
+
+/** COPY §8 — the operator reads their own events as "You". */
+export const OPERATOR_LABEL = "You";
+
+/**
+ * Who did it, as the sentence names them. "You" belongs to the operator and
+ * to nobody else: the admin API and a registration token are other actors,
+ * even though an operator set them up.
+ */
+export function actorLabel(agentName: string | null | undefined): string {
+  if (isOperatorActor(agentName)) return OPERATOR_LABEL;
+  if (agentName === ADMIN_API_ACTOR) return "Admin API";
+  const tokenId = registerActorTokenId(agentName);
+  return tokenId !== null ? `Registration token ${tokenId}` : (agentName as string);
+}
+
+/** An actor that is no agent, so "its webhook" could not mean its own. */
+function actsForAnother(agentName: string | null | undefined): boolean {
+  return isOperatorActor(agentName) || agentName === ADMIN_API_ACTOR || registerActorTokenId(agentName) !== null;
 }
 
 /**
@@ -62,6 +83,7 @@ function quotedNames(summary: string | null): string[] {
 export function auditSentence(ev: Activity): string {
   const fallback = ev.summary ?? ev.action;
   const names = quotedNames(ev.summary);
+  const actor = actorLabel(ev.agent_name);
 
   switch (ev.action) {
     case "message_sent": {
@@ -94,23 +116,32 @@ export function auditSentence(ev: Activity): string {
         ? "You signed in — session cookie issued"
         : `${ev.agent_name} checked in over MCP`;
     case "agent_created":
-      return names[0] ? `You created ${names[0]}` : fallback;
+      // The connect page is the operator's too; it says which door was used.
+      return names[0] ? `${actor} created ${names[0]}${ev.origin === "connect" ? " via Connect" : ""}` : fallback;
     case "agent_revoked":
-      return names[0] ? `You deactivated ${names[0]}` : fallback;
+      return names[0] ? `${actor} deactivated ${names[0]}` : fallback;
     case "agent_reactivated":
-      return names[0] ? `You reactivated ${names[0]}` : fallback;
+      return names[0] ? `${actor} reactivated ${names[0]}` : fallback;
     case "agent_renamed":
-      return names[0] && names[1] ? `You renamed ${names[0]} to ${names[1]}` : fallback;
+      return names[0] && names[1] ? `${actor} renamed ${names[0]} to ${names[1]}` : fallback;
     case "agent_token_reset":
-      return names[0] ? `You reset ${names[0]}'s token` : fallback;
+      return names[0] ? `${actor} reset ${names[0]}'s token` : fallback;
     case "agent_deleted":
-      return names[0] ? `You deleted ${names[0]}` : fallback;
+      return names[0] ? `${actor} deleted ${names[0]}` : fallback;
+    case "agent_profile_changed": {
+      const changed = /changed its (.+)$/.exec(ev.summary ?? "")?.[1];
+      return names[0] && changed ? `${names[0]} changed its ${changed}` : fallback;
+    }
+    case "registration_token_created":
+      return `${actor} created registration token ${ev.entity_id}`;
+    case "registration_token_revoked":
+      return `${actor} revoked registration token ${ev.entity_id}`;
     case "webhook_set":
       if (!names[0]) return fallback;
       return isOperatorActor(ev.agent_name) ? `You set ${names[0]}'s webhook` : `${names[0]} set its webhook`;
     case "webhook_deleted":
       if (!names[0]) return fallback;
-      return isOperatorActor(ev.agent_name) ? `You removed ${names[0]}'s webhook` : `${names[0]} removed its webhook`;
+      return actsForAnother(ev.agent_name) ? `${actor} removed ${names[0]}'s webhook` : `${names[0]} removed its webhook`;
     case "webhook_failed":
       return names[0] ? `A call of ${names[0]}'s webhook failed for good` : fallback;
     case "webhook_disabled":
@@ -119,9 +150,6 @@ export function auditSentence(ev: Activity): string {
       return fallback;
   }
 }
-
-/** COPY §8 — the operator reads their own events as "You". */
-export const OPERATOR_LABEL = "You";
 
 /**
  * The actor: an emblem for an agent, a lettered box for the operator.

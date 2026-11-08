@@ -94,7 +94,7 @@ export function registerRegistryTools(server: McpServer, ctx: ToolContext): void
         role: params.role,
         capabilities: params.capabilities,
         working_on: params.working_on,
-      });
+      }, { ip_hash: ctx.ipHash });
 
       return ok({
         agent: agentName,

@@ -158,7 +158,11 @@ export class PresenceService {
   }
 
   /** One `agent_profile_changed` row with what changed, old and new; none when nothing did. */
-  private auditProfile(before: NonNullable<ReturnType<PresenceService["profileBefore"]>>, meta: PresenceMeta): void {
+  private auditProfile(
+    before: NonNullable<ReturnType<PresenceService["profileBefore"]>>,
+    meta: PresenceMeta,
+    ipHash: string | null,
+  ): void {
     const old: Record<string, unknown> = {};
     const next: Record<string, unknown> = {};
     if (meta.role !== undefined && meta.role !== before.role) {
@@ -184,6 +188,7 @@ export class PresenceService {
         agent_name: before.name,
         target_key: key,
         origin: "presence",
+        ip_hash: ipHash,
         detail: { old, new: next },
       });
     } catch (err: unknown) {
@@ -202,7 +207,7 @@ export class PresenceService {
    * corresponding SQLite columns. Unsupplied fields are left untouched
    * (so a bare `touch(name)` acts as a pure liveness bump).
    */
-  async touch(agentName: string, meta: PresenceMeta = {}): Promise<void> {
+  async touch(agentName: string, meta: PresenceMeta = {}, audit: { ip_hash?: string | null } = {}): Promise<void> {
     const before = this.profileBefore(agentName, meta);
     // 1. SQLite — always updated, this is the authoritative audit trail.
     //    Build a dynamic SET clause so that unsupplied meta fields keep
@@ -228,7 +233,7 @@ export class PresenceService {
         `UPDATE agents SET ${assignments.join(", ")} WHERE name = ? COLLATE NOCASE`,
       )
       .run(...values);
-    if (before) this.auditProfile(before, meta);
+    if (before) this.auditProfile(before, meta, audit.ip_hash ?? null);
 
     // 2. NATS KV — best effort liveness flag (timestamp only), the bucket
     //    has its own TTL auto-expire. Metadata deliberately stays out of

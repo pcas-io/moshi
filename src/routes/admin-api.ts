@@ -29,6 +29,7 @@ import { loadBoard } from "../services/board.js";
 import type { BoardLinks } from "../services/board.js";
 import { hashToken, timingSafeEqual } from "../auth.js";
 import { auditBy } from "../services/audit-request.js";
+import { ADMIN_API_ACTOR } from "../services/activity.js";
 
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -46,7 +47,7 @@ export interface AdminApiDeps {
 }
 
 /** The actor in the audit log: this API, told apart from the dashboard's "admin". */
-const ACTOR = "admin:api";
+const ACTOR = ADMIN_API_ACTOR;
 /** Avatars are ids such as "avatar-21"; nothing longer belongs in the row. */
 const MAX_AVATAR = 64;
 

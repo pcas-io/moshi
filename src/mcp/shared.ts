@@ -40,6 +40,8 @@ export interface ToolContext {
    *  is an operator identity, not an agent: it has no inbox, no roster
    *  entry and cannot be addressed — see `adminError`. */
   isAdmin: boolean;
+  /** `hashIP` of this request's client, for the audit. Null when unknown. */
+  ipHash?: string | null;
 }
 
 export type ToolResult = {

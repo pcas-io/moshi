@@ -23,6 +23,7 @@ import { ulid } from "ulidx";
 import { AGENT_NAME_RE, NameTakenError } from "./agent";
 import type { AgentService } from "./agent";
 import type { Agent } from "../types";
+import { registerActor } from "./activity";
 import type { ActivityService, AuditBy } from "./activity";
 
 const PREFIX = "rt_";
@@ -297,7 +298,7 @@ export class RegistrationService {
     }
     try {
       const created = this.agents.create(name, rawAvatar as string | undefined,
-        { actor: `register:${token.id}`, origin: "register", ip_hash: ipHash });
+        { actor: registerActor(token.id), origin: "register", ip_hash: ipHash });
       this.record(token.id, name, "created", ipHash);
       return { ok: true, agent: created.agent, token: created.plaintextToken, tokenId: token.id };
     } catch (err: unknown) {

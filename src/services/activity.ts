@@ -15,6 +15,20 @@ export function isOperatorActor(agentName: string | null | undefined): boolean {
   return agentName === undefined || agentName === null || agentName === OPERATOR_ACTOR;
 }
 
+/** The audit's actor for `/api/admin`, told apart from the dashboard's operator. */
+export const ADMIN_API_ACTOR = "admin:api";
+const REGISTER_ACTOR_PREFIX = "register:";
+
+/** The audit's actor for an agent created with a registration token. */
+export function registerActor(tokenId: string): string {
+  return `${REGISTER_ACTOR_PREFIX}${tokenId}`;
+}
+
+/** The token id in a `registerActor` value; null for every other actor. */
+export function registerActorTokenId(agentName: string | null | undefined): string | null {
+  return agentName?.startsWith(REGISTER_ACTOR_PREFIX) ? agentName.slice(REGISTER_ACTOR_PREFIX.length) : null;
+}
+
 /**
  * Where an audited action came from (migration 0016, `activity_log.origin`).
  * `dashboard`: the Agents page; `admin_api`: `/api/admin`; `register`:

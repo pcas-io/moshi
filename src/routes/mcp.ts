@@ -17,6 +17,7 @@ import type { PresenceService } from "../services/presence.js";
 import type { WebhookService } from "../services/webhooks.js";
 import type { MeshNats } from "../mcp/shared.js";
 import { createMcpServer } from "../mcp/server.js";
+import { requestIpHash } from "../services/audit-request.js";
 import { log } from "../services/logger.js";
 
 type HonoEnv = { Bindings: Env; Variables: AppVariables };
@@ -112,6 +113,7 @@ export function createMcpRoute({ nats, agents, activity, rateLimiter, presence, 
       agentName,
       inboxKey,
       isAdmin,
+      ipHash: requestIpHash(c),
     });
 
     const transport = createStatelessTransport();
