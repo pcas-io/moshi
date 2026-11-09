@@ -3,7 +3,7 @@
 
 # ── Stage 1: cross-compile the static Go CLI binaries ──────────────
 # Served by the app at /cli/* so users install without a repo checkout.
-FROM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS gobuild
+FROM golang:1.27-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS gobuild
 WORKDIR /src/cli
 COPY cli/ ./
 RUN set -eux; \
@@ -18,7 +18,7 @@ RUN set -eux; \
 # The compiler lives here and only here: better-sqlite3 builds its native
 # module when no prebuilt binary fits. Nothing of this stage but node_modules
 # reaches the runtime image.
-FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS deps
+FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS deps
 RUN apk add --no-cache python3 make g++
 WORKDIR /app
 COPY package*.json ./
@@ -26,7 +26,7 @@ RUN npm ci --omit=dev
 
 # ── Stage 3: runtime ───────────────────────────────────────────────
 # No compiler, no dev dependencies, and the service does not run as root.
-FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202
 RUN apk add --no-cache su-exec
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
